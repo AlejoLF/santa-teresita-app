@@ -521,6 +521,32 @@ export default function CargarPedidoPage() {
     };
   }, []);
 
+  // Watcher de la cola de impresión: si hay trabajos en ERROR, mostramos un
+  // banner para que la cajera/encargada lo vea y vaya al panel admin.
+  // El admin lo verifica solo si tiene rol ADMIN, sino el banner queda oculto.
+  const [printerErrors, setPrinterErrors] = useState<number>(0);
+  useEffect(() => {
+    if (usuario?.rol !== 'ADMIN' && usuario?.rol !== 'VENDEDOR') return;
+    let cancelled = false;
+    const checkPrinter = async () => {
+      try {
+        const res = await api.get<{ counts: Record<string, number> }>(
+          '/admin/impresion/jobs?estado=ERROR&limit=1',
+        );
+        if (cancelled) return;
+        setPrinterErrors(res.counts?.ERROR ?? 0);
+      } catch {
+        /* el endpoint solo es para ADMIN — si vendedor falla con 403, ignorar */
+      }
+    };
+    void checkPrinter();
+    const id = setInterval(checkPrinter, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [usuario?.rol]);
+
   // Productos de la categoría activa (sin filtrar por búsqueda) — base para el panel de marcas
   const productosCategoria = useMemo(() => {
     if (!categoriaActiva) return [];
@@ -774,6 +800,15 @@ export default function CargarPedidoPage() {
             <span className="bg-saffron-100 text-saffron-600 px-2 py-0.5 rounded text-2xs font-medium uppercase tracking-wide">
               Agregando a pedido abierto
             </span>
+          )}
+          {printerErrors > 0 && (
+            <a
+              href="/admin/configuracion/impresoras"
+              className="bg-pomodoro-600 text-cream-50 px-2 py-0.5 rounded text-2xs font-medium uppercase tracking-wide hover:bg-pomodoro-700 transition-colors"
+              title="Hay trabajos de impresión que fallaron — click para ver"
+            >
+              ⚠ {printerErrors} impresión{printerErrors !== 1 ? 'es' : ''} fallida{printerErrors !== 1 ? 's' : ''}
+            </a>
           )}
         </div>
         <div className="flex items-center gap-3">

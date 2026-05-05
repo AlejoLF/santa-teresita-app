@@ -120,6 +120,7 @@ let splashWindow = null;
 let pgInstance = null;
 let apiProcess = null;
 let webProcess = null;
+let agentProcess = null;
 let shuttingDown = false;
 
 // ═══ Splash window ════════════════════════════════════════════════════════
@@ -340,6 +341,9 @@ function startApi() {
       API_CORS_ORIGINS: `http://127.0.0.1:${WEB_PORT},http://localhost:${WEB_PORT}`,
       AUTH_SECRET: getOrCreateSecret('AUTH_SECRET'),
       AUDIT_HASH_SALT: getOrCreateSecret('AUDIT_HASH_SALT'),
+      // Token compartido con el local-agent para que pueda autenticar
+      // contra la API local sin tener una sesión de usuario.
+      AGENT_API_TOKEN: getOrCreateSecret('AGENT_API_TOKEN'),
       LOG_LEVEL: 'info',
     },
     cwd: path.join(resourcesDir(), 'api'),
@@ -380,6 +384,40 @@ function startWeb() {
   webProcess.on('exit', (code) => {
     log('[web] exited code=' + code);
     if (!shuttingDown) gracefulShutdown('Web crashed');
+  });
+}
+
+// ═══ Local agent (impresión térmica) ═════════════════════════════════════
+
+function startAgent() {
+  const agentEntry = path.join(resourcesDir(), 'agent', 'agent.mjs');
+  if (!fs.existsSync(agentEntry)) {
+    log('[agent] resources/agent/agent.mjs no existe — saltando arranque del agent');
+    return;
+  }
+  log('Spawning local-agent: ' + agentEntry);
+
+  agentProcess = spawn(process.execPath, [agentEntry], {
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      NODE_ENV: 'production',
+      TZ: 'America/Argentina/Buenos_Aires',
+      API_PUBLIC_URL: `http://127.0.0.1:${API_PORT}`,
+      AGENT_API_TOKEN: getOrCreateSecret('AGENT_API_TOKEN'),
+      AGENT_POLL_INTERVAL_MS: '3000',
+      LOG_LEVEL: 'info',
+    },
+    cwd: path.join(resourcesDir(), 'agent'),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  agentProcess.stdout.on('data', (d) => log('[agent] ' + d.toString().trim()));
+  agentProcess.stderr.on('data', (d) => log('[agent:err] ' + d.toString().trim()));
+  agentProcess.on('exit', (code) => {
+    log('[agent] exited code=' + code);
+    // El agent cayendo NO es crítico: el resto de la app sigue funcionando.
+    // Las comandas se acumulan en la cola y se imprimen cuando vuelva a
+    // arrancar (manualmente desde el panel admin si hace falta).
   });
 }
 
@@ -532,6 +570,10 @@ async function bootstrap() {
     await waitForPort('127.0.0.1', WEB_PORT, 'Web', 90000);
     log('Web OK');
 
+    // Local-agent (impresión térmica) — arranca en cuanto la API responde.
+    // No esperamos health check: si el agent crashea, el resto sigue OK.
+    startAgent();
+
     setSplashStatus('Listo. Cargando interfaz...');
     createMainWindow();
   } catch (err) {
@@ -549,6 +591,7 @@ async function gracefulShutdown(reason) {
   if (shuttingDown) return;
   shuttingDown = true;
   log('Shutdown: ' + reason);
+  try { if (agentProcess) agentProcess.kill(); } catch {}
   try { if (apiProcess) apiProcess.kill(); } catch {}
   try { if (webProcess) webProcess.kill(); } catch {}
   try { if (pgInstance) await pgInstance.stop(); } catch (e) { log('pg stop err: ' + e); }
@@ -566,6 +609,7 @@ app.on('before-quit', () => {
 });
 
 process.on('exit', () => {
+  try { if (agentProcess) agentProcess.kill(); } catch {}
   try { if (apiProcess) apiProcess.kill(); } catch {}
   try { if (webProcess) webProcess.kill(); } catch {}
 });

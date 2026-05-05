@@ -6,39 +6,54 @@
  * pero por ahora dejamos un stub.
  */
 
-import { ThermalPrinter, PrinterTypes } from 'node-thermal-printer';
+import { ThermalPrinter, PrinterTypes, CharacterSet } from 'node-thermal-printer';
+
+export type DestinoImpresora = 'KITCHEN' | 'COUNTER' | 'DELIVERY';
 
 export interface PrinterConfig {
-  destino: 'KITCHEN' | 'COUNTER' | 'DELIVERY';
+  destino: DestinoImpresora;
   host: string;
   port: number;
-  width?: number; // chars
+  width: number;
+  activa: boolean;
 }
 
-const DEFAULTS: Record<PrinterConfig['destino'], { host: string; port: number; width: number }> = {
-  KITCHEN: {
-    host: process.env.AGENT_PRINTER_KITCHEN_HOST ?? '192.168.1.50',
-    port: Number(process.env.AGENT_PRINTER_KITCHEN_PORT ?? 9100),
-    width: 42,
-  },
-  COUNTER: {
-    host: process.env.AGENT_PRINTER_COUNTER_HOST ?? '192.168.1.51',
-    port: Number(process.env.AGENT_PRINTER_COUNTER_PORT ?? 9100),
-    width: 42,
-  },
-  DELIVERY: {
-    host: process.env.AGENT_PRINTER_DELIVERY_HOST ?? '192.168.1.52',
-    port: Number(process.env.AGENT_PRINTER_DELIVERY_PORT ?? 9100),
-    width: 42,
-  },
+const DEFAULTS: Record<DestinoImpresora, { host: string; port: number; width: number; activa: boolean }> = {
+  KITCHEN: { host: '192.168.1.50', port: 9100, width: 42, activa: true },
+  COUNTER: { host: '192.168.1.51', port: 9100, width: 42, activa: true },
+  DELIVERY: { host: '192.168.1.52', port: 9100, width: 42, activa: false },
 };
 
-export function makePrinter(destino: PrinterConfig['destino']): ThermalPrinter {
-  const cfg = DEFAULTS[destino];
+// Cache de la config — el agent la pisa en cada poll usando setPrinterConfig().
+// Si nunca se llamó, fallback a DEFAULTS.
+const runtimeConfig: Record<DestinoImpresora, PrinterConfig> = {
+  KITCHEN: { ...DEFAULTS.KITCHEN, destino: 'KITCHEN' },
+  COUNTER: { ...DEFAULTS.COUNTER, destino: 'COUNTER' },
+  DELIVERY: { ...DEFAULTS.DELIVERY, destino: 'DELIVERY' },
+};
+
+/**
+ * Actualiza la config en memoria (la llama el agent al recibir nueva config
+ * desde la API). El agent re-fetcha en cada poll, así que cambios desde el
+ * panel admin se reflejan en ~2-5 segundos.
+ */
+export function setPrinterConfig(cfg: Partial<Record<DestinoImpresora, PrinterConfig>>): void {
+  for (const k of ['KITCHEN', 'COUNTER', 'DELIVERY'] as const) {
+    const incoming = cfg[k];
+    if (incoming) runtimeConfig[k] = { ...incoming, destino: k };
+  }
+}
+
+export function getPrinterConfig(destino: DestinoImpresora): PrinterConfig {
+  return runtimeConfig[destino];
+}
+
+export function makePrinter(destino: DestinoImpresora): ThermalPrinter {
+  const cfg = runtimeConfig[destino];
   return new ThermalPrinter({
     type: PrinterTypes.EPSON,
     interface: `tcp://${cfg.host}:${cfg.port}`,
-    characterSet: 'PC850_MULTILINGUAL',
+    characterSet: CharacterSet.PC850_MULTILINGUAL,
     removeSpecialCharacters: false,
     options: { timeout: 5000 },
   });
