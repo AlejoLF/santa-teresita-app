@@ -301,10 +301,21 @@ export default function PagarFacturasPage({ params }: { params: Promise<{ id: st
 
           {modo === 'a_cuenta' ? (
             <div className="px-5 py-5 space-y-3">
-              <div className="bg-saffron-100/40 border border-saffron-600/30 rounded-md px-3 py-2 text-xs text-ink-700">
-                Este pago se va a registrar como egreso al proveedor pero no va a cancelar
-                ninguna factura puntual. Se usa cuando el dueño paga, ej, $1.200.000 de un
-                saldo total de $2.500.000 sin que el monto coincida con facturas específicas.
+              <div className="bg-saffron-100/40 border border-saffron-600/30 rounded-md px-3 py-2 text-xs text-ink-700 space-y-1">
+                <div>
+                  Este pago se va a registrar como egreso al proveedor pero{' '}
+                  <strong>no va a cancelar ninguna factura puntual</strong>. Se usa cuando el
+                  dueño paga, ej, $1.200.000 de un saldo total de $2.500.000 sin que el
+                  monto coincida con facturas específicas.
+                </div>
+                <div className="text-pomodoro-600">
+                  ⚠ El saldo adeudado del proveedor <strong>NO baja automáticamente</strong>.
+                  Para imputar este pago a facturas, después usá "Pagar facturas específicas".
+                </div>
+                <div className="text-2xs text-ink-500">
+                  Si querés que el saldo baje automáticamente FIFO, mejor hacé el egreso
+                  desde Movimientos → categoría "Insumos (compras a proveedores)" + proveedor.
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-ink-700 mb-1">

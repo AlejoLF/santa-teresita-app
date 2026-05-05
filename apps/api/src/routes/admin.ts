@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta, EstadoLiquidacion, EstadoMovimiento, RolUsuario } from '@sta/db';
 import { recordAudit } from '../services/audit.js';
+import { clasificarCanalBucket } from '../services/clasificar-pago.js';
 import {
   detectarCambiosListaPrecios,
   detectarCambiosProveedores,
@@ -104,25 +105,18 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       };
       for (const p of pagosHoy) {
         const monto = Number(p.monto);
-        const canal = p.venta?.canal ?? 'MOSTRADOR';
-        const modalidad = p.venta?.modalidad ?? 'TAKE_AWAY';
-        const esDamianEfectivo =
-          (canal === 'TELEFONO' || canal === 'WHATSAPP' || canal === 'WEB') &&
-          modalidad === 'DELIVERY_PROPIO' &&
-          p.metodo === 'EFECTIVO';
-        const esPlataforma =
-          canal === 'PEDIDOS_YA' || canal === 'RAPPI' || canal === 'MERCADO_LIBRE';
-        const esDeliverate = canal === 'DELIVERATE';
+        const bucket = clasificarCanalBucket(p.venta?.canal, p.venta?.modalidad);
+        const esDeliverate = bucket === 'deliverate';
 
         if (p.metodo === 'EFECTIVO') {
-          if (esDeliverate) {
+          if (bucket === 'deliverate') {
             efDesglose.deliverate.monto += monto;
             efDesglose.deliverate.cantidad += 1;
-          } else if (esPlataforma) {
+          } else if (bucket === 'plataforma') {
             // Cliente pagó al motoquero de la app (típico de PYA) — SÍ suma a caja
             efDesglose.plataformas.monto += monto;
             efDesglose.plataformas.cantidad += 1;
-          } else if (esDamianEfectivo) {
+          } else if (bucket === 'delivery_propio') {
             efDesglose.damian.monto += monto;
             efDesglose.damian.cantidad += 1;
           } else {
@@ -1538,17 +1532,19 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         countPlataEf = 0;
 
       for (const v of ventasFiltradas) {
-        const esMostrador = v.canal === 'MOSTRADOR';
+        const bucket = clasificarCanalBucket(v.canal, v.modalidad);
+        // delivery_propio acá lo tratamos según canal — para los buckets "delivery"
+        // del cierre de cajas, TELEFONO/WHATSAPP/WEB caen en delivery local
+        // independiente de modalidad (la encargada quiere ver el origen del pedido).
         const esDeliveryLocal =
           v.canal === 'TELEFONO' || v.canal === 'WHATSAPP' || v.canal === 'WEB';
-        const esDeliverate = v.canal === 'DELIVERATE';
-        const esPlataforma =
-          v.canal === 'RAPPI' || v.canal === 'PEDIDOS_YA' || v.canal === 'MERCADO_LIBRE';
+        const esDeliverate = bucket === 'deliverate';
+        const esPlataforma = bucket === 'plataforma';
 
         for (const p of v.pagos) {
           if (q.metodo && p.metodo !== q.metodo) continue;
           const monto = Number(p.monto);
-          if (esMostrador) {
+          if (bucket === 'mostrador' && !esDeliveryLocal) {
             if (p.metodo === 'EFECTIVO') {
               mostradorEfectivo += monto;
               countMostradorEf += 1;
@@ -1586,7 +1582,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               countPlataApp += 1;
             }
           } else {
-            // Otros canales (WEB sin clasificar): los metemos en mostrador como fallback
+            // Fallback (no debería caer acá con canales actuales)
             if (p.metodo === 'EFECTIVO') {
               mostradorEfectivo += monto;
               countMostradorEf += 1;

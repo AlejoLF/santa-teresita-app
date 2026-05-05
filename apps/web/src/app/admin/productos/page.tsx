@@ -706,7 +706,7 @@ function ProductoEditModal({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button disabled={!cambia || guardando} onClick={submit}>
+          <Button disabled={!cambia || guardando} onClick={() => void submit()}>
             {guardando ? 'Guardando...' : 'Guardar cambios'}
           </Button>
         </footer>
@@ -896,7 +896,7 @@ function SaboresEditor({
             className="input text-sm py-1.5 w-28 font-mono text-right"
             title="Diferencia de precio (puede ser 0)"
           />
-          <Button size="sm" onClick={agregar} disabled={creando || !nuevoNombre.trim()}>
+          <Button size="sm" onClick={() => void agregar()} disabled={creando || !nuevoNombre.trim()}>
             {creando ? '...' : '+ Agregar'}
           </Button>
         </div>
@@ -1367,7 +1367,7 @@ function ComboFormModal({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={guardando}>
+          <Button onClick={() => void submit()} disabled={guardando}>
             {guardando ? 'Guardando...' : combo ? 'Guardar cambios' : 'Crear combo'}
           </Button>
         </footer>
@@ -1488,7 +1488,7 @@ function FormCategoria({ onClose, onCreated }: { onClose: () => void; onCreated:
       {error && <p className="text-sm text-pomodoro-600">{error}</p>}
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="secondary" onClick={onClose}>Cancelar (Esc)</Button>
-        <Button onClick={submit} disabled={guardando || !nombre.trim()}>
+        <Button onClick={() => void submit()} disabled={guardando || !nombre.trim()}>
           {guardando ? 'Creando...' : 'Crear categoría (Enter)'}
         </Button>
       </div>
@@ -1576,7 +1576,7 @@ function FormSubcategoria({
       {error && <p className="text-sm text-pomodoro-600">{error}</p>}
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="secondary" onClick={onClose}>Cancelar (Esc)</Button>
-        <Button onClick={submit} disabled={guardando || !nombre.trim() || !categoriaId}>
+        <Button onClick={() => void submit()} disabled={guardando || !nombre.trim() || !categoriaId}>
           {guardando ? 'Creando...' : 'Crear subcategoría (Enter)'}
         </Button>
       </div>
@@ -1785,7 +1785,7 @@ function FormProducto({
                 />
                 <Button
                   size="sm"
-                  onClick={crearCategoriaInline}
+                  onClick={() => void crearCategoriaInline()}
                   disabled={creandoCat || !nuevaCatNombre.trim()}
                 >
                   {creandoCat ? '...' : 'Crear'}
@@ -1852,7 +1852,7 @@ function FormProducto({
                 />
                 <Button
                   size="sm"
-                  onClick={crearSubcategoriaInline}
+                  onClick={() => void crearSubcategoriaInline()}
                   disabled={creandoSubcat || !nuevaSubcatNombre.trim()}
                 >
                   {creandoSubcat ? '...' : 'Crear'}
@@ -2002,7 +2002,7 @@ function FormProducto({
 
       <div className="flex justify-end gap-2 pt-2 border-t border-cream-200 mt-4">
         <Button variant="secondary" onClick={onClose}>Cancelar (Esc)</Button>
-        <Button onClick={submit} disabled={guardando || !nombre.trim() || !categoriaId || !tipoProductoId || !precioBase}>
+        <Button onClick={() => void submit()} disabled={guardando || !nombre.trim() || !categoriaId || !tipoProductoId || !precioBase}>
           {guardando ? 'Creando...' : 'Crear producto'}
         </Button>
       </div>

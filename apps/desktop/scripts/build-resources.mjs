@@ -78,9 +78,11 @@ function buildApi() {
     '.prisma/client',
     'bcryptjs',
     'pino',
-    'pino-pretty',
     // Fastify y plugins son ESM "modernos" — bundlearlos a CJS suele funcionar pero
     // ante la duda los dejamos external y los traemos por npm install plano.
+    // pino-pretty NO se incluye: solo se usa en dev (server.ts línea 33-36 lo
+    // monta sólo cuando NODE_ENV !== 'production', y el desktop corre con
+    // NODE_ENV=production).
   ];
   const externalArgs = externals.map((e) => `--external:${e}`).join(' ');
   const esbuildBin = path.join(DESKTOP_DIR, 'node_modules', '.bin', process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild');
@@ -101,7 +103,7 @@ function buildApi() {
       '@prisma/client': apiPkg.dependencies['@prisma/client'] ?? '^5.22.0',
       bcryptjs: apiPkg.dependencies['bcryptjs'] ?? '^2.4.3',
       pino: apiPkg.dependencies['pino'] ?? '^9.5.0',
-      'pino-pretty': apiPkg.dependencies['pino-pretty'] ?? '^11.3.0',
+      // pino-pretty solo se usa en dev — no se bundlea en el .exe
     },
   };
   // Si @sta/db expone @prisma/client desde packages/db, agarramos también los archivos generados

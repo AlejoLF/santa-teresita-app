@@ -879,7 +879,7 @@ function AnularVentaModal({
             Cancelar
           </button>
           <button
-            onClick={submit}
+            onClick={() => void submit()}
             disabled={confirmando || motivo.trim().length < 3}
             className="px-4 py-2 text-sm rounded-md bg-pomodoro-600 text-cream-50 font-medium hover:bg-pomodoro-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >

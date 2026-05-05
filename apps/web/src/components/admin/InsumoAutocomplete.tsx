@@ -355,7 +355,7 @@ function ModalCrearInsumo({
           >
             Cancelar
           </button>
-          <button onClick={submit} disabled={creando} className="btn btn-primary">
+          <button onClick={() => void submit()} disabled={creando} className="btn btn-primary">
             {creando ? 'Creando...' : 'Crear y usar'}
           </button>
         </footer>

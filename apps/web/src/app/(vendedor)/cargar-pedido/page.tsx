@@ -498,13 +498,16 @@ export default function CargarPedidoPage() {
     })();
   }, [router]);
 
-  // Stats footer
+  // Stats footer — flag de cancelación para evitar setState sobre componente
+  // desmontado y solapamiento de ticks (last-write-wins).
   useEffect(() => {
+    let cancelled = false;
     const fetchStats = async () => {
       try {
         const res = await api.get<{ abiertas: unknown[]; cerradas: unknown[] }>(
           '/ventas/historial-sesion',
         );
+        if (cancelled) return;
         setStats({ abiertos: res.abiertas.length, cerrados: res.cerradas.length });
       } catch {
         /* silencioso */
@@ -512,7 +515,10 @@ export default function CargarPedidoPage() {
     };
     void fetchStats();
     const id = setInterval(fetchStats, 8000);
-    return () => clearInterval(id);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   // Productos de la categoría activa (sin filtrar por búsqueda) — base para el panel de marcas
