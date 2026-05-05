@@ -1,0 +1,79 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Env
+.env
+.env.local
+.env.*.local
+credentials.json
+token.json
+*.pem
+*.key
+
+# Prisma
+**/prisma/migrations/dev.db*
+**/.prisma/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Tmp / disposable
+.tmp/
+tmp/
+*.tmp
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Docker volumes (local dev)
+infra/docker/data/
+
+# Excel generados
+*.lock
+~$*.xlsx
+
+# Excel del cliente — contienen datos reales del negocio (precios, proveedores,
+# ventas, cashflow). NO subir al repo. Si hace falta algún sample, dejar uno
+# anonimizado en `docs/samples/` con datos ficticios.
+/*.xlsx
+/*.xls
+
+# Vercel local — contiene OIDC token y project linkage
+.vercel/
+
+# Desktop build artifacts (resources/ se regenera, out/ ya cubierto arriba)
+apps/desktop/resources/
+
+# Postgres data dir (si alguien arranca el agente local en este directorio)
+pgdata/
+data/pgdata/
+
+# Claude Code config local (project-level)
+.claude/
+.mcp.json.local
+
+# Trabajo temporal (auditoría / planificación) — se borra al terminar
+ROADMAP-AUDIT-FIXES.md
+NOTES-*.md
