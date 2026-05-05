@@ -291,6 +291,10 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       //   bruto = neto / (1 - pct/100)
       //   descuento = bruto - neto = neto * pct / (100 - pct)
       let descuento = 0;
+      // Total bruto = subtotal + recargoCanal. El recargo (ej. surcharge de
+      // RAPPI/PYA) NO se descuenta — solo se descuenta sobre el subtotal real
+      // de productos. El total final = (subtotal - descuento) + recargoCanal.
+      const recargoCanal = Number(venta.recargoCanal ?? 0);
       let total = Number(venta.total);
       if (body.aplicarDescuentoEfectivo && venta.canal === 'MOSTRADOR') {
         const pct = body.descuentoPctEfectivo;
@@ -303,7 +307,7 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           .filter((p) => p.metodo === 'EFECTIVO')
           .reduce((acc, p) => acc + Number(p.monto), 0);
         descuento = Math.round(((efectivoNeto * pct) / (100 - pct)) * 100) / 100;
-        total = Number(venta.subtotal) - descuento;
+        total = Number(venta.subtotal) - descuento + recargoCanal;
       }
 
       const totalPagado = body.pagos.reduce((acc, p) => acc + Number(p.monto), 0);
@@ -335,7 +339,7 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           });
         }
 
-        return tx.venta.update({
+        const updated = await tx.venta.update({
           where: { id: venta.id },
           data: {
             descuentoTotal: descuento.toFixed(2),
@@ -348,15 +352,20 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           },
           include: { items: true, pagos: true },
         });
-      });
 
-      await recordAudit({
-        tabla: 'ventas',
-        registroId: venta.id,
-        accion: 'TRANSITION',
-        usuarioId: req.usuario!.id,
-        valorAnterior: { estado: 'PROCESADA' },
-        valorNuevo: { estado: 'FINALIZADA', total, descuento },
+        // Audit dentro de la misma transacción para que mutación + audit
+        // sean atómicos (si falla el audit, no queda venta finalizada huérfana).
+        await recordAudit({
+          tabla: 'ventas',
+          registroId: venta.id,
+          accion: 'TRANSITION',
+          usuarioId: req.usuario!.id,
+          valorAnterior: { estado: 'PROCESADA' },
+          valorNuevo: { estado: 'FINALIZADA', total, descuento, recargoCanal },
+          tx,
+        });
+
+        return updated;
       });
 
       // TODO: encolar trabajo de impresión TICKET_CLIENTE (Sección 8)
@@ -447,22 +456,24 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           },
         });
 
-        return updated;
-      });
+        // 3. Audit dentro de la misma transacción
+        await recordAudit({
+          tabla: 'ventas',
+          registroId: venta.id,
+          accion: 'TRANSITION',
+          usuarioId: req.usuario!.id,
+          valorAnterior: { estado: venta.estado, total: venta.total },
+          valorNuevo: {
+            estado: 'ANULADA',
+            motivo: body.motivo,
+            pagosReversados: pagosAReversar.length,
+            montoReversado: pagosAReversar.reduce((s, p) => s + Number(p.monto), 0).toFixed(2),
+            aprobadoPor: aprobadorId,
+          },
+          tx,
+        });
 
-      await recordAudit({
-        tabla: 'ventas',
-        registroId: venta.id,
-        accion: 'TRANSITION',
-        usuarioId: req.usuario!.id,
-        valorAnterior: { estado: venta.estado, total: venta.total },
-        valorNuevo: {
-          estado: 'ANULADA',
-          motivo: body.motivo,
-          pagosReversados: pagosAReversar.length,
-          montoReversado: pagosAReversar.reduce((s, p) => s + Number(p.monto), 0).toFixed(2),
-          aprobadoPor: aprobadorId,
-        },
+        return updated;
       });
 
       // TODO: si la comanda ya se imprimió, encolar comanda CANCELADA.

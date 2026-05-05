@@ -16,6 +16,7 @@ const { app, BrowserWindow, Menu, shell, dialog } = require('electron');
 app.setName('Santa Teresita');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 // embedded-postgres es ESM puro → import dinámico al usar
 let EmbeddedPostgres = null;
@@ -62,6 +63,43 @@ function logsDir() {
 
 function logFile() {
   return path.join(logsDir(), `app-${new Date().toISOString().slice(0, 10)}.log`);
+}
+
+/**
+ * Devuelve el secret pedido (AUTH_SECRET / AUDIT_HASH_SALT). Lo genera
+ * aleatoriamente al primer arranque y lo persiste en `userData/secrets.json`,
+ * para que cada instalación tenga sus propios secrets — los del .exe no son
+ * extraíbles (a diferencia de strings hardcodeadas).
+ *
+ * Si el archivo de secrets no es legible/escribible, fallback a un derivado
+ * del nombre del usuario + machineId para no bloquear el arranque, pero loggea
+ * un warning. NO usamos un default hardcodeado porque sería un downgrade.
+ */
+function getOrCreateSecret(name) {
+  const secretsPath = path.join(app.getPath('userData'), 'secrets.json');
+  let store = {};
+  try {
+    if (fs.existsSync(secretsPath)) {
+      store = JSON.parse(fs.readFileSync(secretsPath, 'utf8'));
+    }
+  } catch (e) {
+    log(`secrets.json no se pudo leer: ${e?.message || e}`);
+    store = {};
+  }
+  if (typeof store[name] === 'string' && store[name].length >= 32) {
+    return store[name];
+  }
+  // Generar nuevo secret
+  const secret = crypto.randomBytes(32).toString('hex');
+  store[name] = secret;
+  try {
+    fs.mkdirSync(path.dirname(secretsPath), { recursive: true });
+    fs.writeFileSync(secretsPath, JSON.stringify(store, null, 2), { mode: 0o600 });
+    log(`secret "${name}" generado y persistido en secrets.json`);
+  } catch (e) {
+    log(`WARNING: no se pudo persistir secret "${name}": ${e?.message || e}. Continuamos en memoria.`);
+  }
+  return secret;
 }
 
 function log(msg) {
@@ -206,6 +244,23 @@ async function upgradeSchema() {
       )
       WHERE "ultimo_numero_orden" = 0
     `);
+    // v1.19 — indexes faltantes para queries de cashflow + KPIs
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS "movimientos_cuenta_origen_id_idx"
+      ON "movimientos" ("cuenta_origen_id")
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS "movimientos_cuenta_destino_id_idx"
+      ON "movimientos" ("cuenta_destino_id")
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS "pagos_cuenta_id_idx"
+      ON "pagos" ("cuenta_id")
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS "ventas_estado_fecha_finalizacion_idx"
+      ON "ventas" ("estado", "fecha_finalizacion")
+    `);
     log('upgradeSchema OK');
   } catch (e) {
     log('upgradeSchema error (no fatal): ' + (e?.message || e));
@@ -248,6 +303,7 @@ async function runSeed() {
         DATABASE_URL: dbUrl(),
         NODE_PATH: apiNodeModules,
         ELECTRON_RUN_AS_NODE: '1',
+        TZ: 'America/Argentina/Buenos_Aires',
       },
       cwd: path.join(resourcesDir(), 'seed'),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -273,12 +329,17 @@ function startApi() {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       NODE_ENV: 'production',
+      // Forzamos timezone Argentina para que `new Date()` y los buckets de KPIs
+      // (inicio del día, agrupaciones por hora, "hoy/ayer") sean consistentes
+      // independiente del locale regional de Windows. AR no observa DST desde
+      // 2009, valor estable.
+      TZ: 'America/Argentina/Buenos_Aires',
       DATABASE_URL: dbUrl(),
       API_HOST: '127.0.0.1',
       API_PORT: String(API_PORT),
       API_CORS_ORIGINS: `http://127.0.0.1:${WEB_PORT},http://localhost:${WEB_PORT}`,
-      AUTH_SECRET: 'desktop-local-secret-32chars-ok-12345',
-      AUDIT_HASH_SALT: 'desktop-local-salt-16-chars',
+      AUTH_SECRET: getOrCreateSecret('AUTH_SECRET'),
+      AUDIT_HASH_SALT: getOrCreateSecret('AUDIT_HASH_SALT'),
       LOG_LEVEL: 'info',
     },
     cwd: path.join(resourcesDir(), 'api'),
@@ -405,12 +466,44 @@ function createMainWindow() {
     }
   });
 
+  // Whitelist de URLs externas que SE PERMITEN abrir en el browser del SO.
+  // Cualquier otra URL (XSS injection, attacker-controlled link en delivery
+  // address, etc.) se deniega silenciosamente.
+  //
+  // Loopback (127.0.0.1 / localhost) la cerramos siempre — son páginas internas
+  // de la app, nunca debería abrirse una nueva ventana del SO con esas URLs.
+  const ALLOWED_EXTERNAL_HOSTS = [
+    'github.com',                       // links a docs, releases del proyecto
+    'docs.google.com',                  // Excel sync, comprobantes
+    'drive.google.com',
+    'mercadopago.com.ar',               // panel MP
+    'wa.me',                            // chats WhatsApp
+    'api.whatsapp.com',
+  ];
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http')) {
-      void shell.openExternal(url);
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
       return { action: 'deny' };
     }
-    return { action: 'allow' };
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return { action: 'deny' };
+    }
+    // Bloquear loopback explícitamente — no debería intentar abrirse
+    if (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') {
+      return { action: 'deny' };
+    }
+    const allowed = ALLOWED_EXTERNAL_HOSTS.some(
+      (h) => parsed.hostname === h || parsed.hostname.endsWith('.' + h),
+    );
+    if (allowed) {
+      void shell.openExternal(url);
+    } else {
+      log(`shell.openExternal bloqueado por whitelist: ${url}`);
+    }
+    return { action: 'deny' };
   });
 }
 

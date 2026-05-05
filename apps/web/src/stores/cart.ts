@@ -80,6 +80,15 @@ interface CartState {
 // Subtotal de un item del carrito. Delega al canónico de @sta/shared para que
 // la convención de cantidad (gramos / docenas / unidades) sea idéntica entre
 // frontend y backend. Devolvemos number porque la UI suma con +.
+// Tope de borradores en memoria/localStorage. Por encima descartamos el más
+// viejo (FIFO eviction). zustand/persist serializa todo el array en cada
+// mutación; sin tope, una jornada larga puede agotar la quota ~5MB.
+const MAX_BORRADORES = 10;
+
+// Versión del schema persistido. Subir cuando cambien tipos de CartItem o
+// CartState para que `migrate` pueda transformar payloads viejos.
+const CART_PERSIST_VERSION = 1;
+
 const calcSubtotal = (i: CartItem): number => {
   return Number(
     sharedSubtotalItem({
@@ -147,8 +156,11 @@ export const useCart = create<CartState>()(
           indicacionesEntrega: s.indicacionesEntrega || undefined,
           creadoAt: new Date().toISOString(),
         };
+        // Cap de borradores en MAX_BORRADORES con FIFO eviction. localStorage
+        // tiene quota ~5MB y un día con 20+ borradores acumulados puede
+        // romper la persistencia silenciosamente.
         set({
-          borradores: [borrador, ...s.borradores],
+          borradores: [borrador, ...s.borradores].slice(0, MAX_BORRADORES),
           items: [],
           ventaId: undefined,
           numeroOrden: undefined,
@@ -178,7 +190,30 @@ export const useCart = create<CartState>()(
       eliminarBorrador: (id) =>
         set((s) => ({ borradores: s.borradores.filter((x) => x.id !== id) })),
     }),
-    { name: 'sta-cart-vendedor' },
+    {
+      name: 'sta-cart-vendedor',
+      version: CART_PERSIST_VERSION,
+      // Migración entre versiones del schema persistido. Si el state guardado
+      // viene de una versión anterior, transformarlo aquí en vez de dejar que
+      // se rehidrate con shape viejo y rompa silenciosamente.
+      migrate: (persistedState: unknown, version: number) => {
+        // v0 → v1: agregamos clienteNombre/Telefono/direccionEntrega/
+        //         indicacionesEntrega y borradores con esos campos opcionales.
+        // Asignamos defaults vacíos en payloads anteriores.
+        if (version < 1 && persistedState && typeof persistedState === 'object') {
+          const s = persistedState as Record<string, unknown>;
+          return {
+            ...s,
+            clienteNombre: typeof s.clienteNombre === 'string' ? s.clienteNombre : '',
+            clienteTelefono: typeof s.clienteTelefono === 'string' ? s.clienteTelefono : '',
+            direccionEntrega: typeof s.direccionEntrega === 'string' ? s.direccionEntrega : '',
+            indicacionesEntrega:
+              typeof s.indicacionesEntrega === 'string' ? s.indicacionesEntrega : '',
+          };
+        }
+        return persistedState;
+      },
+    },
   ),
 );
 

@@ -101,55 +101,62 @@ export async function crearVenta(args: {
     });
   }
 
-  const venta = await prisma.venta.create({
-    data: {
-      canal: data.canal as CanalVenta,
-      modalidad: data.modalidad as ModalidadVenta,
-      pcOrigen: data.pcOrigen,
-      clienteId: data.clienteId ?? null,
-      listaPreciosId: lista.id,
-      sesionCajaId: sesion.id,
-      numeroOrdenTurno: numeroOrden,
-      usuarioAperturaId: usuarioId,
-      observaciones: data.observaciones ?? null,
-      subtotal: subtotalVenta.toFixed(2),
-      total: subtotalVenta.toFixed(2),
-      tieneCocina,
-      estado: EstadoVenta.PROCESADA,
-      items: { create: itemsToCreate },
-    },
-  });
-
-  await recordAudit({
-    tabla: 'ventas',
-    registroId: venta.id,
-    accion: 'INSERT',
-    usuarioId,
-    pcOrigen: data.pcOrigen,
-    valorNuevo: { numero: venta.numero, total: venta.total, canal: venta.canal },
-  });
-
-  // Si hay datos de delivery (nombre/teléfono/dirección) y la modalidad lo justifica,
-  // crear el DeliveryInfo asociado para que la comanda y el ticket de delivery los
-  // reciban. Snapshot crudo en JSON; la UI/impresora lee de ahí.
+  // Todo en una transacción atómica: crear venta + items + audit log + delivery
+  // info. Si cualquiera falla, la venta no queda persistida (no más estados
+  // huérfanos: venta sin audit, venta delivery sin DeliveryInfo, etc.).
   const tieneDatosDelivery =
-    !!data.clienteNombre || !!data.clienteTelefono || !!data.direccionEntrega || !!data.indicacionesEntrega;
+    !!data.clienteNombre ||
+    !!data.clienteTelefono ||
+    !!data.direccionEntrega ||
+    !!data.indicacionesEntrega;
   const esDelivery = data.modalidad !== ('TAKE_AWAY' as ModalidadVenta);
-  if (tieneDatosDelivery && esDelivery) {
-    await prisma.deliveryInfo.create({
+
+  return prisma.$transaction(async (tx) => {
+    const venta = await tx.venta.create({
       data: {
-        ventaId: venta.id,
-        direccionSnapshot: {
-          clienteNombre: data.clienteNombre ?? null,
-          clienteTelefono: data.clienteTelefono ?? null,
-          direccion: data.direccionEntrega ?? null,
-          indicaciones: data.indicacionesEntrega ?? null,
-        } as never,
+        canal: data.canal as CanalVenta,
+        modalidad: data.modalidad as ModalidadVenta,
+        pcOrigen: data.pcOrigen,
+        clienteId: data.clienteId ?? null,
+        listaPreciosId: lista.id,
+        sesionCajaId: sesion.id,
+        numeroOrdenTurno: numeroOrden,
+        usuarioAperturaId: usuarioId,
+        observaciones: data.observaciones ?? null,
+        subtotal: subtotalVenta.toFixed(2),
+        total: subtotalVenta.toFixed(2),
+        tieneCocina,
+        estado: EstadoVenta.PROCESADA,
+        items: { create: itemsToCreate },
       },
     });
-  }
 
-  return venta;
+    if (tieneDatosDelivery && esDelivery) {
+      await tx.deliveryInfo.create({
+        data: {
+          ventaId: venta.id,
+          direccionSnapshot: {
+            clienteNombre: data.clienteNombre ?? null,
+            clienteTelefono: data.clienteTelefono ?? null,
+            direccion: data.direccionEntrega ?? null,
+            indicaciones: data.indicacionesEntrega ?? null,
+          } as never,
+        },
+      });
+    }
+
+    await recordAudit({
+      tabla: 'ventas',
+      registroId: venta.id,
+      accion: 'INSERT',
+      usuarioId,
+      pcOrigen: data.pcOrigen,
+      valorNuevo: { numero: venta.numero, total: venta.total, canal: venta.canal },
+      tx,
+    });
+
+    return venta;
+  });
 }
 
 export async function getVentaCompleta(id: string) {
