@@ -8,6 +8,7 @@ const TABS = [
   { href: '/admin/configuracion', label: 'Inicio', icon: '🏠' },
   { href: '/admin/configuracion/usuarios', label: 'Usuarios y PINs', icon: '👤' },
   { href: '/admin/configuracion/cuentas', label: 'Cuentas y posnets', icon: '💰' },
+  { href: '/admin/configuracion/impresoras', label: 'Impresoras', icon: '🖨️' },
   { href: '/admin/configuracion/parametros', label: 'Parámetros', icon: '🛠️' },
   { href: '/admin/configuracion/local', label: 'Datos del local', icon: '🏪' },
 ];
