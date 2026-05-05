@@ -461,7 +461,7 @@ function ModalCargarPago({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={guardando}>
+          <Button onClick={() => void submit()} disabled={guardando}>
             {guardando ? 'Guardando...' : 'Registrar pago'}
           </Button>
         </footer>
@@ -706,7 +706,7 @@ function ModalEditarEmpleado({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button disabled={!cambia || guardando} onClick={submit}>
+          <Button disabled={!cambia || guardando} onClick={() => void submit()}>
             {guardando ? 'Guardando...' : 'Guardar cambios'}
           </Button>
         </footer>

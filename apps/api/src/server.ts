@@ -93,8 +93,11 @@ export async function buildServer() {
       return reply.code(400).send({ error: 'Validación fallida', issues: err.issues });
     }
     app.log.error(err);
-    if ((err as { statusCode?: number }).statusCode) {
-      return reply.code((err as { statusCode: number }).statusCode).send({ error: err.message });
+    const e = err as { statusCode?: number; message?: string };
+    if (typeof e.statusCode === 'number') {
+      return reply
+        .code(e.statusCode)
+        .send({ error: typeof e.message === 'string' ? e.message : 'Error' });
     }
     return reply.code(500).send({ error: 'Error interno' });
   });

@@ -50,9 +50,10 @@ export function buildCierrePayloadFromDemo(extras?: { contado?: string; observac
 
   const porCanal = Object.entries(
     finalizadas.reduce<Record<string, { monto: number; cantidad: number }>>((acc, v) => {
-      acc[v.canal] = acc[v.canal] || { monto: 0, cantidad: 0 };
-      acc[v.canal].monto += Number(v.total);
-      acc[v.canal].cantidad += 1;
+      const cur = acc[v.canal] ?? { monto: 0, cantidad: 0 };
+      cur.monto += Number(v.total);
+      cur.cantidad += 1;
+      acc[v.canal] = cur;
       return acc;
     }, {}),
   ).map(([canal, vv]) => ({ canal, monto: vv.monto.toString(), cantidad: vv.cantidad }));
@@ -72,7 +73,7 @@ export function buildCierrePayloadFromDemo(extras?: { contado?: string; observac
     },
     desgloseTarjeta: {
       debito: sumByMetodo(['DEBITO']).toString(),
-      credito: sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_3_PAGOS']).toString(),
+      credito: sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_CUOTAS']).toString(),
       mpQr: sumByMetodo(['MERCADOPAGO_QR']).toString(),
       transferencia: sumByMetodo(['TRANSFERENCIA']).toString(),
     },
@@ -250,9 +251,10 @@ function buildDashboard(state: DemoState) {
   const cantidadVentas = finalizadas.length;
   const porCanal = Object.entries(
     finalizadas.reduce<Record<string, { monto: number; cantidad: number }>>((acc, v) => {
-      acc[v.canal] = acc[v.canal] || { monto: 0, cantidad: 0 };
-      acc[v.canal].monto += Number(v.total);
-      acc[v.canal].cantidad += 1;
+      const cur = acc[v.canal] ?? { monto: 0, cantidad: 0 };
+      cur.monto += Number(v.total);
+      cur.cantidad += 1;
+      acc[v.canal] = cur;
       return acc;
     }, {}),
   ).map(([canal, v]) => ({ canal, monto: v.monto.toString(), cantidad: v.cantidad }));
@@ -273,9 +275,10 @@ function buildDashboard(state: DemoState) {
   const porCategoria = (lista: typeof aportes) =>
     Object.entries(
       lista.reduce<Record<string, { monto: number; cantidad: number }>>((acc, m) => {
-        acc[m.categoria] = acc[m.categoria] || { monto: 0, cantidad: 0 };
-        acc[m.categoria].monto += Number(m.monto);
-        acc[m.categoria].cantidad += 1;
+        const cur = acc[m.categoria] ?? { monto: 0, cantidad: 0 };
+        cur.monto += Number(m.monto);
+        cur.cantidad += 1;
+        acc[m.categoria] = cur;
         return acc;
       }, {}),
     ).map(([categoria, v]) => ({ categoria, monto: v.monto.toString(), cantidad: v.cantidad }));
@@ -301,14 +304,14 @@ function buildDashboard(state: DemoState) {
       cobradoTarjeta: {
         monto: (
           sumByMetodo(['DEBITO']).monto +
-          sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_3_PAGOS']).monto +
+          sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_CUOTAS']).monto +
           sumByMetodo(['MERCADOPAGO_QR']).monto +
           sumByMetodo(['TRANSFERENCIA']).monto
         ).toString(),
         cantidad: pagos.filter((p) => p.metodo !== 'EFECTIVO').length,
         desglose: {
           debito: { monto: sumByMetodo(['DEBITO']).monto.toString(), cantidad: sumByMetodo(['DEBITO']).cantidad },
-          credito: { monto: sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_3_PAGOS']).monto.toString(), cantidad: sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_3_PAGOS']).cantidad },
+          credito: { monto: sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_CUOTAS']).monto.toString(), cantidad: sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_CUOTAS']).cantidad },
           mpQr: { monto: sumByMetodo(['MERCADOPAGO_QR']).monto.toString(), cantidad: sumByMetodo(['MERCADOPAGO_QR']).cantidad },
           transferencia: { monto: sumByMetodo(['TRANSFERENCIA']).monto.toString(), cantidad: sumByMetodo(['TRANSFERENCIA']).cantidad },
           otro: { monto: '0', cantidad: 0 },
@@ -417,7 +420,7 @@ function buildVentasAnalisis(state: DemoState, search: URLSearchParams) {
         total: mostradorTotal.toString(),
         efectivo: { monto: sumByMetodo(['EFECTIVO']).monto.toString(), cantidad: sumByMetodo(['EFECTIVO']).cantidad },
         debito: { monto: sumByMetodo(['DEBITO']).monto.toString(), cantidad: sumByMetodo(['DEBITO']).cantidad },
-        creditoOtros: { monto: sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_3_PAGOS', 'MERCADOPAGO_QR']).monto.toString(), cantidad: sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_3_PAGOS', 'MERCADOPAGO_QR']).cantidad },
+        creditoOtros: { monto: sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_CUOTAS', 'MERCADOPAGO_QR']).monto.toString(), cantidad: sumByMetodo(['CREDITO_1_PAGO', 'CREDITO_CUOTAS', 'MERCADOPAGO_QR']).cantidad },
       },
       delivery: {
         total: deliveryTotal.toString(),
@@ -507,9 +510,10 @@ function buildEstadisticas(state: DemoState, search: URLSearchParams) {
   const porProducto: Record<string, { nombre: string; categoria: string; cantidad: number; monto: number; ocurrencias: number; productoId: string }> = {};
   for (const v of finalizadas) {
     for (const it of v.items) {
-      if (!porProducto[it.productoId]) {
+      let entry = porProducto[it.productoId];
+      if (!entry) {
         const p = findProducto(it.productoId);
-        porProducto[it.productoId] = {
+        entry = {
           productoId: it.productoId,
           nombre: it.nombreSnapshot.split(' · ')[0] ?? 'Producto',
           categoria: p?.tipoProducto.categoria.nombre ?? '—',
@@ -517,10 +521,11 @@ function buildEstadisticas(state: DemoState, search: URLSearchParams) {
           monto: 0,
           ocurrencias: 0,
         };
+        porProducto[it.productoId] = entry;
       }
-      porProducto[it.productoId].cantidad += Number(it.cantidad);
-      porProducto[it.productoId].monto += Number(it.totalLinea);
-      porProducto[it.productoId].ocurrencias += 1;
+      entry.cantidad += Number(it.cantidad);
+      entry.monto += Number(it.totalLinea);
+      entry.ocurrencias += 1;
     }
   }
   const topProductos = Object.values(porProducto)
@@ -926,9 +931,11 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
     const prod = productosFull().find((x) => x.codigo === codigoNorm);
     if (!prod) return notFound(`Sin producto con código ${codigoNorm}`);
     let saborPreseleccionado = null;
-    if (saborIdx !== null && prod.sabores && prod.sabores[saborIdx]) {
+    if (saborIdx !== null && prod.sabores) {
       const s = prod.sabores[saborIdx];
-      saborPreseleccionado = { opcionId: s.opcionId, grupoId: s.grupoId, nombre: s.nombre };
+      if (s) {
+        saborPreseleccionado = { opcionId: s.opcionId, grupoId: s.grupoId, nombre: s.nombre };
+      }
     }
     return ok({ producto: prod, saborPreseleccionado });
   }
@@ -1235,7 +1242,9 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
   }
   m = p.match(/^\/admin\/precios\/aprobaciones\/([^/]+)$/);
   if (m && method === 'GET') {
-    const det = buildAprobacionDetalle(m![1]);
+    const id = m[1];
+    if (!id) return notFound();
+    const det = buildAprobacionDetalle(id);
     if (!det) return notFound();
     return ok(det);
   }

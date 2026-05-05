@@ -478,7 +478,7 @@ function ModalEditarCliente({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={guardando}>
+          <Button onClick={() => void submit()} disabled={guardando}>
             {guardando ? 'Guardando...' : 'Guardar'}
           </Button>
         </footer>
@@ -663,7 +663,7 @@ function ModalDireccion({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={guardando}>
+          <Button onClick={() => void submit()} disabled={guardando}>
             {guardando ? 'Guardando...' : isEdit ? 'Guardar' : 'Crear dirección'}
           </Button>
         </footer>

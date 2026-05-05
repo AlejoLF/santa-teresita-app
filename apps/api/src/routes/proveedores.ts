@@ -8,6 +8,7 @@ import {
   EstadoPago,
 } from '@sta/db';
 import { recordAudit } from '../services/audit.js';
+import { calcSaldoFactura } from '../services/facturas.js';
 
 /**
  * Endpoints para proveedores, facturas recibidas y el flujo de pago multi-cuenta
@@ -54,7 +55,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       const saldosMap = new Map<string, { saldo: number; cantidad: number; proxVenc: Date | null }>();
       for (const f of facturas) {
         const cur = saldosMap.get(f.proveedorId) ?? { saldo: 0, cantidad: 0, proxVenc: null };
-        cur.saldo += Number(f.total) - Number(f.totalPagado);
+        cur.saldo += calcSaldoFactura(f);
         cur.cantidad += 1;
         if (f.fechaVencimiento && (!cur.proxVenc || f.fechaVencimiento < cur.proxVenc)) {
           cur.proxVenc = f.fechaVencimiento;
@@ -97,7 +98,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
 
       const facturas = proveedor.facturas.map((f) => ({
         ...f,
-        saldo: (Number(f.total) - Number(f.totalPagado)).toFixed(2),
+        saldo: (calcSaldoFactura(f)).toFixed(2),
       }));
 
       const saldoAdeudado = facturas
@@ -343,7 +344,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       if (!factura) return reply.code(404).send({ error: 'Factura no encontrada' });
       return {
         ...factura,
-        saldo: (Number(factura.total) - Number(factura.totalPagado)).toFixed(2),
+        saldo: (calcSaldoFactura(factura)).toFixed(2),
       };
     },
   );
@@ -792,7 +793,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       for (const f of body.facturas) {
         const dbF = facturasDb.find((d) => d.id === f.facturaId);
         if (!dbF) continue;
-        const saldoActual = Number(dbF.total) - Number(dbF.totalPagado);
+        const saldoActual = calcSaldoFactura(dbF);
         if (Number(f.montoAplicar) > saldoActual + 0.01) {
           return reply.code(400).send({
             error: `Factura ${dbF.numero}: monto a aplicar (${f.montoAplicar}) supera el saldo (${saldoActual.toFixed(2)})`,
@@ -1206,7 +1207,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       let restante = montoTotal;
       for (const f of facturasPendientes) {
         if (restante <= 0.01) break;
-        const saldoFactura = Number(f.total) - Number(f.totalPagado);
+        const saldoFactura = calcSaldoFactura(f);
         if (saldoFactura <= 0.01) continue;
         const aplicar = Math.min(restante, saldoFactura);
         asignaciones.push({ facturaId: f.id, montoAplicado: Number(aplicar.toFixed(2)) });

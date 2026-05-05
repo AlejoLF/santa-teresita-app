@@ -415,7 +415,7 @@ function ModalCuenta({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={guardando}>
+          <Button onClick={() => void submit()} disabled={guardando}>
             {guardando ? 'Guardando...' : isEdit ? 'Guardar' : 'Crear cuenta'}
           </Button>
         </footer>
@@ -682,7 +682,7 @@ function ModalPosnet({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={guardando}>
+          <Button onClick={() => void submit()} disabled={guardando}>
             {guardando ? 'Guardando...' : isEdit ? 'Guardar' : 'Crear posnet'}
           </Button>
         </footer>

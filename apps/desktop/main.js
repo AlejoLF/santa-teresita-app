@@ -460,7 +460,9 @@ function createMainWindow() {
     } else if (input.control && key === 'q') {
       app.quit();
       event.preventDefault();
-    } else if (input.control && input.shift && key === 'i') {
+    } else if (input.control && input.shift && key === 'i' && !app.isPackaged) {
+      // DevTools solo accesible en dev mode — en producción está bloqueado
+      // para evitar que un usuario accidentalmente exponga el renderer.
       mainWindow.webContents.toggleDevTools();
       event.preventDefault();
     }

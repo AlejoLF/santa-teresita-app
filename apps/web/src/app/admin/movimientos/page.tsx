@@ -1078,7 +1078,7 @@ function FormNuevoMovimiento({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={guardando}>
+          <Button onClick={() => void submit()} disabled={guardando}>
             {guardando ? 'Guardando...' : 'Crear movimiento'}
           </Button>
         </footer>

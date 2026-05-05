@@ -153,7 +153,7 @@ export async function aprobarConPinAdmin(args: {
         pcOrigen: args.pcOrigen,
         ipOrigen: args.ipOrigen ?? null,
         accionAprobada: args.accion,
-        accionContexto: args.contexto ?? undefined,
+        accionContexto: (args.contexto as never) ?? undefined,
         usuarioSolicitanteId: args.usuarioSolicitanteId,
         observaciones: 'Aprobación admin in-line: PIN incorrecto',
       },
@@ -167,7 +167,7 @@ export async function aprobarConPinAdmin(args: {
       pcOrigen: args.pcOrigen,
       ipOrigen: args.ipOrigen ?? null,
       accionAprobada: args.accion,
-      accionContexto: args.contexto ?? undefined,
+      accionContexto: (args.contexto as never) ?? undefined,
       usuarioSolicitanteId: args.usuarioSolicitanteId,
     },
   });

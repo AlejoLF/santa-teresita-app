@@ -411,7 +411,7 @@ function FormNuevoEmpleado({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={creando}>
+          <Button onClick={() => void submit()} disabled={creando}>
             {creando ? 'Creando...' : 'Crear empleado'}
           </Button>
         </footer>
@@ -709,7 +709,7 @@ function PagarSueldoModal({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={enviando || sumaConceptos <= 0}>
+          <Button onClick={() => void submit()} disabled={enviando || sumaConceptos <= 0}>
             {enviando ? 'Registrando...' : '✓ Registrar pago'}
           </Button>
         </footer>
