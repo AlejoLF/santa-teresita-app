@@ -262,6 +262,22 @@ async function upgradeSchema() {
       CREATE INDEX IF NOT EXISTS "ventas_estado_fecha_finalizacion_idx"
       ON "ventas" ("estado", "fecha_finalizacion")
     `);
+    // v1.22 — rename destinos de impresión: KITCHEN→COCINA, COUNTER→MOSTRADOR
+    // (DELIVERY se mantiene). Actualiza tanto los jobs históricos como las
+    // claves de configuración_sistema. Idempotente: si ya están renombrados,
+    // los UPDATE no afectan filas.
+    await client.query(`
+      UPDATE "trabajos_impresion" SET "destino" = 'COCINA' WHERE "destino" = 'KITCHEN'
+    `);
+    await client.query(`
+      UPDATE "trabajos_impresion" SET "destino" = 'MOSTRADOR' WHERE "destino" = 'COUNTER'
+    `);
+    await client.query(`
+      UPDATE "configuracion_sistema" SET "clave" = 'impresora_cocina' WHERE "clave" = 'impresora_kitchen'
+    `);
+    await client.query(`
+      UPDATE "configuracion_sistema" SET "clave" = 'impresora_mostrador' WHERE "clave" = 'impresora_counter'
+    `);
     log('upgradeSchema OK');
   } catch (e) {
     log('upgradeSchema error (no fatal): ' + (e?.message || e));

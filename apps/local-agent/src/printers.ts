@@ -8,7 +8,14 @@
 
 import { ThermalPrinter, PrinterTypes, CharacterSet } from 'node-thermal-printer';
 
-export type DestinoImpresora = 'KITCHEN' | 'COUNTER' | 'DELIVERY';
+/**
+ * Las 3 comanderas físicas del local Santa Teresita:
+ *   - MOSTRADOR (Comandera 1) — todos los pedidos cobrados en mostrador
+ *   - DELIVERY  (Comandera 2) — todos los pedidos de delivery propio (TELEFONO/WHATSAPP)
+ *   - COCINA    (Comandera 3) — pedidos que requieren preparación caliente +
+ *                                todos los de apps externas (RAPPI / PYA / MELI / DELIVERATE)
+ */
+export type DestinoImpresora = 'MOSTRADOR' | 'DELIVERY' | 'COCINA';
 
 export interface PrinterConfig {
   destino: DestinoImpresora;
@@ -19,17 +26,17 @@ export interface PrinterConfig {
 }
 
 const DEFAULTS: Record<DestinoImpresora, { host: string; port: number; width: number; activa: boolean }> = {
-  KITCHEN: { host: '192.168.1.50', port: 9100, width: 42, activa: true },
-  COUNTER: { host: '192.168.1.51', port: 9100, width: 42, activa: true },
-  DELIVERY: { host: '192.168.1.52', port: 9100, width: 42, activa: false },
+  MOSTRADOR: { host: '192.168.1.50', port: 9100, width: 42, activa: true },
+  DELIVERY: { host: '192.168.1.51', port: 9100, width: 42, activa: true },
+  COCINA: { host: '192.168.1.52', port: 9100, width: 42, activa: true },
 };
 
 // Cache de la config — el agent la pisa en cada poll usando setPrinterConfig().
 // Si nunca se llamó, fallback a DEFAULTS.
 const runtimeConfig: Record<DestinoImpresora, PrinterConfig> = {
-  KITCHEN: { ...DEFAULTS.KITCHEN, destino: 'KITCHEN' },
-  COUNTER: { ...DEFAULTS.COUNTER, destino: 'COUNTER' },
+  MOSTRADOR: { ...DEFAULTS.MOSTRADOR, destino: 'MOSTRADOR' },
   DELIVERY: { ...DEFAULTS.DELIVERY, destino: 'DELIVERY' },
+  COCINA: { ...DEFAULTS.COCINA, destino: 'COCINA' },
 };
 
 /**
@@ -38,7 +45,7 @@ const runtimeConfig: Record<DestinoImpresora, PrinterConfig> = {
  * panel admin se reflejan en ~2-5 segundos.
  */
 export function setPrinterConfig(cfg: Partial<Record<DestinoImpresora, PrinterConfig>>): void {
-  for (const k of ['KITCHEN', 'COUNTER', 'DELIVERY'] as const) {
+  for (const k of ['MOSTRADOR', 'DELIVERY', 'COCINA'] as const) {
     const incoming = cfg[k];
     if (incoming) runtimeConfig[k] = { ...incoming, destino: k };
   }
@@ -88,11 +95,18 @@ export interface ComandaPayload {
 }
 
 /**
- * Renderiza una comanda de cocina (Wireframe 10 — Ticket 1).
+ * Renderiza una comanda (mostrador / delivery / cocina).
+ * El destino se pasa como argumento porque la misma comanda puede ir a
+ * múltiples impresoras según las reglas de routing (ver `determinarDestinos`
+ * en apps/api/src/services/impresion.ts).
+ *
  * Compatible con EPSON TM-T20II (80mm, 42 chars).
  */
-export async function imprimirComanda(payload: ComandaPayload): Promise<void> {
-  const printer = makePrinter('KITCHEN');
+export async function imprimirComanda(
+  payload: ComandaPayload,
+  destino: DestinoImpresora = 'COCINA',
+): Promise<void> {
+  const printer = makePrinter(destino);
 
   printer.alignCenter();
   printer.setTextDoubleHeight();
@@ -209,7 +223,10 @@ export interface TicketClientePayload {
 }
 
 export async function imprimirTicketCliente(payload: TicketClientePayload): Promise<void> {
-  const printer = makePrinter('COUNTER');
+  // El ticket cliente se imprime en la comandera 1 (Mostrador) — junto con
+  // la comanda del pedido (la cocinera lee la comanda, el cliente recibe este
+  // ticket fiscal en la mano).
+  const printer = makePrinter('MOSTRADOR');
 
   printer.alignCenter();
   printer.bold(true);

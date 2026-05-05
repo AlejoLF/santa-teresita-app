@@ -15,7 +15,7 @@ import {
 import { getOrCreateSesionActual } from '../services/sesion-caja.js';
 import { recordAudit } from '../services/audit.js';
 import { aprobarConPinAdmin } from '../services/auth.js';
-import { encolarComandaCancelada } from '../services/impresion.js';
+import { encolarComandasCanceladas } from '../services/impresion.js';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta, EstadoPago } from '@sta/db';
 
@@ -474,11 +474,9 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           tx,
         });
 
-        // 4. Encolar COMANDA_CANCELADA para que la cocinera vea el aviso
-        // tachado. Solo encolamos si la venta tenía items con cocinaInterviene.
-        if (venta.tieneCocina) {
-          await encolarComandaCancelada(venta.id, tx);
-        }
+        // 4. Encolar COMANDA_CANCELADA en todos los destinos donde se imprimió
+        // el original (mostrador / delivery / cocina, según reglas).
+        await encolarComandasCanceladas(venta.id, tx);
 
         return updated;
       });
