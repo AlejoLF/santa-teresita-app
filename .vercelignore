@@ -1,0 +1,28 @@
+# Apps que no se deployan en Vercel
+apps/api
+apps/local-agent
+apps/desktop
+
+# Build outputs
+**/dist
+**/.next
+**/build
+**/out
+**/coverage
+**/.turbo
+
+# Datos del cliente
+*.xlsx
+*.xlsb
+*.xls
+
+# Tooling local
+tools
+.tmp
+
+# Misc
+.git
+.vscode
+.idea
+.DS_Store
+node_modules

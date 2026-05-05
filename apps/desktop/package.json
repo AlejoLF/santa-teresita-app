@@ -1,0 +1,23 @@
+{
+  "name": "@sta/desktop",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Santa Teresita Pastas — desktop app (full local stack)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:resources": "node scripts/build-resources.mjs",
+    "package": "node scripts/build-resources.mjs && electron-packager . SantaTeresitaDemo --platform=win32 --arch=x64 --out=out --overwrite --app-version=0.2.0"
+  },
+  "dependencies": {
+    "embedded-postgres": "^18.3.0-beta.17",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@electron/asar": "^4.2.0",
+    "@electron/packager": "^20.0.0",
+    "commander": "^14.0.3",
+    "electron": "^33.2.0",
+    "esbuild": "^0.24.2"
+  }
+}

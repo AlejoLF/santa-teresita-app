@@ -1,0 +1,140 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ════════════════════════════════════════════════════════════════════
+   Santa Teresita — Design tokens (SPEC §7.2)
+   "Trattoria refinada" — verde Teresita + cremoso + serif Fraunces.
+   ════════════════════════════════════════════════════════════════════ */
+
+@layer base {
+  :root {
+    /* Marca */
+    --green-teresita-50: #f0f7f2;
+    --green-teresita-100: #dceae0;
+    --green-teresita-300: #6fa086;
+    --green-teresita-500: #2e7053;
+    --green-teresita-700: #1f4d3c;
+    --green-teresita-900: #0f2d22;
+
+    /* Crema */
+    --cream-50: #fdfbf7;
+    --cream-100: #faf6ee;
+    --cream-200: #f0e9dc;
+    --cream-300: #e2ddd0;
+
+    /* Tinta */
+    --ink-900: #0f0f0e;
+    --ink-700: #2a2a28;
+    --ink-500: #5c5c58;
+    --ink-300: #9c9a93;
+
+    /* Acentos funcionales */
+    --pomodoro-600: #b91c1c;
+    --pomodoro-100: #fee2e2;
+    --basil-600: #15803d;
+    --basil-100: #dcfce7;
+    --saffron-600: #c2410c;
+    --saffron-100: #ffedd5;
+    --ocean-600: #0369a1;
+    --ocean-100: #dbeafe;
+
+    /* Surfaces (alias) */
+    --surface-app: var(--cream-50);
+    --surface-app-vendedor: var(--cream-100);
+    --surface-card: #ffffff;
+    --surface-elevated: #ffffff;
+    --surface-sunken: var(--cream-100);
+
+    /* Texto (alias) */
+    --text-default: var(--ink-700);
+    --text-strong: var(--ink-900);
+    --text-muted: var(--ink-500);
+    --text-disabled: var(--ink-300);
+
+    /* Bordes */
+    --border-default: var(--cream-300);
+    --border-strong: var(--ink-300);
+    --border-focus: var(--green-teresita-500);
+
+    /* Tipografía */
+    --font-display: 'Fraunces', 'Newsreader', Georgia, serif;
+    --font-body: 'Geist', 'General Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace;
+
+    /* Sombras */
+    --shadow-sm: 0 1px 2px 0 rgba(15, 15, 14, 0.05);
+    --shadow-md: 0 2px 4px -1px rgba(15, 15, 14, 0.06), 0 4px 8px -2px rgba(15, 15, 14, 0.05);
+    --shadow-lg: 0 4px 8px -2px rgba(15, 15, 14, 0.08), 0 12px 24px -4px rgba(15, 15, 14, 0.08);
+    --shadow-xl: 0 8px 16px -4px rgba(15, 15, 14, 0.1), 0 24px 48px -8px rgba(15, 15, 14, 0.1);
+    --shadow-modal: 0 24px 64px -12px rgba(15, 15, 14, 0.25);
+    --shadow-focus-ring: 0 0 0 3px rgba(31, 77, 60, 0.25);
+
+    /* Motion */
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  html,
+  body {
+    background: var(--surface-app);
+    color: var(--text-default);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    font-feature-settings: 'tnum' 0, 'lnum' 1;
+  }
+
+  /* Tabular figures para mono y .num */
+  .font-mono,
+  .num {
+    font-feature-settings: 'tnum' 1, 'lnum' 1;
+  }
+
+  /* Hero number en serif con personalidad */
+  .hero-number {
+    font-family: var(--font-display);
+    font-feature-settings: 'tnum' 1, 'lnum' 1, 'ss01' 1;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+
+  /* Focus ring custom */
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--shadow-focus-ring);
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 font-medium
+           transition-colors duration-fast ease-out
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply bg-teresita-700 text-cream-50 hover:bg-teresita-900 active:bg-teresita-900;
+  }
+  .btn-secondary {
+    @apply bg-cream-200 text-ink-900 hover:bg-cream-300;
+  }
+  .btn-destructive {
+    @apply bg-pomodoro-600 text-white hover:opacity-90;
+  }
+  .btn-ghost {
+    @apply text-ink-700 hover:bg-cream-200;
+  }
+  .card {
+    @apply rounded-lg bg-surface-card shadow-sm border border-cream-300;
+  }
+  .input {
+    @apply w-full rounded-md border border-cream-300 bg-surface-sunken px-3 py-2
+           text-base text-ink-900 placeholder:text-ink-300
+           focus:border-teresita-500 focus:bg-white;
+  }
+}

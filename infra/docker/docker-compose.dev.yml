@@ -1,0 +1,71 @@
+# ════════════════════════════════════════════════════════════════════
+#   Santa Teresita — Stack de desarrollo local
+#   Levanta Postgres + Redis + Adminer.
+#   API y Web corren en host (pnpm dev) para hot reload rápido.
+# ════════════════════════════════════════════════════════════════════
+name: teresita-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: teresita-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-teresita}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-teresita_dev_pwd}
+      POSTGRES_DB: ${POSTGRES_DB:-teresita}
+      POSTGRES_INITDB_ARGS: '--encoding=UTF-8 --lc-collate=es_AR.UTF-8 --lc-ctype=es_AR.UTF-8'
+      TZ: America/Argentina/Buenos_Aires
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c max_connections=200
+      -c log_statement=none
+      -c log_min_duration_statement=200
+      -c wal_level=logical
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-teresita} -d ${POSTGRES_DB:-teresita}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: teresita-redis
+    restart: unless-stopped
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+    command: redis-server --save 60 1 --loglevel warning --appendonly yes
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  adminer:
+    image: adminer:4-standalone
+    container_name: teresita-adminer
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: dracula
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+    name: teresita_postgres_data
+  redis_data:
+    name: teresita_redis_data

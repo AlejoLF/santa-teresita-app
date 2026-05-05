@@ -1,0 +1,39 @@
+# ════════════════════════════════════════════════════════════════════
+#   Caddy — proxy de prod (VPS)
+#   Reemplazar ${DOMAIN} con el dominio real al deploy.
+# ════════════════════════════════════════════════════════════════════
+
+{$DOMAIN:teresita.local} {
+	encode zstd gzip
+
+	# API
+	handle /api/* {
+		reverse_proxy localhost:3001
+	}
+
+	# Webhooks (no logs por ruido, pero rate limit)
+	handle /webhooks/* {
+		reverse_proxy localhost:3001
+	}
+
+	# Web (Next.js)
+	handle {
+		reverse_proxy localhost:3000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=63072000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 100MB
+			roll_keep 10
+		}
+		format json
+	}
+}
