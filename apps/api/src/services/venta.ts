@@ -11,7 +11,7 @@ import type { ItemNuevo, VentaNueva } from '@sta/shared';
 import { subtotalItem } from '@sta/shared';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
 import { recordAudit } from './audit.js';
-import { encolarComandaCocina } from './impresion.js';
+import { encolarComandasParaVenta } from './impresion.js';
 
 /**
  * Crea una venta en estado PROCESADA, con items snapshot del precio.
@@ -156,10 +156,11 @@ export async function crearVenta(args: {
       tx,
     });
 
-    // Encolar comanda de cocina (incluye datos de delivery cuando aplica).
-    // El agent local-printer la imprime al primer poll. Si la venta no tiene
-    // items con cocinaInterviene=true, encolarComandaCocina hace early return.
-    await encolarComandaCocina(venta.id, tx);
+    // Encolar comandas en TODOS los destinos físicos correspondientes según
+    // las reglas (mostrador / delivery / cocina). Para una venta de mostrador
+    // con item caliente, esto crea 2 trabajos (Mostrador + Cocina). Para una
+    // de RAPPI, 1 trabajo (Cocina). Para una WhatsApp con bebida, 1 (Delivery).
+    await encolarComandasParaVenta(venta.id, tx);
 
     return venta;
   });
@@ -287,17 +288,11 @@ export async function agregarItemsAVenta(args: {
       },
     });
 
-    // Si los items recién agregados pasan por cocina, re-encolar comanda
-    // actualizada. La cocinera ve la orden con todos los items (los que ya
-    // tenía + los nuevos). Si ya empezó a cocinar la versión anterior,
-    // descarta la comanda vieja y usa la nueva.
-    const algunoCocina = items.some((i) => {
-      const p = productoMap.get(i.productoId);
-      return p?.tipoProducto.cocinaInterviene;
-    });
-    if (algunoCocina) {
-      await encolarComandaCocina(ventaId, tx);
-    }
+    // Re-encolar comandas con la versión actualizada (que ya incluye los
+    // items nuevos). Reimprime en todos los destinos correspondientes según
+    // las reglas. Si ya se cocinó la versión anterior, las comanderas
+    // descartan la vieja y usan la nueva.
+    await encolarComandasParaVenta(ventaId, tx);
 
     return updated;
   });

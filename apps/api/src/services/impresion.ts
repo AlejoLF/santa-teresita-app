@@ -7,11 +7,58 @@ import { TipoTrabajoImpresion } from '@sta/db';
  *
  * Encolar trabajos es idempotente vía `tx` opcional para que la creación de
  * la venta y la encolada del trabajo sean un único commit atómico.
+ *
+ * REGLAS DE ROUTING (qué venta va a qué comandera):
+ *
+ *   Comandera 1 = MOSTRADOR — todos los pedidos cobrados en mostrador
+ *   Comandera 2 = DELIVERY  — todos los pedidos de delivery propio
+ *                              (TELEFONO/WHATSAPP/WEB con DELIVERY_PROPIO)
+ *   Comandera 3 = COCINA    — pedidos con items que requieren preparación
+ *                              caliente + todos los de apps externas (RAPPI,
+ *                              Pedidos YA, MELI, DELIVERATE)
+ *
+ * | Caso                                    | MOSTRADOR | DELIVERY | COCINA |
+ * |-----------------------------------------|-----------|----------|--------|
+ * | Mostrador + sin cocina                  | ✓         | ·        | ·      |
+ * | Mostrador + con cocina                  | ✓         | ·        | ✓      |
+ * | Delivery propio + sin cocina            | ·         | ✓        | ·      |
+ * | Delivery propio + con cocina            | ·         | ✓        | ✓      |
+ * | Apps externas (RAPPI/PYA/MELI/DELIVERATE)| ·        | ·        | ✓      |
  */
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
-export type DestinoImpresion = 'KITCHEN' | 'COUNTER' | 'DELIVERY';
+export type DestinoImpresion = 'MOSTRADOR' | 'DELIVERY' | 'COCINA';
+
+/**
+ * Devuelve la lista de destinos físicos donde tiene que imprimirse la
+ * comanda de una venta, según las reglas operativas del local.
+ *
+ * @param canal       Canal de la venta (MOSTRADOR / TELEFONO / WHATSAPP /
+ *                    RAPPI / PEDIDOS_YA / MERCADO_LIBRE / DELIVERATE / WEB)
+ * @param tieneCocina true si al menos un item requiere preparación caliente
+ */
+export function determinarDestinos(
+  canal: string,
+  tieneCocina: boolean,
+): DestinoImpresion[] {
+  // Apps externas: solo cocina (la cocinera prepara y deja listo para que
+  // el motoquero de la app retire). DELIVERATE va acá también — empresa de
+  // delivery contratada que retira el pedido del local.
+  if (canal === 'RAPPI' || canal === 'PEDIDOS_YA' || canal === 'MERCADO_LIBRE' || canal === 'DELIVERATE') {
+    return ['COCINA'];
+  }
+
+  // Delivery propio (motoquero del local — Damián): Comandera 2.
+  // + Cocina si tiene items que cocinan.
+  if (canal === 'TELEFONO' || canal === 'WHATSAPP' || canal === 'WEB') {
+    return tieneCocina ? ['DELIVERY', 'COCINA'] : ['DELIVERY'];
+  }
+
+  // Mostrador (default para canales no clasificados): Comandera 1.
+  // + Cocina si tiene items que cocinan.
+  return tieneCocina ? ['MOSTRADOR', 'COCINA'] : ['MOSTRADOR'];
+}
 
 interface EncolarArgs {
   tipo: TipoTrabajoImpresion;
@@ -93,45 +140,72 @@ export async function buildComandaPayload(
 }
 
 /**
- * Encolar la comanda de cocina al crear/agregar items a una venta.
- * Solo encola si la venta tiene al menos un item con cocinaInterviene=true.
+ * Encolar comandas para una venta — aplica las reglas de `determinarDestinos`
+ * y crea N trabajos (uno por destino físico). Por ejemplo:
+ *   - Venta mostrador con pasta caliente → 2 trabajos (MOSTRADOR + COCINA)
+ *   - Venta WhatsApp con bebida → 1 trabajo (DELIVERY)
+ *   - Venta RAPPI con cualquier cosa → 1 trabajo (COCINA)
+ *
+ * Se llama al crear venta y al agregar items (la cocinera ve la versión
+ * actualizada). Idempotente para retries: cada llamada genera trabajos
+ * nuevos; los viejos quedan en la cola con su propia historia.
  */
-export async function encolarComandaCocina(
+export async function encolarComandasParaVenta(
   ventaId: string,
   tx: Prisma.TransactionClient,
-): Promise<void> {
+): Promise<DestinoImpresion[]> {
   const venta = await tx.venta.findUnique({
     where: { id: ventaId },
-    select: { tieneCocina: true },
+    select: { canal: true, tieneCocina: true },
   });
-  if (!venta?.tieneCocina) return; // nada para cocina, no encolar
+  if (!venta) return [];
+
+  const destinos = determinarDestinos(venta.canal, venta.tieneCocina);
+  if (destinos.length === 0) return [];
 
   const payload = await buildComandaPayload(ventaId, tx);
-  await encolarTrabajo({
-    tipo: TipoTrabajoImpresion.COMANDA_COCINA,
-    destino: 'KITCHEN',
-    payload,
-    ventaId,
-    tx,
-  });
+  for (const destino of destinos) {
+    await encolarTrabajo({
+      tipo: TipoTrabajoImpresion.COMANDA_COCINA,
+      destino,
+      payload,
+      ventaId,
+      tx,
+    });
+  }
+  return destinos;
 }
 
 /**
- * Encolar comanda CANCELADA — la cocinera la recibe con marca "*** CANCELADA ***"
- * para tachar el pedido y descartar la prep si ya empezó.
+ * Encolar comandas CANCELADAS para una venta — sale con marca
+ * "*** CANCELADA ***" en todas las comanderas donde se imprimió el original
+ * (mostrador / delivery / cocina), para que el operador en cada estación
+ * tache el pedido.
  */
-export async function encolarComandaCancelada(
+export async function encolarComandasCanceladas(
   ventaId: string,
   tx: Prisma.TransactionClient,
-): Promise<void> {
-  const payload = await buildComandaPayload(ventaId, tx);
-  await encolarTrabajo({
-    tipo: TipoTrabajoImpresion.COMANDA_CANCELADA,
-    destino: 'KITCHEN',
-    payload,
-    ventaId,
-    tx,
+): Promise<DestinoImpresion[]> {
+  const venta = await tx.venta.findUnique({
+    where: { id: ventaId },
+    select: { canal: true, tieneCocina: true },
   });
+  if (!venta) return [];
+
+  const destinos = determinarDestinos(venta.canal, venta.tieneCocina);
+  if (destinos.length === 0) return [];
+
+  const payload = await buildComandaPayload(ventaId, tx);
+  for (const destino of destinos) {
+    await encolarTrabajo({
+      tipo: TipoTrabajoImpresion.COMANDA_CANCELADA,
+      destino,
+      payload,
+      ventaId,
+      tx,
+    });
+  }
+  return destinos;
 }
 
 /**
@@ -161,9 +235,9 @@ export interface PrinterDestinoConfig {
 }
 
 const DEFAULT_CONFIG: Record<DestinoImpresion, PrinterDestinoConfig> = {
-  KITCHEN: { host: '192.168.1.50', port: 9100, width: 42, activa: true },
-  COUNTER: { host: '192.168.1.51', port: 9100, width: 42, activa: true },
-  DELIVERY: { host: '192.168.1.52', port: 9100, width: 42, activa: false },
+  MOSTRADOR: { host: '192.168.1.50', port: 9100, width: 42, activa: true },
+  DELIVERY: { host: '192.168.1.51', port: 9100, width: 42, activa: true },
+  COCINA: { host: '192.168.1.52', port: 9100, width: 42, activa: true },
 };
 
 export async function getConfigImpresion(): Promise<
@@ -174,7 +248,7 @@ export async function getConfigImpresion(): Promise<
   });
   const byClave = new Map(rows.map((r) => [r.clave, r.valor]));
   const result: Record<DestinoImpresion, PrinterDestinoConfig> = { ...DEFAULT_CONFIG };
-  for (const destino of ['KITCHEN', 'COUNTER', 'DELIVERY'] as const) {
+  for (const destino of ['MOSTRADOR', 'DELIVERY', 'COCINA'] as const) {
     const raw = byClave.get(`impresora_${destino.toLowerCase()}`);
     if (!raw) continue;
     try {

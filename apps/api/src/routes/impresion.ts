@@ -165,12 +165,12 @@ export default async function impresionRoutes(fastify: FastifyInstance) {
       preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
       schema: {
         body: z.object({
-          destino: z.enum(['KITCHEN', 'COUNTER', 'DELIVERY']),
+          destino: z.enum(['MOSTRADOR', 'DELIVERY', 'COCINA']),
         }),
       },
     },
     async (req, reply) => {
-      const body = req.body as { destino: 'KITCHEN' | 'COUNTER' | 'DELIVERY' };
+      const body = req.body as { destino: 'MOSTRADOR' | 'DELIVERY' | 'COCINA' };
       const trabajo = await encolarTrabajoTest(body.destino);
       await recordAudit({
         tabla: 'trabajos_impresion',
@@ -227,15 +227,7 @@ export default async function impresionRoutes(fastify: FastifyInstance) {
       preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
       schema: {
         body: z.object({
-          KITCHEN: z
-            .object({
-              host: z.string().min(1).max(80),
-              port: z.coerce.number().int().min(1).max(65535).default(9100),
-              width: z.coerce.number().int().min(20).max(80).default(42),
-              activa: z.boolean().default(true),
-            })
-            .optional(),
-          COUNTER: z
+          MOSTRADOR: z
             .object({
               host: z.string().min(1).max(80),
               port: z.coerce.number().int().min(1).max(65535).default(9100),
@@ -251,6 +243,14 @@ export default async function impresionRoutes(fastify: FastifyInstance) {
               activa: z.boolean().default(true),
             })
             .optional(),
+          COCINA: z
+            .object({
+              host: z.string().min(1).max(80),
+              port: z.coerce.number().int().min(1).max(65535).default(9100),
+              width: z.coerce.number().int().min(20).max(80).default(42),
+              activa: z.boolean().default(true),
+            })
+            .optional(),
         }),
       },
     },
@@ -259,7 +259,7 @@ export default async function impresionRoutes(fastify: FastifyInstance) {
       // Persistimos cada destino como su propio item de configuración_sistema
       // bajo la categoría 'impresoras' para que sea fácil leer/editar.
       const updates: Array<{ destino: string; config: unknown }> = [];
-      for (const destino of ['KITCHEN', 'COUNTER', 'DELIVERY'] as const) {
+      for (const destino of ['MOSTRADOR', 'DELIVERY', 'COCINA'] as const) {
         if (body[destino]) {
           await prisma.configuracionSistema.upsert({
             where: { clave: `impresora_${destino.toLowerCase()}` },

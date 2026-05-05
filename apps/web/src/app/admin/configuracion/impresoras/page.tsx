@@ -5,7 +5,7 @@ import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/cn';
 
-type Destino = 'KITCHEN' | 'COUNTER' | 'DELIVERY';
+type Destino = 'MOSTRADOR' | 'DELIVERY' | 'COCINA';
 
 interface ConfigImpresora {
   host: string;
@@ -31,21 +31,24 @@ interface JobsListado {
   counts: Record<string, number>;
 }
 
-const DESTINOS_INFO: Record<Destino, { titulo: string; descripcion: string; icon: string }> = {
-  KITCHEN: {
-    titulo: 'Cocina',
-    descripcion: 'Comanda térmica con items para que la cocinera prepare. Incluye datos de delivery.',
-    icon: '🍝',
-  },
-  COUNTER: {
-    titulo: 'Mostrador',
-    descripcion: 'Ticket no fiscal para el cliente. Sale al cobrar la venta.',
+const DESTINOS_INFO: Record<Destino, { titulo: string; descripcion: string; icon: string; numero: number }> = {
+  MOSTRADOR: {
+    numero: 1,
+    titulo: 'Comandera 1 · Mostrador',
+    descripcion: 'Recibe TODOS los pedidos cobrados en mostrador (frescos y calientes).',
     icon: '🏪',
   },
   DELIVERY: {
-    titulo: 'Delivery',
-    descripcion: 'Ticket separado para el motoquero (opcional). Si no se activa, todo va por Cocina.',
+    numero: 2,
+    titulo: 'Comandera 2 · Delivery',
+    descripcion: 'Recibe los pedidos de delivery propio (Teléfono, WhatsApp).',
     icon: '🛵',
+  },
+  COCINA: {
+    numero: 3,
+    titulo: 'Comandera 3 · Cocina',
+    descripcion: 'Recibe pedidos con items que requieren cocción + TODOS los de apps (RAPPI, Pedidos YA, MELI, DELIVERATE).',
+    icon: '🍝',
   },
 };
 
@@ -129,7 +132,7 @@ export default function ImpresorasConfigPage() {
   }
 
   const dirty =
-    config && edit && (['KITCHEN', 'COUNTER', 'DELIVERY'] as Destino[]).some(
+    config && edit && (['MOSTRADOR', 'DELIVERY', 'COCINA'] as Destino[]).some(
       (d) => JSON.stringify(config[d]) !== JSON.stringify(edit[d]),
     );
 
@@ -142,11 +145,40 @@ export default function ImpresorasConfigPage() {
       <header>
         <h2 className="font-display text-md text-ink-900">Impresoras térmicas</h2>
         <p className="text-sm text-ink-500">
-          Configurá las impresoras del local (cocina, mostrador, delivery). Cada una se conecta
-          por red Ethernet (TCP). Si todavía no las tenés instaladas, dejá los valores default
-          y configurá cuando estén físicamente conectadas.
+          Configurá las 3 comanderas del local. Cada una se conecta por red Ethernet (TCP).
         </p>
       </header>
+
+      <details className="card p-4 bg-cream-50 border border-cream-300 cursor-pointer">
+        <summary className="font-medium text-sm text-ink-900">
+          📋 ¿Qué pedido va a qué comandera?
+        </summary>
+        <div className="mt-3 text-xs text-ink-700 space-y-1.5">
+          <p>El sistema enruta cada venta automáticamente a una o más comanderas:</p>
+          <ul className="ml-4 space-y-1 list-none">
+            <li>
+              <strong>Pedido Mostrador (sin cocina):</strong> sólo Comandera 1 (Mostrador)
+            </li>
+            <li>
+              <strong>Pedido Mostrador (con cocina):</strong> Comandera 1 + Comandera 3
+            </li>
+            <li>
+              <strong>Delivery propio (Teléfono/WhatsApp), sin cocina:</strong> sólo Comandera 2
+            </li>
+            <li>
+              <strong>Delivery propio (Teléfono/WhatsApp), con cocina:</strong> Comandera 2 + Comandera 3
+            </li>
+            <li>
+              <strong>Apps (RAPPI / Pedidos YA / MELI / DELIVERATE):</strong> sólo Comandera 3
+            </li>
+          </ul>
+          <p className="text-2xs text-ink-500 italic mt-2">
+            "Con cocina" = la venta tiene al menos un producto cuya subcategoría tiene marcado
+            "Cocina interviene" (ej. Porciones calientes). Para configurar qué subcategorías
+            requieren cocina, usá Admin → Catálogo → Productos → Nueva subcategoría.
+          </p>
+        </div>
+      </details>
 
       {error && (
         <div className="bg-pomodoro-100 text-pomodoro-600 px-3 py-2 rounded text-sm">
@@ -159,7 +191,7 @@ export default function ImpresorasConfigPage() {
 
       {/* Cards de cada destino */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {(['KITCHEN', 'COUNTER', 'DELIVERY'] as Destino[]).map((d) => {
+        {(['MOSTRADOR', 'DELIVERY', 'COCINA'] as Destino[]).map((d) => {
           const meta = DESTINOS_INFO[d];
           const cfg = edit[d];
           return (

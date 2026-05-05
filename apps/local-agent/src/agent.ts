@@ -83,7 +83,7 @@ async function fetchConfig(): Promise<void> {
     if (!res.ok) return;
     const cfg = (await res.json()) as Record<DestinoImpresora, Omit<PrinterConfig, 'destino'>>;
     const wrapped: Partial<Record<DestinoImpresora, PrinterConfig>> = {};
-    for (const k of ['KITCHEN', 'COUNTER', 'DELIVERY'] as const) {
+    for (const k of ['MOSTRADOR', 'DELIVERY', 'COCINA'] as const) {
       if (cfg[k]) wrapped[k] = { destino: k, ...cfg[k] };
     }
     setPrinterConfig(wrapped);
@@ -131,11 +131,14 @@ async function procesar(t: TrabajoImpresion): Promise<void> {
       case 'COMANDA_COCINA':
       case 'COMANDA_REIMPRESION':
       case 'COMANDA_CANCELADA':
-        await imprimirComanda({
-          ...(t.payload as unknown as Parameters<typeof imprimirComanda>[0]),
-          esCancelada: t.tipo === 'COMANDA_CANCELADA',
-          esReimpresion: t.tipo === 'COMANDA_REIMPRESION',
-        });
+        await imprimirComanda(
+          {
+            ...(t.payload as unknown as Parameters<typeof imprimirComanda>[0]),
+            esCancelada: t.tipo === 'COMANDA_CANCELADA',
+            esReimpresion: t.tipo === 'COMANDA_REIMPRESION',
+          },
+          t.destino,
+        );
         break;
       case 'TICKET_CLIENTE':
       case 'TICKET_REIMPRESION':
