@@ -1436,22 +1436,33 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         }
       }
 
-      // Cargar ventas (con pagos para calcular agregados por método)
+      // Cargar TODAS las ventas del período para que las agregaciones (KPIs,
+      // cierre de cajas) sean exactas. El `take: 500` previo truncaba
+      // silenciosamente días con > 500 ventas (a 2.500 ventas/día se podía
+      // perder hasta el 80% de la data sin warning).
+      //
+      // Para limitar memoria, sólo traemos las columnas que usamos para
+      // agregar — NO cargamos items, cliente, etc. (eso queda para el listado
+      // de abajo, que sí está paginado a 200).
       const ventas = await prisma.venta.findMany({
         where: {
           estado: EstadoVenta.FINALIZADA,
           fechaFinalizacion: { gte: desde, lte: hasta },
           ...(q.canal && { canal: q.canal as never }),
         },
-        include: {
-          sesionCaja: { select: { fecha: true, turno: true } },
+        select: {
+          id: true,
+          canal: true,
+          modalidad: true,
+          total: true,
+          descuentoTotal: true,
+          fechaFinalizacion: true,
           pagos: {
             where: { estado: 'CONFIRMADO' },
-            select: { metodo: true, monto: true, cuenta: { select: { nombre: true } } },
+            select: { metodo: true, monto: true },
           },
         },
         orderBy: { fechaFinalizacion: 'desc' },
-        take: 500,
       });
 
       // Anuladas (para el contador del mismo período)
@@ -1748,17 +1759,47 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           .sort((a, b) => Number(b.monto) - Number(a.monto)),
         porHora,
         porDia,
-        ventas: ventasFiltradas.slice(0, 200).map((v) => ({
-          id: v.id,
-          numero: v.numero,
-          numeroOrdenTurno: v.numeroOrdenTurno,
-          canal: v.canal,
-          modalidad: v.modalidad,
-          fecha: v.fechaFinalizacion,
-          total: v.total.toString(),
-          descuento: v.descuentoTotal.toString(),
-          metodos: v.pagos.map((p) => p.metodo),
-        })),
+        ventas: await (async () => {
+          // Listado paginado a 200 con campos extras (numero, numeroOrden) que
+          // NO se piden en la query agregada para no cargar todo a memoria.
+          const ventasListado = await prisma.venta.findMany({
+            where: {
+              estado: EstadoVenta.FINALIZADA,
+              fechaFinalizacion: { gte: desde, lte: hasta },
+              ...(q.canal && { canal: q.canal as never }),
+              ...(q.metodo && {
+                pagos: { some: { metodo: q.metodo as never, estado: 'CONFIRMADO' } },
+              }),
+            },
+            select: {
+              id: true,
+              numero: true,
+              numeroOrdenTurno: true,
+              canal: true,
+              modalidad: true,
+              fechaFinalizacion: true,
+              total: true,
+              descuentoTotal: true,
+              pagos: {
+                where: { estado: 'CONFIRMADO' },
+                select: { metodo: true },
+              },
+            },
+            orderBy: { fechaFinalizacion: 'desc' },
+            take: 200,
+          });
+          return ventasListado.map((v) => ({
+            id: v.id,
+            numero: v.numero,
+            numeroOrdenTurno: v.numeroOrdenTurno,
+            canal: v.canal,
+            modalidad: v.modalidad,
+            fecha: v.fechaFinalizacion,
+            total: v.total.toString(),
+            descuento: v.descuentoTotal.toString(),
+            metodos: v.pagos.map((p) => p.metodo),
+          }));
+        })(),
       };
     },
   );

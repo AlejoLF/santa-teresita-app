@@ -711,6 +711,9 @@ model Movimiento {
   @@index([categoriaId, estado])
   @@index([entidadId, estado])
   @@index([sesionCajaId])
+  // FKs muy consultados en cashflow / reconciliación de cuentas
+  @@index([cuentaOrigenId])
+  @@index([cuentaDestinoId])
   @@map("movimientos")
 }
 
@@ -755,6 +758,8 @@ model Pago {
   @@index([ventaId])
   @@index([movimientoId])
   @@index([fecha])
+  // Reconciliación por cuenta (extracto bancario, saldos)
+  @@index([cuentaId])
   @@map("pagos")
 }
 
@@ -874,6 +879,8 @@ model Venta {
   @@index([sesionCajaId, estado])
   @@index([canal, fechaApertura])
   @@index([clienteId])
+  // Cierre de día / KPIs filtran por estado=FINALIZADA + rango de fechaFinalizacion
+  @@index([estado, fechaFinalizacion])
   @@map("ventas")
 }
 
