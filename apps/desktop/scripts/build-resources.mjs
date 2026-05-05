@@ -245,12 +245,55 @@ function copyExcels() {
   }
 }
 
+function buildAgent() {
+  step('Compilando local-agent → resources/agent/agent.mjs (esbuild ESM)');
+  const agentSrc = path.join(REPO_ROOT, 'apps', 'local-agent', 'src', 'agent.ts');
+  const agentDir = path.join(RESOURCES, 'agent');
+  fs.mkdirSync(agentDir, { recursive: true });
+  const esbuildBin = path.join(
+    DESKTOP_DIR,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild',
+  );
+
+  // node-thermal-printer tiene deps nativas/dinámicas — lo dejamos external
+  // y lo traemos por npm install. dotenv y pino también van como dependencias
+  // resolvibles, no bundleados.
+  const externals = ['node-thermal-printer', 'pino', 'pino-pretty', 'dotenv'];
+  const externalArgs = externals.map((e) => `--external:${e}`).join(' ');
+
+  run(
+    `"${esbuildBin}" "${agentSrc}" --bundle --platform=node --target=node20 --format=esm --outfile="${path.join(agentDir, 'agent.mjs')}" --banner:js="import { createRequire } from 'module'; const require = createRequire(import.meta.url);" ${externalArgs}`,
+    REPO_ROOT,
+  );
+
+  step('Instalando deps del agent en resources/agent/');
+  const agentPkg = JSON.parse(
+    fs.readFileSync(path.join(REPO_ROOT, 'apps', 'local-agent', 'package.json'), 'utf8'),
+  );
+  const pkgPlano = {
+    name: 'sta-agent-runtime',
+    version: '0.1.0',
+    private: true,
+    dependencies: {
+      'node-thermal-printer':
+        agentPkg.dependencies?.['node-thermal-printer'] ?? '^4.4.4',
+      pino: agentPkg.dependencies?.['pino'] ?? '^9.5.0',
+      dotenv: agentPkg.dependencies?.['dotenv'] ?? '^16.4.7',
+    },
+  };
+  fs.writeFileSync(path.join(agentDir, 'package.json'), JSON.stringify(pkgPlano, null, 2));
+  run('npm install --omit=dev --no-package-lock --no-fund --no-audit', agentDir);
+}
+
 async function main() {
   reset();
   generateSchemaSql();
   buildApi();
   buildSeed();
   buildWeb();
+  buildAgent();
   copyExcels();
   step('✓ Resources listas en ' + RESOURCES);
 }

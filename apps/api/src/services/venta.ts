@@ -11,6 +11,7 @@ import type { ItemNuevo, VentaNueva } from '@sta/shared';
 import { subtotalItem } from '@sta/shared';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
 import { recordAudit } from './audit.js';
+import { encolarComandaCocina } from './impresion.js';
 
 /**
  * Crea una venta en estado PROCESADA, con items snapshot del precio.
@@ -155,6 +156,11 @@ export async function crearVenta(args: {
       tx,
     });
 
+    // Encolar comanda de cocina (incluye datos de delivery cuando aplica).
+    // El agent local-printer la imprime al primer poll. Si la venta no tiene
+    // items con cocinaInterviene=true, encolarComandaCocina hace early return.
+    await encolarComandaCocina(venta.id, tx);
+
     return venta;
   });
 }
@@ -270,14 +276,30 @@ export async function agregarItemsAVenta(args: {
   const subtotalNuevo = Number(venta.subtotal) + subtotalAdicional;
   const totalNuevo = subtotalNuevo - Number(venta.descuentoTotal) + Number(venta.recargoCanal);
 
-  return prisma.venta.update({
-    where: { id: ventaId },
-    data: {
-      subtotal: subtotalNuevo.toFixed(2),
-      total: totalNuevo.toFixed(2),
-      tieneCocina: tieneCocinaNuevo,
-      items: { create: itemsToCreate },
-    },
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.venta.update({
+      where: { id: ventaId },
+      data: {
+        subtotal: subtotalNuevo.toFixed(2),
+        total: totalNuevo.toFixed(2),
+        tieneCocina: tieneCocinaNuevo,
+        items: { create: itemsToCreate },
+      },
+    });
+
+    // Si los items recién agregados pasan por cocina, re-encolar comanda
+    // actualizada. La cocinera ve la orden con todos los items (los que ya
+    // tenía + los nuevos). Si ya empezó a cocinar la versión anterior,
+    // descarta la comanda vieja y usa la nueva.
+    const algunoCocina = items.some((i) => {
+      const p = productoMap.get(i.productoId);
+      return p?.tipoProducto.cocinaInterviene;
+    });
+    if (algunoCocina) {
+      await encolarComandaCocina(ventaId, tx);
+    }
+
+    return updated;
   });
 }
 
