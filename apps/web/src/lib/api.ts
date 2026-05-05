@@ -9,10 +9,21 @@
  * (ruta server-side de Next). Es la única "ventana" abierta al mundo.
  */
 
-import { handleMock, buildCierrePayloadFromDemo } from './demo/mocks';
+// El módulo demo SOLO se carga cuando NEXT_PUBLIC_DEMO_MODE='true'.
+// Se importa dinámicamente más abajo para que en producción el bundle
+// no incluya las ~500 líneas de mocks/datos ficticios.
 
 const BASE_URL = '/api/v1';
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
+let demoModulePromise:
+  | Promise<typeof import('./demo/mocks')>
+  | null = null;
+
+function getDemoModule() {
+  if (!demoModulePromise) demoModulePromise = import('./demo/mocks');
+  return demoModulePromise;
+}
 
 class ApiError extends Error {
   constructor(
@@ -28,6 +39,7 @@ type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
   if (DEMO_MODE) {
+    const { handleMock, buildCierrePayloadFromDemo } = await getDemoModule();
     // Caso especial: cerrar caja → además del mock, dispara email real
     if (path === '/admin/caja/sesion-actual/cerrar' && method === 'POST') {
       const b = (body ?? {}) as { existenciaFinal?: string; observaciones?: string };

@@ -8,12 +8,14 @@ const nextConfig = {
   experimental: {
     typedRoutes: false,
   },
-  // En modo demo no hay backend; saltamos lint/typecheck que cierra el build por
-  // strict-TS pre-existente. Para producción se espera que el dev los arregle.
+  // TS errors ya resueltos en Sprint 3 (S3.6). Si vuelven a aparecer, el build
+  // falla — eso es lo que queremos para detectarlos antes de empacar.
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   eslint: {
+    // ESLint sigue ignorado en build porque no hemos configurado reglas custom
+    // todavía. Cuando se agregue (Sprint 4 con e2e), revertir a false.
     ignoreDuringBuilds: true,
   },
   // El package @sta/shared usa imports ESM con extensión .js que apuntan a .ts (NodeNext-style).

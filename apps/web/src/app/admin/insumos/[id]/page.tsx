@@ -872,7 +872,7 @@ function FormNuevaFactura({
               Cancelar
             </Button>
             <Button
-              onClick={submit}
+              onClick={() => void submit()}
               disabled={guardando || (pagarAhora && diferenciaPago < -0.01)}
             >
               {guardando

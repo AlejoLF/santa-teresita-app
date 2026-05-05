@@ -188,8 +188,13 @@ export default async function catalogoRoutes(fastify: FastifyInstance) {
           include: { grupo: { include: { aplicables: { include: { tipoProducto: true, producto: true } } } } },
         });
         if (sabor) {
-          // Resolvemos el producto a partir del aplicable
-          let producto = null as Awaited<ReturnType<typeof prisma.producto.findFirst>> | null;
+          // Resolvemos el producto a partir del aplicable. Tipamos como el shape
+          // que devuelve findFirst CON el productoInclude (no el base) para que
+          // `.modificadores` y `.tipoProducto` estén tipadas.
+          type ProductoConInclude = NonNullable<
+            Awaited<ReturnType<typeof prisma.producto.findFirst<{ include: typeof productoInclude }>>>
+          >;
+          let producto: ProductoConInclude | null = null;
           for (const a of sabor.grupo.aplicables) {
             if (a.producto) {
               producto = await prisma.producto.findUnique({

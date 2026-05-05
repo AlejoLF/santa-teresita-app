@@ -383,7 +383,7 @@ function ModalCerrarSesion({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={guardando}>
+          <Button onClick={() => void submit()} disabled={guardando}>
             {guardando ? 'Cerrando...' : 'Cerrar sesión'}
           </Button>
         </footer>

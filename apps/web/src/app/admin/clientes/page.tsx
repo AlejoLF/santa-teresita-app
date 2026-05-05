@@ -411,7 +411,7 @@ function FormNuevoCliente({
           <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={creando}>
+          <Button onClick={() => void submit()} disabled={creando}>
             {creando ? 'Creando...' : 'Crear y ver detalle'}
           </Button>
         </footer>
