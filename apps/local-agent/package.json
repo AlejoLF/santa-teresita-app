@@ -1,0 +1,25 @@
+{
+  "name": "@sta/local-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/agent.js",
+  "scripts": {
+    "dev": "tsx watch src/agent.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/agent.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sta/shared": "workspace:*",
+    "dotenv": "^16.4.7",
+    "node-thermal-printer": "^4.4.5",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

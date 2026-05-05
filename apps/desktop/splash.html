@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="es-AR">
+  <head>
+    <meta charset="utf-8" />
+    <title>Santa Teresita</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        background: #FAF8F3;
+        color: #16181A;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 32px;
+        gap: 18px;
+      }
+      .logo { font-size: 56px; line-height: 1; }
+      h1 {
+        font-family: Georgia, serif;
+        font-size: 24px;
+        letter-spacing: 0.5px;
+        color: #1a3a1a;
+      }
+      .sub { color: #7a7367; font-size: 13px; font-style: italic; margin-top: -10px; }
+      .status {
+        margin-top: 14px;
+        font-size: 13px;
+        color: #3d3a35;
+      }
+      .spinner {
+        width: 22px;
+        height: 22px;
+        border: 2px solid #DDD7CB;
+        border-top-color: #1a3a1a;
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+        margin-top: 10px;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <div class="logo">🍝</div>
+    <h1>SANTA TERESITA</h1>
+    <div class="sub">pastas &amp; co</div>
+    <div class="spinner"></div>
+    <div id="status" class="status">Iniciando...</div>
+  </body>
+</html>

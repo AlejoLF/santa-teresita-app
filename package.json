@@ -1,0 +1,35 @@
+{
+  "name": "santa-teresita-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sistema de gestión integral para Santa Teresita Pastas (La Plata, AR)",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --filter @sta/api --filter @sta/web --parallel dev",
+    "dev:all": "pnpm -r --parallel dev",
+    "dev:api": "pnpm --filter @sta/api dev",
+    "dev:web": "pnpm --filter @sta/web dev",
+    "dev:agent": "pnpm --filter @sta/local-agent dev",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "db:generate": "pnpm --filter @sta/db generate",
+    "db:migrate": "pnpm --filter @sta/db migrate",
+    "db:reset": "pnpm --filter @sta/db reset",
+    "db:seed": "pnpm --filter @sta/db seed",
+    "db:studio": "pnpm --filter @sta/db studio",
+    "docker:up": "docker compose -f infra/docker/docker-compose.dev.yml up -d",
+    "docker:down": "docker compose -f infra/docker/docker-compose.dev.yml down",
+    "docker:logs": "docker compose -f infra/docker/docker-compose.dev.yml logs -f"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3"
+  }
+}

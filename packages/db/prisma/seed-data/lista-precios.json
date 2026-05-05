@@ -1,0 +1,1542 @@
+{
+  "categorias": [
+    {
+      "nombre": "Pastas frescas",
+      "orden": 1,
+      "icono": "🍝"
+    },
+    {
+      "nombre": "Pizzas",
+      "orden": 2,
+      "icono": "🍕"
+    },
+    {
+      "nombre": "Tartas",
+      "orden": 3,
+      "icono": "🥧"
+    },
+    {
+      "nombre": "Salsas",
+      "orden": 4,
+      "icono": "🥫"
+    },
+    {
+      "nombre": "Empanadas",
+      "orden": 5,
+      "icono": "🥟"
+    },
+    {
+      "nombre": "Porciones calientes",
+      "orden": 6,
+      "icono": "🍽️"
+    },
+    {
+      "nombre": "Otros",
+      "orden": 7,
+      "icono": "📦"
+    }
+  ],
+  "tipos_producto": [
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Ravioles",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Otros",
+      "nombre": "Queso",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pizzas",
+      "nombre": "Pizza Grande",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Fideos al huevo",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pizzas",
+      "nombre": "Midi Pizza",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Fideos especiales",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Ñoquis de sémola",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Tortelettis",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Tartas",
+      "nombre": "Tarta grande",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Sorrentinos",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Tartas",
+      "nombre": "Tarta chica",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Sorrentinos de Salmón",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Raviolones",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Lasagna",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Rondelli",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Canelones",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Salsas",
+      "nombre": "Salsa",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Pasta seca",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pizzas",
+      "nombre": "Prepizza",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Pastas frescas",
+      "nombre": "Crepes",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Otros",
+      "nombre": "Panqueques",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Empanadas",
+      "nombre": "Tapas de empanada",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Otros",
+      "nombre": "Tapas pascualina",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Otros",
+      "nombre": "Tapa lasagna",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Empanadas",
+      "nombre": "Empanadas",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Otros",
+      "nombre": "Postres",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Otros",
+      "nombre": "Picada",
+      "cocina_interviene": false,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Ravioles porción simple",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Fideos porción simple",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Pasta seca porción simple",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Tortelettis porción simple",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Sorrentinos porción simple",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Raviolones remolacha porción",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Lasagna porción simple",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Rondelli porción simple",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Canelones porción simple",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Ñoquis porción simple",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Crepes porción simple",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Sorrentinos negros porción",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Ravioles porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Fideos porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Foratti porción",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Tortelettis porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Sorrentinos porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Lasagna porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Rondelli porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Canelones porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Ñoquis porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Crepes porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    }
+  ],
+  "productos": [
+    {
+      "codigo": "0001",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Ravioles",
+      "nombre": "Ravioles",
+      "forma_venta": "PLANCHA",
+      "unidad_precio": "POR_PLANCHA",
+      "precio_base": "7650.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "RAV VERDURA",
+        "POLLO, CARNE",
+        "RICOTA",
+        "RIC JAMON"
+      ]
+    },
+    {
+      "codigo": "4000",
+      "tipo_categoria": "Otros",
+      "tipo_nombre": "Queso",
+      "nombre": "Queso",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "4200.00",
+      "cantidad_default": null,
+      "raw_excel_keys": [
+        "QUESO"
+      ]
+    },
+    {
+      "codigo": "1000",
+      "tipo_categoria": "Pizzas",
+      "tipo_nombre": "Pizza Grande",
+      "nombre": "Pizza Grande",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "11700.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "PIZA ESPECIAL",
+        "PIZA MUZA",
+        "PIZA GOURMET"
+      ]
+    },
+    {
+      "codigo": "0002",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Fideos al huevo",
+      "nombre": "Fideos al huevo",
+      "forma_venta": "GRAMO",
+      "unidad_precio": "POR_KILO",
+      "precio_base": "13000.00",
+      "cantidad_default": 200,
+      "raw_excel_keys": [
+        "FID HUEVO"
+      ]
+    },
+    {
+      "codigo": "1001",
+      "tipo_categoria": "Pizzas",
+      "tipo_nombre": "Midi Pizza",
+      "nombre": "Midi Pizza",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "8100.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "MIDI PIZZA MOZZARELLA",
+        "MIDI PIZZA ESPECIAL",
+        "MIDI PIZZA GOURMET"
+      ]
+    },
+    {
+      "codigo": "0003",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Fideos especiales",
+      "nombre": "Fideos especiales",
+      "forma_venta": "GRAMO",
+      "unidad_precio": "POR_KILO",
+      "precio_base": "13700.00",
+      "cantidad_default": 200,
+      "raw_excel_keys": [
+        "FID ESPEC"
+      ]
+    },
+    {
+      "codigo": "0004",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Ñoquis de sémola",
+      "nombre": "Ñoquis de sémola",
+      "forma_venta": "GRAMO",
+      "unidad_precio": "POR_KILO",
+      "precio_base": "13900.00",
+      "cantidad_default": 300,
+      "raw_excel_keys": [
+        "ÑOQUIS"
+      ]
+    },
+    {
+      "codigo": "0005",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Tortelettis",
+      "nombre": "Tortelettis",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_KILO",
+      "precio_base": "14200.00",
+      "cantidad_default": 300,
+      "raw_excel_keys": [
+        "TORTELETTIS"
+      ]
+    },
+    {
+      "codigo": "1500",
+      "tipo_categoria": "Tartas",
+      "tipo_nombre": "Tarta grande",
+      "nombre": "Tarta grande",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "13300.00",
+      "cantidad_default": null,
+      "raw_excel_keys": [
+        "TARTA DE VERDURA GRANDE",
+        "TARTA TRICOLOR GRANDE",
+        "TARTA DE PUERRO GRANDE",
+        "TARTA  DE J&Q GRANDE"
+      ]
+    },
+    {
+      "codigo": "0006",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Sorrentinos",
+      "nombre": "Sorrentinos",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_KILO",
+      "precio_base": "23500.00",
+      "cantidad_default": 300,
+      "raw_excel_keys": [
+        "SORRENTINOS"
+      ]
+    },
+    {
+      "codigo": "1501",
+      "tipo_categoria": "Tartas",
+      "tipo_nombre": "Tarta chica",
+      "nombre": "Tarta chica",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "9500.00",
+      "cantidad_default": null,
+      "raw_excel_keys": [
+        "TARTA DE VERDURA CHICA",
+        "TARTA TRICOLOR CHICA",
+        "TARTA DE PUERRO CHICA",
+        "TARTA  DE J&Q CHICA"
+      ]
+    },
+    {
+      "codigo": "0007",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Sorrentinos de Salmón",
+      "nombre": "Sorrentinos de Salmón",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_KILO",
+      "precio_base": "45000.00",
+      "cantidad_default": 300,
+      "raw_excel_keys": [
+        "SORRENTINOS DE SALMON"
+      ]
+    },
+    {
+      "codigo": "0008",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Raviolones",
+      "nombre": "Raviolones",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_KILO",
+      "precio_base": "23500.00",
+      "cantidad_default": 300,
+      "raw_excel_keys": [
+        "RAVIOLONES REMOLACHA"
+      ]
+    },
+    {
+      "codigo": "0009",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Lasagna",
+      "nombre": "Lasagna",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_KILO",
+      "precio_base": "23500.00",
+      "cantidad_default": 1000,
+      "raw_excel_keys": [
+        "LASAGNA"
+      ]
+    },
+    {
+      "codigo": "0010",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Rondelli",
+      "nombre": "Rondelli",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_KILO",
+      "precio_base": "23500.00",
+      "cantidad_default": 1000,
+      "raw_excel_keys": [
+        "RONDELLI"
+      ]
+    },
+    {
+      "codigo": "0011",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Canelones",
+      "nombre": "Canelones",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "3800.00",
+      "cantidad_default": 4,
+      "raw_excel_keys": [
+        "CAN, VERDURA",
+        "CAN, JAM Y QU",
+        "CARNE Y VERDU"
+      ]
+    },
+    {
+      "codigo": "2000",
+      "tipo_categoria": "Salsas",
+      "tipo_nombre": "Salsa",
+      "nombre": "Salsa",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "6000.00",
+      "cantidad_default": null,
+      "raw_excel_keys": [
+        "SS FILETTO",
+        "SS  BOLOG",
+        "SS RQUE Y 4 Q",
+        "SS PPE",
+        "SS CREMA DE HONGOS",
+        "SS VERDEO",
+        "SS PESTO",
+        "SS BCA"
+      ]
+    },
+    {
+      "codigo": "0012",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Pasta seca",
+      "nombre": "Pasta seca",
+      "forma_venta": "GRAMO",
+      "unidad_precio": "POR_KILO",
+      "precio_base": "14400.00",
+      "cantidad_default": 500,
+      "raw_excel_keys": [
+        "FORATTI/FUCCILE/MOSTACHOLES"
+      ]
+    },
+    {
+      "codigo": "1002",
+      "tipo_categoria": "Pizzas",
+      "tipo_nombre": "Prepizza",
+      "nombre": "Prepizza",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "4600.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "PREPIZA"
+      ]
+    },
+    {
+      "codigo": "0013",
+      "tipo_categoria": "Pastas frescas",
+      "tipo_nombre": "Crepes",
+      "nombre": "Crepes",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "3900.00",
+      "cantidad_default": 4,
+      "raw_excel_keys": [
+        "CREPES VYP",
+        "CREPES PUERRO"
+      ]
+    },
+    {
+      "codigo": "4001",
+      "tipo_categoria": "Otros",
+      "tipo_nombre": "Panqueques",
+      "nombre": "Panqueques",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "4950.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "PANQUEQUES"
+      ]
+    },
+    {
+      "codigo": "2500",
+      "tipo_categoria": "Empanadas",
+      "tipo_nombre": "Tapas de empanada",
+      "nombre": "Tapas de empanada",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "3900.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "TAP,EMPANADA"
+      ]
+    },
+    {
+      "codigo": "4002",
+      "tipo_categoria": "Otros",
+      "tipo_nombre": "Tapas pascualina",
+      "nombre": "Tapas pascualina",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "3900.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "PASCUALINA"
+      ]
+    },
+    {
+      "codigo": "4003",
+      "tipo_categoria": "Otros",
+      "tipo_nombre": "Tapa lasagna",
+      "nombre": "Tapa lasagna",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_KILO",
+      "precio_base": "14600.00",
+      "cantidad_default": 500,
+      "raw_excel_keys": [
+        "TAPA LASAGNA"
+      ]
+    },
+    {
+      "codigo": "2501",
+      "tipo_categoria": "Empanadas",
+      "tipo_nombre": "Empanadas",
+      "nombre": "Empanadas",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "2700.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "EMPANADAS"
+      ]
+    },
+    {
+      "codigo": "4004",
+      "tipo_categoria": "Otros",
+      "tipo_nombre": "Postres",
+      "nombre": "Postres",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "7400.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "POSTRES"
+      ]
+    },
+    {
+      "codigo": "4005",
+      "tipo_categoria": "Otros",
+      "tipo_nombre": "Picada",
+      "nombre": "Picada",
+      "forma_venta": "UNIDAD",
+      "unidad_precio": "POR_UNIDAD",
+      "precio_base": "12400.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "PICADA"
+      ]
+    },
+    {
+      "codigo": "3000",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Ravioles porción simple",
+      "nombre": "Ravioles porción simple",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "13800.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "RAV. SIMPLE"
+      ]
+    },
+    {
+      "codigo": "3001",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Fideos porción simple",
+      "nombre": "Fideos porción simple",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "11700.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "FIDEOS SIMPLE"
+      ]
+    },
+    {
+      "codigo": "3002",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Pasta seca porción simple",
+      "nombre": "Pasta seca porción simple",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "12300.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "FORATTI/FUCCILE/MOSTACHOLES"
+      ]
+    },
+    {
+      "codigo": "3003",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Tortelettis porción simple",
+      "nombre": "Tortelettis porción simple",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "14800.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "TORT. SIMPL"
+      ]
+    },
+    {
+      "codigo": "3004",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Sorrentinos porción simple",
+      "nombre": "Sorrentinos porción simple",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "14800.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "SORR SIMPLE"
+      ]
+    },
+    {
+      "codigo": "3005",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Raviolones remolacha porción",
+      "nombre": "Raviolones remolacha porción",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "14800.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "RAVIOLONES REMOLACHA",
+        "RAVIOLONES REMOLACHA"
+      ]
+    },
+    {
+      "codigo": "3006",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Lasagna porción simple",
+      "nombre": "Lasagna porción simple",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "14800.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "LASAG SIMPLE"
+      ]
+    },
+    {
+      "codigo": "3007",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Rondelli porción simple",
+      "nombre": "Rondelli porción simple",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "14800.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "RONDELLI SIMPLE"
+      ]
+    },
+    {
+      "codigo": "3008",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Canelones porción simple",
+      "nombre": "Canelones porción simple",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "14800.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "CAN. SIMPLE"
+      ]
+    },
+    {
+      "codigo": "3009",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Ñoquis porción simple",
+      "nombre": "Ñoquis porción simple",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "13350.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "ÑOQUIS SIMPLE"
+      ]
+    },
+    {
+      "codigo": "3010",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Crepes porción simple",
+      "nombre": "Crepes porción simple",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "14800.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "CREPES SIMPLE"
+      ]
+    },
+    {
+      "codigo": "3011",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Sorrentinos negros porción",
+      "nombre": "Sorrentinos negros porción",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "17600.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "SORR NEGROS",
+        "SORR NEGROS"
+      ]
+    },
+    {
+      "codigo": "3012",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Ravioles porción especial",
+      "nombre": "Ravioles porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "14900.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "RAV, ESPECIAL"
+      ]
+    },
+    {
+      "codigo": "3013",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Fideos porción especial",
+      "nombre": "Fideos porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "12800.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "FIDEOS ESPECIAL"
+      ]
+    },
+    {
+      "codigo": "3014",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Foratti porción",
+      "nombre": "Foratti porción",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "13400.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "FORATTI"
+      ]
+    },
+    {
+      "codigo": "3015",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Tortelettis porción especial",
+      "nombre": "Tortelettis porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "15900.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "TORTELETIS ESP"
+      ]
+    },
+    {
+      "codigo": "3016",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Sorrentinos porción especial",
+      "nombre": "Sorrentinos porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "15900.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "SORR ESPECIAL"
+      ]
+    },
+    {
+      "codigo": "3017",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Lasagna porción especial",
+      "nombre": "Lasagna porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "15900.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "LASAGNA ESPEC"
+      ]
+    },
+    {
+      "codigo": "3018",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Rondelli porción especial",
+      "nombre": "Rondelli porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "15900.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "RONDELLI ESPEC"
+      ]
+    },
+    {
+      "codigo": "3019",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Canelones porción especial",
+      "nombre": "Canelones porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "15900.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "CANELONES ESP"
+      ]
+    },
+    {
+      "codigo": "3020",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Ñoquis porción especial",
+      "nombre": "Ñoquis porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "14450.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "ÑOQUIS ESPEC"
+      ]
+    },
+    {
+      "codigo": "3021",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Crepes porción especial",
+      "nombre": "Crepes porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "15900.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": [
+        "CREPES ESPEC"
+      ]
+    }
+  ],
+  "modificadores": [
+    {
+      "tipo_producto": "Ravioles",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Verdura",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Pollo y Carne",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Ricota",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Ricota y Jamón",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Verdura y Ricota",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Verdura y Pollo",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Ricota y Jamon",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Pollo",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Verdura y Ricota",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Verdura y Pollo",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Ricota y Jamon",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Pollo",
+          "delta_precio": "0.00"
+        }
+      ],
+      "_origen": "hoja1_precios"
+    },
+    {
+      "tipo_producto": "Fideos al huevo",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Cinta Fina",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Cinta Mediana",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Cinta Ancha",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Spaghetti",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Fuccile",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Foratti",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Mostacholes",
+          "delta_precio": "0.00"
+        }
+      ]
+    },
+    {
+      "tipo_producto": "Fideos al morrón",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Cinta Fina",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Cinta Mediana",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Cinta Ancha",
+          "delta_precio": "0.00"
+        }
+      ]
+    },
+    {
+      "tipo_producto": "Fideos verdes",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Cinta Fina",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Cinta Mediana",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Cinta Ancha",
+          "delta_precio": "0.00"
+        }
+      ]
+    },
+    {
+      "tipo_producto": "Ñoquis de sémola",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Papa",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Ricota",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Espinaca",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Remolacha",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Calabaza",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Morron",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Tricolor",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Mixtos",
+          "delta_precio": "0.00"
+        }
+      ]
+    },
+    {
+      "tipo_producto": "Sorrentinos",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Ricotta, Muzzarella y Jamon",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Calabaza y Muzzarella",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Capresse (Ricota, Muzzarella, Cherry y Albahaca)",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Cipollino (Ricota, Muzzarella, Jamon y Verdeo)",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Verdura, Jamon y Muzzarella",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Roquefort, Muzzarella, Ricota y Nuez",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Muzzarella, Ricota y Nuez",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Ricota, Muzza y Jamon",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Calabaza y Muzza",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Capresse",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Cipollino",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Verdura",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Roquefort",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Ricota y Nuez",
+          "delta_precio": "0.00"
+        }
+      ]
+    },
+    {
+      "tipo_producto": "Raviolones",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Roquefort, Cebolla caramelizada y Nuez",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Roquefort y Nuez",
+          "delta_precio": "0.00"
+        }
+      ]
+    },
+    {
+      "tipo_producto": "Lasagna",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Verdura, Jamon, Muzzarella y Ricota",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Verdura, Jamon, Muzzarella y Ricota",
+          "delta_precio": "0.00"
+        }
+      ]
+    },
+    {
+      "tipo_producto": "Rondelli",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Verdura, Jamon, Muzzarella y Ricota",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Verdura, Jamon, Muzzarella y Ricota",
+          "delta_precio": "0.00"
+        }
+      ]
+    },
+    {
+      "tipo_producto": "Canelones",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Verdura",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Jamón y Queso",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Carne y Verdura",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Jamon y Queso",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Verdura y Carne",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Jamon y Queso",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Verdura y Carne",
+          "delta_precio": "0.00"
+        }
+      ],
+      "_origen": "hoja1_precios"
+    },
+    {
+      "tipo_producto": "Crepes",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Verdura y Pollo",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Puerro, crema, pancetta y Champignon",
+          "delta_precio": "0.00"
+        }
+      ],
+      "_origen": "hoja1_precios"
+    },
+    {
+      "tipo_producto": "Pizza Grande",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Muzzarella",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Especial",
+          "delta_precio": "600.00"
+        },
+        {
+          "nombre": "Gourmet",
+          "delta_precio": "1100.00"
+        },
+        {
+          "nombre": "Napolitana",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Fugazzetta",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Capresse",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Rucula y Panceta",
+          "delta_precio": "0.00"
+        }
+      ],
+      "_origen": "hoja1_precios"
+    },
+    {
+      "tipo_producto": "Midi Pizza",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Muzzarella",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Especial",
+          "delta_precio": "500.00"
+        },
+        {
+          "nombre": "Gourmet",
+          "delta_precio": "1000.00"
+        }
+      ],
+      "_origen": "hoja1_precios"
+    },
+    {
+      "tipo_producto": "Tarta grande",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Verdura",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Tricolor",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Puerro",
+          "delta_precio": "500.00"
+        },
+        {
+          "nombre": "Jamón y Queso",
+          "delta_precio": "500.00"
+        }
+      ],
+      "_origen": "hoja1_precios"
+    },
+    {
+      "tipo_producto": "Tarta chica",
+      "grupo_nombre": "Sabor",
+      "tipo_seleccion": "UNICA",
+      "obligatorio": true,
+      "opciones": [
+        {
+          "nombre": "Verdura",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Tricolor",
+          "delta_precio": "0.00"
+        },
+        {
+          "nombre": "Puerro",
+          "delta_precio": "700.00"
+        },
+        {
+          "nombre": "Jamón y Queso",
+          "delta_precio": "700.00"
+        }
+      ],
+      "_origen": "hoja1_precios"
+    }
+  ],
+  "precios_pedidos_ya": [
+    {
+      "nombre": "PIZA ESPECIAL",
+      "precio_pedidos_ya": "12300.00"
+    },
+    {
+      "nombre": "PIZA MUZA",
+      "precio_pedidos_ya": "11700.00"
+    },
+    {
+      "nombre": "PIZA GOURMET",
+      "precio_pedidos_ya": "12800.00"
+    },
+    {
+      "nombre": "TARTA DE VERDURA GRANDE",
+      "precio_pedidos_ya": "13300.00"
+    },
+    {
+      "nombre": "TARTA TRICOLOR GRANDE",
+      "precio_pedidos_ya": "13300.00"
+    },
+    {
+      "nombre": "TARTA DE PUERRO GRANDE",
+      "precio_pedidos_ya": "13800.00"
+    },
+    {
+      "nombre": "TARTA  DE J&Q GRANDE",
+      "precio_pedidos_ya": "13800.00"
+    },
+    {
+      "nombre": "EMPANADAS",
+      "precio_pedidos_ya": "2700.00"
+    },
+    {
+      "nombre": "PICADA",
+      "precio_pedidos_ya": "24800.00"
+    },
+    {
+      "nombre": "RAV, ESPECIAL",
+      "precio_pedidos_ya": "14900.00"
+    },
+    {
+      "nombre": "FIDEOS ESPECIAL",
+      "precio_pedidos_ya": "12800.00"
+    },
+    {
+      "nombre": "SORR ESPECIAL",
+      "precio_pedidos_ya": "15900.00"
+    },
+    {
+      "nombre": "LASAGNA ESPEC",
+      "precio_pedidos_ya": "15900.00"
+    },
+    {
+      "nombre": "CANELONES ESP",
+      "precio_pedidos_ya": "15900.00"
+    },
+    {
+      "nombre": "ÑOQUIS ESPEC",
+      "precio_pedidos_ya": "14450.00"
+    },
+    {
+      "nombre": "CREPES ESPEC",
+      "precio_pedidos_ya": "15900.00"
+    },
+    {
+      "nombre": "TIRAMISU",
+      "precio_pedidos_ya": "7400.00"
+    },
+    {
+      "nombre": "CHOCOTORTA",
+      "precio_pedidos_ya": "7400.00"
+    },
+    {
+      "nombre": "LEMON PIE",
+      "precio_pedidos_ya": "7400.00"
+    },
+    {
+      "nombre": "BUDIN DE PAN",
+      "precio_pedidos_ya": "7400.00"
+    },
+    {
+      "nombre": "CHEESCAKE",
+      "precio_pedidos_ya": "7400.00"
+    }
+  ],
+  "_meta": {
+    "total_productos": 49,
+    "total_tipos": 49,
+    "total_modificadores": 15,
+    "fuente": "Lista de Precios.xlsx — hoja Hoja 1 (precios 16/04/2026) + RESTO SIMPLE",
+    "version": 2,
+    "deduplicado": true
+  }
+}

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ParametrosGlobales xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Servidor>192.168.1.100</Servidor>
+  <Puerto>12640</Puerto>
+  <BD>InnovoSuite</BD>
+  <SSL>false</SSL>
+  <IDAlmacen>1</IDAlmacen>
+  <Impresora>Lexmark E460</Impresora>
+  <RutaAdjuntos>\\192.168.1.100\InnovoVentas</RutaAdjuntos>
+  <ModoDeVenta>Instantaneas</ModoDeVenta>
+  <ClienteSiempreGenerico>true</ClienteSiempreGenerico>
+  <Tema>Ninguno</Tema>
+  <IndiceWebcam>1</IndiceWebcam>
+  <ModoDeWebcam>1</ModoDeWebcam>
+  <Fiscal>Ninguna</Fiscal>
+  <FiscalCOM>4</FiscalCOM>
+  <RazonSocial>1</RazonSocial>
+  <PuntoDeVenta>3</PuntoDeVenta>
+  <Cuenta>7</Cuenta>
+  <Voz>Ninguna</Voz>
+  <TicketNoFiscalModo>Láser</TicketNoFiscalModo>
+  <MostrarObservacionDeVenta>S</MostrarObservacionDeVenta>
+  <CambiarClienteDeVentaAutomaticoLocal>S</CambiarClienteDeVentaAutomaticoLocal>
+  <CobroSimple>N</CobroSimple>
+  <Balanza>Ninguna</Balanza>
+  <BalanzaTipo>Ninguno</BalanzaTipo>
+</ParametrosGlobales>

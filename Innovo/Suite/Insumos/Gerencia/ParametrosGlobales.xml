@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ParametrosGlobales xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Servidor>192.168.1.100</Servidor>
+  <Puerto>12640</Puerto>
+  <SSL>false</SSL>
+  <BD>InnovoSuite</BD>
+  <Esquema>public</Esquema>
+  <IntegracionAsistencias>false</IntegracionAsistencias>
+</ParametrosGlobales>

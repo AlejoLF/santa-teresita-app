@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ParametrosGlobales xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Servidor>192.168.1.100</Servidor>
+  <Puerto>12640</Puerto>
+  <BD>InnovoSuite</BD>
+  <IntegracionAsistencias>false</IntegracionAsistencias>
+  <BDAsistencias>InnovoAsistencias</BDAsistencias>
+  <Iam>/C3EuXWys3I=</Iam>
+  <Verify>bE+Li0UFdlRnigXx3xCetg==</Verify>
+  <SSL>false</SSL>
+  <IDAlmacen>1</IDAlmacen>
+  <MostrarComboCamaras>false</MostrarComboCamaras>
+  <IndiceWebcam>0</IndiceWebcam>
+  <FaceModoDeWebcam>0</FaceModoDeWebcam>
+  <TiempoDeSleep>70</TiempoDeSleep>
+  <BDHistorial>InnovoSuite</BDHistorial>
+  <BDMensajes>InnovoSuite</BDMensajes>
+  <Tema>Ninguno</Tema>
+</ParametrosGlobales>
