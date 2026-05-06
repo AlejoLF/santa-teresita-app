@@ -96,6 +96,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@embedded-postgres/windows-x64':
+        specifier: ^18.3.0-beta.17
+        version: 18.3.0-beta.17
       electron-updater:
         specifier: ^6.8.3
         version: 6.8.3
@@ -3078,8 +3081,7 @@ snapshots:
   '@embedded-postgres/linux-x64@18.3.0-beta.17':
     optional: true
 
-  '@embedded-postgres/windows-x64@18.3.0-beta.17':
-    optional: true
+  '@embedded-postgres/windows-x64@18.3.0-beta.17': {}
 
   '@emnapi/runtime@1.10.0':
     dependencies:
