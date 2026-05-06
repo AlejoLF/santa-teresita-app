@@ -756,6 +756,8 @@ export default function CargarPedidoPage() {
         ...(esDelivery && cart.clienteTelefono.trim() && { clienteTelefono: cart.clienteTelefono.trim() }),
         ...(esDelivery && cart.direccionEntrega.trim() && { direccionEntrega: cart.direccionEntrega.trim() }),
         ...(esDelivery && cart.indicacionesEntrega.trim() && { indicacionesEntrega: cart.indicacionesEntrega.trim() }),
+        // Nº de orden en la plataforma externa (RAPPI, PYA, MELI, DELIVERATE).
+        ...(cart.idExternoCanal.trim() && { idExternoCanal: cart.idExternoCanal.trim() }),
       });
       cart.vaciar();
       if (modo === 'cobrar') {
@@ -826,19 +828,30 @@ export default function CargarPedidoPage() {
                 cart.setClienteTelefono('');
                 cart.setDireccionEntrega('');
                 cart.setIndicacionesEntrega('');
-              } else if (c === 'TELEFONO' || c === 'WHATSAPP') cart.setModalidad('DELIVERY_PROPIO');
-              else if (c === 'DELIVERATE') cart.setModalidad('DELIVERY_DELIVERATE');
+                cart.setIdExternoCanal('');
+              } else if (c === 'TELEFONO' || c === 'WHATSAPP') {
+                cart.setModalidad('DELIVERY_PROPIO');
+                cart.setIdExternoCanal(''); // delivery propio no tiene id externo
+              } else if (c === 'DELIVERATE') cart.setModalidad('DELIVERY_DELIVERATE');
               else cart.setModalidad('DELIVERY_PLATAFORMA');
             }}
-            className="bg-teresita-900 text-cream-50 px-3 py-1 rounded text-sm"
+            className={cn(
+              'px-3 py-1 rounded text-sm font-medium border-2',
+              cart.canal === 'MOSTRADOR' && 'bg-teresita-900 text-cream-50 border-transparent',
+              (cart.canal === 'TELEFONO' || cart.canal === 'WHATSAPP') && 'bg-saffron-600 text-white border-saffron-700',
+              cart.canal === 'PEDIDOS_YA' && 'bg-pomodoro-600 text-white border-pomodoro-700',
+              cart.canal === 'RAPPI' && 'bg-pomodoro-700 text-white border-pomodoro-700',
+              cart.canal === 'MERCADO_LIBRE' && 'bg-saffron-600 text-white border-saffron-600',
+              cart.canal === 'DELIVERATE' && 'bg-ocean-600 text-white border-ocean-600',
+            )}
           >
-            <option value="MOSTRADOR">Mostrador</option>
-            <option value="TELEFONO">Teléfono</option>
-            <option value="WHATSAPP">WhatsApp</option>
-            <option value="PEDIDOS_YA">Pedidos YA</option>
-            <option value="RAPPI">RAPPI</option>
-            <option value="MERCADO_LIBRE">MELI</option>
-            <option value="DELIVERATE">DELIVERATE</option>
+            <option value="MOSTRADOR">🏪 Mostrador</option>
+            <option value="TELEFONO">📞 Teléfono (delivery)</option>
+            <option value="WHATSAPP">💬 WhatsApp (delivery)</option>
+            <option value="PEDIDOS_YA">🛵 Pedidos YA</option>
+            <option value="RAPPI">🛵 RAPPI</option>
+            <option value="MERCADO_LIBRE">🛵 MELI</option>
+            <option value="DELIVERATE">🛵 DELIVERATE</option>
           </select>
           <Button
             variant="ghost"
@@ -1102,55 +1115,113 @@ export default function CargarPedidoPage() {
               )}
             </div>
 
-            {/* Datos del cliente para delivery — solo cuando modalidad ≠ TAKE_AWAY */}
-            {cart.modalidad !== 'TAKE_AWAY' && (
-              <div className="border-t border-cream-300 px-3 py-2 bg-saffron-100/40 space-y-1.5">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-2xs uppercase tracking-wider text-saffron-600 font-medium">
-                    🛵 Datos del cliente (sale en la comanda)
-                  </span>
-                  <span className="text-2xs text-ink-400">
-                    {cart.modalidad === 'DELIVERY_PROPIO' ? 'Damián / propio' :
-                      cart.modalidad === 'DELIVERY_DELIVERATE' ? 'DELIVERATE' :
-                        'Plataforma'}
-                  </span>
+            {/* Panel contextual según el canal */}
+            {cart.canal !== 'MOSTRADOR' && (() => {
+              const esPlataforma =
+                cart.canal === 'RAPPI' ||
+                cart.canal === 'PEDIDOS_YA' ||
+                cart.canal === 'MERCADO_LIBRE' ||
+                cart.canal === 'DELIVERATE';
+              const listaPrecios =
+                cart.canal === 'RAPPI'
+                  ? 'RAPPI (+30%)'
+                  : cart.canal === 'PEDIDOS_YA'
+                    ? 'Pedidos YA (+20%)'
+                    : cart.canal === 'MERCADO_LIBRE'
+                      ? 'Mercado Libre'
+                      : cart.canal === 'DELIVERATE'
+                        ? 'DELIVERATE'
+                        : 'Local';
+
+              return (
+                <div
+                  className={cn(
+                    'border-t border-cream-300 px-3 py-2 space-y-1.5',
+                    esPlataforma ? 'bg-pomodoro-100/40' : 'bg-saffron-100/40',
+                  )}
+                >
+                  <div className="flex items-baseline justify-between">
+                    <span
+                      className={cn(
+                        'text-2xs uppercase tracking-wider font-medium',
+                        esPlataforma ? 'text-pomodoro-600' : 'text-saffron-600',
+                      )}
+                    >
+                      {esPlataforma
+                        ? `📱 Pedido de ${cart.canal.replace('_', ' ')}`
+                        : '🛵 Datos del cliente (sale en la comanda)'}
+                    </span>
+                    <span className="text-2xs text-ink-500 font-medium">
+                      Lista: {listaPrecios}
+                    </span>
+                  </div>
+
+                  {/* PLATAFORMA: solo Nº de orden + datos opcionales (la plataforma maneja la dirección) */}
+                  {esPlataforma ? (
+                    <>
+                      <input
+                        type="text"
+                        value={cart.idExternoCanal}
+                        onChange={(e) => cart.setIdExternoCanal(e.target.value)}
+                        placeholder={
+                          cart.canal === 'RAPPI'
+                            ? 'Nº de orden RAPPI (ej. RAP-12345)'
+                            : cart.canal === 'PEDIDOS_YA'
+                              ? 'Nº de orden Pedidos YA'
+                              : cart.canal === 'MERCADO_LIBRE'
+                                ? 'Nº de orden MELI'
+                                : 'Nº de orden DELIVERATE'
+                        }
+                        maxLength={120}
+                        className="input text-sm py-1 px-2 w-full font-mono"
+                      />
+                      <p className="text-2xs text-ink-500 italic">
+                        Cargá los items tal como vienen en la app de la plataforma. El
+                        sistema aplica precios de la lista <strong>{listaPrecios}</strong>.
+                      </p>
+                    </>
+                  ) : (
+                    /* DELIVERY PROPIO (TELEFONO / WHATSAPP): nombre + tel + dirección */
+                    <>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <input
+                          type="text"
+                          value={cart.clienteNombre}
+                          onChange={(e) => cart.setClienteNombre(e.target.value)}
+                          placeholder="Nombre"
+                          maxLength={120}
+                          className="input text-sm py-1 px-2"
+                        />
+                        <input
+                          type="tel"
+                          value={cart.clienteTelefono}
+                          onChange={(e) => cart.setClienteTelefono(e.target.value)}
+                          placeholder="Teléfono"
+                          maxLength={40}
+                          className="input text-sm py-1 px-2"
+                        />
+                      </div>
+                      <input
+                        type="text"
+                        value={cart.direccionEntrega}
+                        onChange={(e) => cart.setDireccionEntrega(e.target.value)}
+                        placeholder="Dirección (calle, número, piso/dpto)"
+                        maxLength={300}
+                        className="input text-sm py-1 px-2 w-full"
+                      />
+                      <input
+                        type="text"
+                        value={cart.indicacionesEntrega}
+                        onChange={(e) => cart.setIndicacionesEntrega(e.target.value)}
+                        placeholder="Indicaciones (opcional — entre calles, timbre, color de casa…)"
+                        maxLength={300}
+                        className="input text-2xs py-1 px-2 w-full"
+                      />
+                    </>
+                  )}
                 </div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  <input
-                    type="text"
-                    value={cart.clienteNombre}
-                    onChange={(e) => cart.setClienteNombre(e.target.value)}
-                    placeholder="Nombre"
-                    maxLength={120}
-                    className="input text-sm py-1 px-2"
-                  />
-                  <input
-                    type="tel"
-                    value={cart.clienteTelefono}
-                    onChange={(e) => cart.setClienteTelefono(e.target.value)}
-                    placeholder="Teléfono"
-                    maxLength={40}
-                    className="input text-sm py-1 px-2"
-                  />
-                </div>
-                <input
-                  type="text"
-                  value={cart.direccionEntrega}
-                  onChange={(e) => cart.setDireccionEntrega(e.target.value)}
-                  placeholder="Dirección (calle, número, piso/dpto)"
-                  maxLength={300}
-                  className="input text-sm py-1 px-2 w-full"
-                />
-                <input
-                  type="text"
-                  value={cart.indicacionesEntrega}
-                  onChange={(e) => cart.setIndicacionesEntrega(e.target.value)}
-                  placeholder="Indicaciones (opcional — entre calles, timbre, color de casa…)"
-                  maxLength={300}
-                  className="input text-2xs py-1 px-2 w-full"
-                />
-              </div>
-            )}
+              );
+            })()}
 
             <footer className="border-t border-cream-300 p-4 space-y-2 bg-surface-sunken">
               {ventaAbiertaId && totalPrevioVenta ? (

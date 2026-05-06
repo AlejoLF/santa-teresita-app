@@ -67,6 +67,10 @@ export const VentaNuevaSchema = z.object({
   clienteTelefono: z.string().max(40).optional(),
   direccionEntrega: z.string().max(300).optional(),
   indicacionesEntrega: z.string().max(300).optional(),
+  // ID de la orden externa cuando viene de plataforma (RAPPI, Pedidos YA,
+  // Mercado Libre, DELIVERATE). Se persiste en `Venta.idExternoCanal` para
+  // reconciliar después con la app de la plataforma.
+  idExternoCanal: z.string().max(120).optional(),
 });
 export type VentaNueva = z.infer<typeof VentaNuevaSchema>;
 

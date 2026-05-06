@@ -57,6 +57,11 @@ interface CartState {
   clienteTelefono: string;
   direccionEntrega: string;
   indicacionesEntrega: string;
+  // ID de la orden en la plataforma externa (ej. "RAP-12345", "PYA-9876").
+  // Se persiste en Venta.idExternoCanal para reconciliación con la app de la
+  // plataforma. Solo aplica cuando canal es RAPPI / PEDIDOS_YA / MERCADO_LIBRE
+  // / DELIVERATE.
+  idExternoCanal: string;
   numeroOrden?: number; // del backend
   ventaId?: string; // del backend cuando ya se creó
   borradores: BorradorPedido[];
@@ -70,6 +75,7 @@ interface CartState {
   setClienteTelefono: (s: string) => void;
   setDireccionEntrega: (s: string) => void;
   setIndicacionesEntrega: (s: string) => void;
+  setIdExternoCanal: (s: string) => void;
   setVenta: (id: string, numero: number) => void;
   // Borradores
   guardarComoBorrador: () => string | null;
@@ -111,6 +117,7 @@ export const useCart = create<CartState>()(
       clienteTelefono: '',
       direccionEntrega: '',
       indicacionesEntrega: '',
+      idExternoCanal: '',
       borradores: [],
       agregar: (item) =>
         set((s) => ({
@@ -131,6 +138,7 @@ export const useCart = create<CartState>()(
           clienteTelefono: '',
           direccionEntrega: '',
           indicacionesEntrega: '',
+          idExternoCanal: '',
         }),
       setCanal: (c) => set({ canal: c }),
       setModalidad: (m) => set({ modalidad: m }),
@@ -138,6 +146,7 @@ export const useCart = create<CartState>()(
       setClienteTelefono: (s) => set({ clienteTelefono: s }),
       setDireccionEntrega: (s) => set({ direccionEntrega: s }),
       setIndicacionesEntrega: (s) => set({ indicacionesEntrega: s }),
+      setIdExternoCanal: (s) => set({ idExternoCanal: s }),
       setVenta: (id, numero) => set({ ventaId: id, numeroOrden: numero }),
       // ── Borradores ──────────────────────────────────────────────────
       // Guarda el carrito actual como borrador y vacía el carrito.
