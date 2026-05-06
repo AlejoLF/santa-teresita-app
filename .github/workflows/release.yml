@@ -32,9 +32,10 @@ jobs:
           node-version: '22'
 
       - name: Setup pnpm
+        # No `version:` aquí — el action lo lee automáticamente de
+        # `packageManager` en package.json (pnpm@9.12.0). Si especificáramos
+        # ambos, el action falla con "Multiple versions of pnpm specified".
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile
