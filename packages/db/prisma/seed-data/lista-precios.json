@@ -231,7 +231,7 @@
     },
     {
       "categoria": "Porciones calientes",
-      "nombre": "Raviolones remolacha porción",
+      "nombre": "Raviolones remolacha porción simple",
       "cocina_interviene": true,
       "descripcion": ""
     },
@@ -267,7 +267,7 @@
     },
     {
       "categoria": "Porciones calientes",
-      "nombre": "Sorrentinos negros porción",
+      "nombre": "Sorrentinos negros porción simple",
       "cocina_interviene": true,
       "descripcion": ""
     },
@@ -285,7 +285,7 @@
     },
     {
       "categoria": "Porciones calientes",
-      "nombre": "Foratti porción",
+      "nombre": "Foratti porción simple",
       "cocina_interviene": true,
       "descripcion": ""
     },
@@ -328,6 +328,24 @@
     {
       "categoria": "Porciones calientes",
       "nombre": "Crepes porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Raviolones remolacha porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Sorrentinos negros porción especial",
+      "cocina_interviene": true,
+      "descripcion": ""
+    },
+    {
+      "categoria": "Porciones calientes",
+      "nombre": "Foratti porción especial",
       "cocina_interviene": true,
       "descripcion": ""
     }
@@ -775,8 +793,8 @@
     {
       "codigo": "3005",
       "tipo_categoria": "Porciones calientes",
-      "tipo_nombre": "Raviolones remolacha porción",
-      "nombre": "Raviolones remolacha porción",
+      "tipo_nombre": "Raviolones remolacha porción simple",
+      "nombre": "Raviolones remolacha porción simple",
       "forma_venta": "PORCION",
       "unidad_precio": "POR_PORCION",
       "precio_base": "14800.00",
@@ -854,8 +872,8 @@
     {
       "codigo": "3011",
       "tipo_categoria": "Porciones calientes",
-      "tipo_nombre": "Sorrentinos negros porción",
-      "nombre": "Sorrentinos negros porción",
+      "tipo_nombre": "Sorrentinos negros porción simple",
+      "nombre": "Sorrentinos negros porción simple",
       "forma_venta": "PORCION",
       "unidad_precio": "POR_PORCION",
       "precio_base": "17600.00",
@@ -894,8 +912,8 @@
     {
       "codigo": "3014",
       "tipo_categoria": "Porciones calientes",
-      "tipo_nombre": "Foratti porción",
-      "nombre": "Foratti porción",
+      "tipo_nombre": "Foratti porción simple",
+      "nombre": "Foratti porción simple",
       "forma_venta": "PORCION",
       "unidad_precio": "POR_PORCION",
       "precio_base": "13400.00",
@@ -994,6 +1012,39 @@
       "raw_excel_keys": [
         "CREPES ESPEC"
       ]
+    },
+    {
+      "codigo": "3022",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Raviolones remolacha porción especial",
+      "nombre": "Raviolones remolacha porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "15900.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": []
+    },
+    {
+      "codigo": "3023",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Sorrentinos negros porción especial",
+      "nombre": "Sorrentinos negros porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "18700.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": []
+    },
+    {
+      "codigo": "3024",
+      "tipo_categoria": "Porciones calientes",
+      "tipo_nombre": "Foratti porción especial",
+      "nombre": "Foratti porción especial",
+      "forma_venta": "PORCION",
+      "unidad_precio": "POR_PORCION",
+      "precio_base": "14500.00",
+      "cantidad_default": 1,
+      "raw_excel_keys": []
     }
   ],
   "modificadores": [

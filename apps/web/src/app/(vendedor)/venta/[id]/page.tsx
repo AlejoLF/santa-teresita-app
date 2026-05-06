@@ -183,10 +183,16 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
         return;
       }
       const aplicaDescuento = metodo === 'EFECTIVO' && habilitaDescuentoEfectivo;
-      const monto = aplicaDescuento ? conDescuentoSimple.total : venta!.total;
+      // SIEMPRE formatear con toFixed(2) — el backend rechaza con "Bad Request"
+      // si el monto no matchea regex /^\d+(\.\d{1,2})?$/. Cuando un item tiene
+      // modificadores (ej. porciones calientes con salsa), el venta.total que
+      // viene de la API puede llegar con precision distinta. Coercer a "X.XX"
+      // garantiza match con la regex.
+      const montoNum = Number(aplicaDescuento ? conDescuentoSimple.total : venta!.total);
+      const monto = montoNum.toFixed(2);
       const cambio =
-        metodo === 'EFECTIVO' && efectivoRecibido && Number(efectivoRecibido) > Number(monto)
-          ? (Number(efectivoRecibido) - Number(monto)).toFixed(2)
+        metodo === 'EFECTIVO' && efectivoRecibido && Number(efectivoRecibido) > montoNum
+          ? (Number(efectivoRecibido) - montoNum).toFixed(2)
           : undefined;
       await api.post(`/ventas/${venta!.id}/finalizar`, {
         aplicarDescuentoEfectivo: aplicaDescuento,

@@ -478,6 +478,35 @@ async function seedCatalogo(listaPreciosLocalId: string) {
   }
   console.log(`  ✓ ${catByName.size} categorías`);
 
+  // ── Migración v1.27: porciones calientes que no tenían simple/especial ──
+  // Raviolones remolacha, Sorrentinos negros y Foratti se cargaban como un único
+  // tipo sin sufijo. Eso impedía mostrar la modal de salsa (la API detecta el
+  // grupo simple/especial por sufijo del tipoProducto). Renombramos in-place
+  // para preservar las ventas históricas que apuntan al producto.
+  const renombresPorcion: Array<{ old: string; new: string }> = [
+    { old: 'Raviolones remolacha porción', new: 'Raviolones remolacha porción simple' },
+    { old: 'Sorrentinos negros porción', new: 'Sorrentinos negros porción simple' },
+    { old: 'Foratti porción', new: 'Foratti porción simple' },
+  ];
+  for (const r of renombresPorcion) {
+    const existing = await prisma.tipoProducto.findFirst({ where: { nombre: r.old } });
+    if (!existing) continue;
+    // Si por algún motivo ya existe el destino, mergear: mover los productos
+    // del viejo al nuevo y eliminar el viejo (idempotente).
+    const destino = await prisma.tipoProducto.findFirst({ where: { nombre: r.new } });
+    if (destino) {
+      await prisma.producto.updateMany({
+        where: { tipoProductoId: existing.id },
+        data: { tipoProductoId: destino.id },
+      });
+      await prisma.modificadorAplicable.deleteMany({ where: { tipoProductoId: existing.id } });
+      await prisma.tipoProducto.delete({ where: { id: existing.id } }).catch(() => {});
+    } else {
+      await prisma.tipoProducto.update({ where: { id: existing.id }, data: { nombre: r.new } });
+    }
+    console.log(`  ✓ Migrado tipoProducto "${r.old}" → "${r.new}"`);
+  }
+
   // Tipos producto
   const tipoByKey = new Map<string, string>();
   for (const t of data.tipos_producto) {
@@ -639,9 +668,14 @@ async function linkSaboresAPorciones() {
     // Sorrentinos
     { porcion: 'Sorrentinos porción simple', base: 'Sorrentinos' },
     { porcion: 'Sorrentinos porción especial', base: 'Sorrentinos' },
-    { porcion: 'Sorrentinos negros porción', base: 'Sorrentinos de Salmón' },
+    { porcion: 'Sorrentinos negros porción simple', base: 'Sorrentinos de Salmón' },
+    { porcion: 'Sorrentinos negros porción especial', base: 'Sorrentinos de Salmón' },
     // Raviolones
-    { porcion: 'Raviolones remolacha porción', base: 'Raviolones' },
+    { porcion: 'Raviolones remolacha porción simple', base: 'Raviolones' },
+    { porcion: 'Raviolones remolacha porción especial', base: 'Raviolones' },
+    // Foratti — pasta seca con sabor único, sin sabores base. Igual aparece como
+    // porción simple/especial para que tomen el grupo "Salsa simple/especial"
+    // (linkeado por nombre del tipo en catalogo.ts vía `incluyeSalsa`).
     // Lasagna
     { porcion: 'Lasagna porción simple', base: 'Lasagna' },
     { porcion: 'Lasagna porción especial', base: 'Lasagna' },
