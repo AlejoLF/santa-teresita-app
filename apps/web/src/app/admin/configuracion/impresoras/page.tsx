@@ -52,10 +52,18 @@ const DESTINOS_INFO: Record<Destino, { titulo: string; descripcion: string; icon
   },
 };
 
+interface PrinterStatus {
+  online: boolean;
+  error: string | null;
+  latencyMs: number | null;
+  checkedAt: string;
+}
+
 export default function ImpresorasConfigPage() {
   const [config, setConfig] = useState<ConfigPrinters | null>(null);
   const [edit, setEdit] = useState<ConfigPrinters | null>(null);
   const [jobs, setJobs] = useState<JobsListado | null>(null);
+  const [statuses, setStatuses] = useState<Partial<Record<Destino, PrinterStatus>>>({});
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -79,12 +87,31 @@ export default function ImpresorasConfigPage() {
       /* silencioso */
     }
   }
+  async function fetchStatuses() {
+    try {
+      const s = await api.get<Partial<Record<Destino, PrinterStatus>>>(
+        '/admin/impresion/status',
+      );
+      setStatuses(s);
+    } catch {
+      /* silencioso */
+    }
+  }
 
   useEffect(() => {
+    let cancelled = false;
     void fetchConfig();
-    void fetchJobs();
-    const id = setInterval(() => void fetchJobs(), 5000);
-    return () => clearInterval(id);
+    const refresh = () => {
+      if (cancelled) return;
+      void fetchJobs();
+      void fetchStatuses();
+    };
+    refresh();
+    const id = setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   function setField(d: Destino, patch: Partial<ConfigImpresora>) {
@@ -194,13 +221,19 @@ export default function ImpresorasConfigPage() {
         {(['MOSTRADOR', 'DELIVERY', 'COCINA'] as Destino[]).map((d) => {
           const meta = DESTINOS_INFO[d];
           const cfg = edit[d];
+          const status = statuses[d];
+          // Edge ribbon de estado: verde=online, rojo=offline, gris=desactivada
+          const ribbonClass = !cfg.activa
+            ? 'border-cream-300 opacity-70'
+            : status?.online
+              ? 'border-basil-600'
+              : status
+                ? 'border-pomodoro-600'
+                : 'border-saffron-600';
           return (
             <section
               key={d}
-              className={cn(
-                'card p-4 space-y-3 border-t-4',
-                cfg.activa ? 'border-teresita-700' : 'border-cream-300 opacity-70',
-              )}
+              className={cn('card p-4 space-y-3 border-t-4', ribbonClass)}
             >
               <header>
                 <div className="flex items-center justify-between">
@@ -219,6 +252,49 @@ export default function ImpresorasConfigPage() {
                   </label>
                 </div>
                 <p className="text-2xs text-ink-500 mt-0.5">{meta.descripcion}</p>
+
+                {/* Indicador de estado runtime (heartbeat del agent) */}
+                {cfg.activa && (
+                  <div className="mt-2 flex items-center gap-2 text-2xs">
+                    {status === undefined ? (
+                      <span className="flex items-center gap-1 text-saffron-600">
+                        <span className="inline-block w-2 h-2 rounded-full bg-saffron-600 animate-pulse" />
+                        Esperando primer chequeo...
+                      </span>
+                    ) : status.online ? (
+                      <span className="flex items-center gap-1 text-basil-600 font-medium">
+                        <span className="inline-block w-2 h-2 rounded-full bg-basil-600" />
+                        Online
+                        {status.latencyMs !== null && (
+                          <span className="text-ink-500 font-normal">
+                            ({status.latencyMs}ms)
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-pomodoro-600 font-medium">
+                        <span className="inline-block w-2 h-2 rounded-full bg-pomodoro-600" />
+                        Offline
+                        {status.error && (
+                          <span className="text-ink-500 font-normal truncate max-w-[150px]" title={status.error}>
+                            · {status.error}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                    {status && (
+                      <span className="text-ink-400 ml-auto">
+                        {(() => {
+                          const ago = Math.round(
+                            (Date.now() - new Date(status.checkedAt).getTime()) / 1000,
+                          );
+                          if (ago < 60) return `hace ${ago}s`;
+                          return `hace ${Math.floor(ago / 60)}m`;
+                        })()}
+                      </span>
+                    )}
+                  </div>
+                )}
               </header>
 
               <div className="space-y-2">
