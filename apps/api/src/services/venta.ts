@@ -119,6 +119,7 @@ export async function crearVenta(args: {
         modalidad: data.modalidad as ModalidadVenta,
         pcOrigen: data.pcOrigen,
         clienteId: data.clienteId ?? null,
+        idExternoCanal: data.idExternoCanal ?? null,
         listaPreciosId: lista.id,
         sesionCajaId: sesion.id,
         numeroOrdenTurno: numeroOrden,
