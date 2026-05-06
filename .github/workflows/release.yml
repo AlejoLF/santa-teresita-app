@@ -42,6 +42,10 @@ jobs:
       - name: Generate Prisma client
         run: pnpm --filter @sta/db run generate
 
+      - name: Download VC++ Redistributable (bundled in NSIS installer)
+        working-directory: apps/desktop
+        run: pnpm run ensure:vcredist
+
       - name: Build resources (api + seed + web + agent)
         working-directory: apps/desktop
         run: pnpm run build:resources
