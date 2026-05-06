@@ -65,6 +65,10 @@ nsis:
   createStartMenuShortcut: true
   runAfterFinish: true
   deleteAppDataOnUninstall: false # NO borrar datos de Postgres al desinstalar
+  # Inyecta script NSIS custom que durante la instalación verifica si está
+  # instalado el VC++ Redistributable (necesario para que postgres.exe arranque)
+  # y si no, lo instala silencioso desde el .exe bundleado en `build/`.
+  include: build/installer.nsh
 
 # Publicación a GitHub Releases. Cuando se corre `electron-builder --publish
 # always`, sube directamente al draft release y genera `latest.yml` (que es lo
