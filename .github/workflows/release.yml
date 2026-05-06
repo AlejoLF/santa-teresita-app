@@ -1,0 +1,56 @@
+name: Release Desktop
+
+# Se dispara cuando se pushea un tag `v*` (ej. v1.26.0). Buildea el desktop
+# .exe + .zip + latest.yml en Windows y los sube como artefactos al GitHub
+# Release que matchea el tag.
+#
+# El primer release v1.25.0 se hace MANUAL desde la PC del dev (con
+# `pnpm --filter @sta/desktop run release` y GH_TOKEN local) porque el flow
+# automático requiere que electron-updater esté ya instalado en el cliente.
+# A partir de v1.26 las releases salen solas con tag push.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # necesario para subir assets al release
+
+jobs:
+  build-desktop:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @sta/db run generate
+
+      - name: Build resources (api + seed + web + agent)
+        working-directory: apps/desktop
+        run: pnpm run build:resources
+
+      - name: Build & publish Windows installer + ZIP to GitHub Release
+        working-directory: apps/desktop
+        env:
+          # GH_TOKEN es el secret que electron-builder usa para subir al
+          # release. GITHUB_TOKEN es el default que viene con el runner —
+          # tiene permisos `contents: write` declarados arriba.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm exec electron-builder --win --publish always

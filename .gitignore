@@ -63,8 +63,10 @@ infra/docker/data/
 # Vercel local — contiene OIDC token y project linkage
 .vercel/
 
-# Desktop build artifacts (resources/ se regenera, out/ ya cubierto arriba)
+# Desktop build artifacts (resources/ se regenera, out/ ya cubierto arriba,
+# dist/ es el output de electron-builder)
 apps/desktop/resources/
+apps/desktop/dist/
 
 # Postgres data dir (si alguien arranca el agente local en este directorio)
 pgdata/
