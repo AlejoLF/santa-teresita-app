@@ -1,6 +1,6 @@
 {
   "name": "@sta/desktop",
-  "version": "1.26.0",
+  "version": "1.27.0",
   "private": true,
   "description": "Santa Teresita Pastas — desktop app (full local stack)",
   "main": "main.js",
@@ -10,9 +10,10 @@
   "scripts": {
     "start": "electron .",
     "build:resources": "node scripts/build-resources.mjs",
-    "build": "node scripts/build-resources.mjs && electron-builder --win",
-    "release": "node scripts/build-resources.mjs && electron-builder --win --publish always",
-    "release:draft": "node scripts/build-resources.mjs && electron-builder --win --publish onTagOrDraft"
+    "ensure:vcredist": "node scripts/ensure-vcredist.mjs",
+    "build": "pnpm run ensure:vcredist && pnpm run build:resources && electron-builder --win",
+    "release": "pnpm run ensure:vcredist && pnpm run build:resources && electron-builder --win --publish always",
+    "release:draft": "pnpm run ensure:vcredist && pnpm run build:resources && electron-builder --win --publish onTagOrDraft"
   },
   "dependencies": {
     "@embedded-postgres/windows-x64": "^18.3.0-beta.17",
