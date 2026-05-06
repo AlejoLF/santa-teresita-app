@@ -7,6 +7,7 @@ import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import { ZodError } from 'zod';
 import {
+  hasZodFastifySchemaValidationErrors,
   serializerCompiler,
   validatorCompiler,
   type ZodTypeProvider,
@@ -90,7 +91,36 @@ export async function buildServer() {
     { prefix: '/api/v1' },
   );
 
-  app.setErrorHandler((err, _req, reply) => {
+  app.setErrorHandler((err, req, reply) => {
+    // Errores de validación Zod via fastify-type-provider-zod. Antes los
+    // matcheábamos con `instanceof ZodError` pero el provider los wrappea
+    // en un FastifyError, así que `instanceof` falla y caíamos en el branch
+    // genérico que devolvía solo "Bad Request" sin info útil. Con el helper
+    // del provider extraemos el path + razón de cada issue y los devolvemos
+    // legibles al cliente.
+    if (hasZodFastifySchemaValidationErrors(err)) {
+      const issues = err.validation.map((i) => {
+        // params.issue es el ZodIssue rico (path: [...], code, message); el
+        // i.instancePath de fastify viene normalizado tipo "/items/0/cantidad"
+        // pero podemos armar uno mejor desde el ZodIssue.
+        const issue = i.params?.issue;
+        const path =
+          issue && Array.isArray(issue.path) && issue.path.length > 0
+            ? issue.path.join('.')
+            : i.instancePath || '(root)';
+        return {
+          path,
+          message: issue?.message ?? i.message ?? 'invalid',
+          code: issue?.code,
+        };
+      });
+      const summary = issues.map((i) => `${i.path}: ${i.message}`).join('; ');
+      app.log.warn({ url: req.url, issues }, 'validation failed');
+      return reply.code(400).send({
+        error: `Validación fallida — ${summary}`,
+        issues,
+      });
+    }
     if (err instanceof ZodError) {
       return reply.code(400).send({ error: 'Validación fallida', issues: err.issues });
     }

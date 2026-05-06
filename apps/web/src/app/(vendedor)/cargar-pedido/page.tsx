@@ -2006,7 +2006,12 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
 
     if (isPorcionMode) {
       // Generamos un instance ID que agrupa porción + salsa + obs como UN paquete
-      const instanciaId = `porcion-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // ROOT CAUSE del "Bad Request" v1.27: el backend define
+      // `parteDeComboInstancia` como `@db.Uuid` (Prisma) y el schema Zod la
+      // valida con `z.string().uuid()`. El instanciaId tiene que ser UUID
+      // real, no un string custom — sino la validación de POST /ventas falla
+      // con 400 al cobrar cualquier porción caliente con salsa.
+      const instanciaId = crypto.randomUUID();
       const N = cantidadPaqueteNum;
 
       // 1. La porción (sabor seleccionado) × N
