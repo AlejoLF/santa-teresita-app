@@ -220,6 +220,77 @@ export default async function impresionRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // POST /admin/impresion/heartbeat — el agent reporta el estado de cada
+  // impresora (online/offline) tras hacer un TCP probe periódico. La API
+  // persiste el último estado en `configuracion_sistema` con clave
+  // `impresora_<destino>_status` para que el panel admin lo muestre en vivo.
+  fastify.post(
+    '/admin/impresion/heartbeat',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z.object({
+          destino: z.enum(['MOSTRADOR', 'DELIVERY', 'COCINA']),
+          online: z.boolean(),
+          error: z.string().max(200).optional(),
+          latencyMs: z.number().int().min(0).optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const body = req.body as {
+        destino: 'MOSTRADOR' | 'DELIVERY' | 'COCINA';
+        online: boolean;
+        error?: string;
+        latencyMs?: number;
+      };
+      const status = {
+        online: body.online,
+        error: body.error ?? null,
+        latencyMs: body.latencyMs ?? null,
+        checkedAt: new Date().toISOString(),
+      };
+      await prisma.configuracionSistema.upsert({
+        where: { clave: `impresora_${body.destino.toLowerCase()}_status` },
+        create: {
+          clave: `impresora_${body.destino.toLowerCase()}_status`,
+          valor: JSON.stringify(status),
+          tipo: 'json',
+          categoria: 'impresoras_status',
+          descripcion: `Estado runtime de la impresora ${body.destino}`,
+          actualizadoPor: 'agent',
+          editable: false,
+        },
+        update: {
+          valor: JSON.stringify(status),
+          actualizadoPor: 'agent',
+        },
+      });
+      return { ok: true };
+    },
+  );
+
+  // GET /admin/impresion/status — devuelve estado runtime de todas las impresoras
+  fastify.get(
+    '/admin/impresion/status',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const rows = await prisma.configuracionSistema.findMany({
+        where: { categoria: 'impresoras_status' },
+      });
+      const result: Record<string, unknown> = {};
+      for (const r of rows) {
+        try {
+          const destino = r.clave.replace('impresora_', '').replace('_status', '').toUpperCase();
+          result[destino] = JSON.parse(r.valor);
+        } catch {
+          /* ignore malformed */
+        }
+      }
+      return result;
+    },
+  );
+
   // PUT /admin/impresion/config — actualiza config de impresoras
   fastify.put(
     '/admin/impresion/config',
