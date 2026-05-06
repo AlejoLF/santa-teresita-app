@@ -8,6 +8,11 @@ build/
 .next/
 out/
 *.tsbuildinfo
+# Excepción: scripts NSIS source-controlled de electron-builder (se necesita
+# en el repo para que CI pueda compilar el installer).
+!apps/desktop/build/
+apps/desktop/build/*
+!apps/desktop/build/installer.nsh
 
 # Env
 .env
