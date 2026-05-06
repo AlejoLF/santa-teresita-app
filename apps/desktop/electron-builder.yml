@@ -1,0 +1,76 @@
+appId: com.santateresita.pos
+productName: Santa Teresita
+copyright: Copyright © Santa Teresita Pastas
+
+# Forzamos arquitectura x64 (no soportamos arm/32-bit por ahora — Nancy y todo
+# el local corre en Windows 10/11 x64).
+directories:
+  output: dist
+  buildResources: build
+
+# Solo bundleamos el código de Electron + main.js + preload + splash. Todo el
+# stack (Postgres + API + Web + Agent) vive en `extraResources/resources` —
+# eso se copia tal cual sin pasar por asar.
+files:
+  - main.js
+  - preload.js
+  - splash.html
+  - package.json
+  - "!**/*.md"
+  - "!**/*.markdown"
+  - "!.gitignore"
+  - "!scripts/**/*"
+  - "!out/**/*"
+  - "!dist/**/*"
+  - "!test-pg/**/*"
+
+# `resources/` (con embedded-postgres + api compilada + web + agent) se copia
+# tal cual al `resources/resources/` del .exe instalado, igual que como lo
+# hacíamos con `--extra-resource` de electron-packager.
+extraResources:
+  - from: resources
+    to: resources
+
+# embedded-postgres trae binarios nativos por plataforma (postgres.exe, initdb,
+# etc.). El asar empaqueta TODO en un único archivo y rompe la ejecución de
+# binarios nativos. Por eso desactivamos asar.
+asar: false
+
+# Sin code signing. Windows SmartScreen va a mostrar warning la primera vez
+# ("publisher unknown") — el usuario puede saltar con "Más información →
+# Ejecutar de todas formas". Cuando saquemos certificate de firma, agregar
+# `signtoolOptions` aquí.
+
+win:
+  target:
+    # NSIS installer: el formato preferido. Instala a Program Files con
+    # uninstaller, atajos en Start Menu, soporta auto-update con Squirrel.
+    - target: nsis
+      arch: [x64]
+    # ZIP portable: para casos donde Nancy quiera correrlo desde una carpeta
+    # sin instalar (backup, USB, etc.). El auto-update NO funciona desde ZIP.
+    - target: zip
+      arch: [x64]
+  # Nombre sin espacios — productName tiene espacio ("Santa Teresita") y eso
+  # rompe el match URL del latest.yml con el archivo real al subirlo a GitHub.
+  artifactName: SantaTeresita-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false # instala per-user (no requiere admin para instalar updates)
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  shortcutName: Santa Teresita
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false # NO borrar datos de Postgres al desinstalar
+
+# Publicación a GitHub Releases. Cuando se corre `electron-builder --publish
+# always`, sube directamente al draft release y genera `latest.yml` (que es lo
+# que electron-updater consulta para detectar updates).
+publish:
+  provider: github
+  owner: AlejoLF
+  repo: santa-teresita-app
+  releaseType: release

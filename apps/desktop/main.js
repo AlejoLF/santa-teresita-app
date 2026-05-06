@@ -18,6 +18,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { autoUpdater } = require('electron-updater');
 // embedded-postgres es ESM puro → import dinámico al usar
 let EmbeddedPostgres = null;
 async function loadEmbeddedPostgres() {
@@ -403,6 +404,84 @@ function startWeb() {
   });
 }
 
+// ═══ Auto-update (electron-updater + GitHub Releases) ═══════════════════
+
+function setupAutoUpdater() {
+  if (!app.isPackaged) {
+    log('autoUpdater: skip — modo dev');
+    return;
+  }
+
+  // Logging del autoUpdater al mismo archivo que el resto. Reemplaza el
+  // logger interno.
+  autoUpdater.logger = {
+    info: (m) => log('[autoUpdater] ' + m),
+    warn: (m) => log('[autoUpdater:warn] ' + m),
+    error: (m) => log('[autoUpdater:err] ' + m),
+    debug: () => {},
+  };
+
+  autoUpdater.autoDownload = true; // descarga sola si hay update
+  autoUpdater.autoInstallOnAppQuit = true; // instala al cerrar si descargó
+
+  autoUpdater.on('update-available', (info) => {
+    log(`[autoUpdater] update-available: ${info.version}`);
+  });
+  autoUpdater.on('update-not-available', () => {
+    log('[autoUpdater] sin updates pendientes');
+  });
+  autoUpdater.on('error', (err) => {
+    log('[autoUpdater] error: ' + (err?.message ?? err));
+  });
+  autoUpdater.on('download-progress', (p) => {
+    log(`[autoUpdater] descargando: ${p.percent.toFixed(0)}% (${(p.bytesPerSecond / 1024).toFixed(0)} KB/s)`);
+  });
+  autoUpdater.on('update-downloaded', (info) => {
+    log(`[autoUpdater] update-downloaded: ${info.version}`);
+    // Mostramos diálogo modal para que Nancy decida cuándo reiniciar.
+    // Si elige "Después", se aplica al próximo cierre (autoInstallOnAppQuit).
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      void dialog
+        .showMessageBox(mainWindow, {
+          type: 'info',
+          buttons: ['Reiniciar ahora', 'Más tarde'],
+          defaultId: 0,
+          cancelId: 1,
+          title: 'Actualización lista',
+          message: `Versión ${info.version} disponible`,
+          detail:
+            'Se descargó una nueva versión de Santa Teresita. ' +
+            'Para aplicarla hay que reiniciar la app. ' +
+            '¿Reiniciás ahora? (los datos no se pierden — viven aparte en %APPDATA%/Santa Teresita)',
+        })
+        .then(({ response }) => {
+          if (response === 0) {
+            log('[autoUpdater] instalando ahora por elección del usuario');
+            autoUpdater.quitAndInstall();
+          } else {
+            log('[autoUpdater] postpuesto — se aplica al próximo cierre');
+          }
+        })
+        .catch((e) => log('[autoUpdater] dialog error: ' + (e?.message ?? e)));
+    }
+  });
+
+  // Trigger inicial — chequea al arrancar
+  autoUpdater.checkForUpdates().catch((e) => {
+    log('[autoUpdater] checkForUpdates error inicial: ' + (e?.message ?? e));
+  });
+
+  // Re-chequear cada 4 horas mientras la app está abierta
+  setInterval(
+    () => {
+      autoUpdater.checkForUpdates().catch((e) => {
+        log('[autoUpdater] re-check error: ' + (e?.message ?? e));
+      });
+    },
+    4 * 60 * 60 * 1000,
+  );
+}
+
 // ═══ Local agent (impresión térmica) ═════════════════════════════════════
 
 function startAgent() {
@@ -592,6 +671,12 @@ async function bootstrap() {
 
     setSplashStatus('Listo. Cargando interfaz...');
     createMainWindow();
+
+    // Auto-update desde GitHub Releases. Solo en builds packageados (en dev
+    // electron-updater devuelve error). Si hay update disponible, se descarga
+    // en background y al detectarse "downloaded" preguntamos a Nancy si
+    // reiniciar ahora o después.
+    setupAutoUpdater();
   } catch (err) {
     log('FATAL: ' + (err && err.stack ? err.stack : err));
     if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
