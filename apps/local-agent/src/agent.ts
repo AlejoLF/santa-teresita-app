@@ -15,6 +15,7 @@
  */
 
 import 'dotenv/config';
+import { Socket } from 'node:net';
 import pino from 'pino';
 import {
   imprimirComanda,
@@ -36,6 +37,8 @@ const logger = pino({
 const API_URL = process.env.API_PUBLIC_URL ?? 'http://127.0.0.1:3001';
 const POLL_INTERVAL_MS = Number(process.env.AGENT_POLL_INTERVAL_MS ?? 3000);
 const CONFIG_REFRESH_EVERY_N_POLLS = 5; // refresh config cada ~15s
+const HEARTBEAT_EVERY_N_POLLS = 10; // heartbeat cada ~30s
+const HEARTBEAT_TCP_TIMEOUT_MS = 3000;
 const AGENT_TOKEN = process.env.AGENT_API_TOKEN ?? '';
 
 interface TrabajoImpresion {
@@ -72,6 +75,60 @@ async function fetchPendientes(): Promise<TrabajoImpresion[]> {
   } catch (e) {
     logger.error({ err: e instanceof Error ? e.message : e }, 'No se pudo conectar a la API');
     return [];
+  }
+}
+
+/**
+ * Hace un TCP probe a host:port. Devuelve { online, latencyMs?, error? }.
+ * No envía nada — solo abre el socket. Si conecta exitoso → online.
+ * Útil para confirmar que la impresora está enchufada antes de mandarle
+ * trabajos, sin gastar papel en un test físico.
+ */
+async function tcpProbe(host: string, port: number): Promise<{
+  online: boolean;
+  latencyMs?: number;
+  error?: string;
+}> {
+  return new Promise((resolve) => {
+    const socket = new Socket();
+    const start = Date.now();
+    let settled = false;
+    const finish = (result: { online: boolean; latencyMs?: number; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      try { socket.destroy(); } catch { /* ignore */ }
+      resolve(result);
+    };
+    socket.setTimeout(HEARTBEAT_TCP_TIMEOUT_MS);
+    socket.once('connect', () => finish({ online: true, latencyMs: Date.now() - start }));
+    socket.once('timeout', () => finish({ online: false, error: 'Timeout' }));
+    socket.once('error', (e: NodeJS.ErrnoException) => finish({
+      online: false,
+      error: e.code ?? e.message ?? 'Unknown error',
+    }));
+    socket.connect(port, host);
+  });
+}
+
+async function reportarHeartbeat(): Promise<void> {
+  for (const destino of ['MOSTRADOR', 'DELIVERY', 'COCINA'] as const) {
+    const cfg = getPrinterConfig(destino);
+    if (!cfg.activa) continue; // skip impresoras desactivadas
+    const probe = await tcpProbe(cfg.host, cfg.port);
+    try {
+      await fetch(`${API_URL}/api/v1/admin/impresion/heartbeat`, {
+        method: 'POST',
+        headers: { ...baseHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          destino,
+          online: probe.online,
+          error: probe.error,
+          latencyMs: probe.latencyMs,
+        }),
+      });
+    } catch (e) {
+      logger.warn({ err: e instanceof Error ? e.message : e, destino }, 'No se pudo reportar heartbeat');
+    }
   }
 }
 
@@ -169,14 +226,22 @@ async function procesar(t: TrabajoImpresion): Promise<void> {
 async function loop(): Promise<void> {
   logger.info({ apiUrl: API_URL, pollMs: POLL_INTERVAL_MS }, '🍝 Local agent arrancado');
 
-  // Carga inicial de config
+  // Carga inicial de config + heartbeat inicial (para que el panel admin
+  // tenga datos en cuanto la encargada lo abre, sin esperar 30s)
   await fetchConfig();
+  await reportarHeartbeat();
 
   let pollCount = 0;
   while (true) {
     pollCount += 1;
     if (pollCount % CONFIG_REFRESH_EVERY_N_POLLS === 0) {
       await fetchConfig();
+    }
+    if (pollCount % HEARTBEAT_EVERY_N_POLLS === 0) {
+      // No await en el loop principal — corre en paralelo para no bloquear
+      // la atención de trabajos pendientes mientras se prueban TCP probes
+      // a las 3 impresoras.
+      void reportarHeartbeat();
     }
     const trabajos = await fetchPendientes();
     if (trabajos.length > 0) {
