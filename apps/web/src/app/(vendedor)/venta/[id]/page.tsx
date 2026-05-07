@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useState, useCallback } from 'react';
+import { use, useEffect, useRef, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
@@ -62,6 +62,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
   const [procesando, setProcesando] = useState(false);
   const [confirmaAnular, setConfirmaAnular] = useState(false);
   const [motivoAnular, setMotivoAnular] = useState('');
+  const motivoAnularRef = useRef<HTMLTextAreaElement | null>(null);
   const [mostrarCobro, setMostrarCobro] = useState(cobrarAutomatico);
   const [efectivoRecibido, setEfectivoRecibido] = useState('');
   const [mostrarSplit, setMostrarSplit] = useState(false);
@@ -118,6 +119,22 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
   useEffect(() => {
     void refetch();
   }, [refetch]);
+
+  // Focusear el textarea de motivo cuando se abre el modal de anulación.
+  // `autoFocus` solo no alcanza en Electron — el modal se monta dinámicamente
+  // y a veces el focus se pierde antes de que React lo aplique. Con esto
+  // garantizamos que el cajero pueda tipear el motivo sin clickear primero.
+  useEffect(() => {
+    if (confirmaAnular) {
+      // Doble RAF para que el textarea esté pintado y el navegador haya
+      // resuelto el layout antes de pedirle focus.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          motivoAnularRef.current?.focus();
+        });
+      });
+    }
+  }, [confirmaAnular]);
 
   // Detectar combos automáticos cuando la venta carga / cambia de items.
   // Solo si la venta está en estado PROCESADA (editable).
@@ -623,13 +640,16 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
               {venta.tieneCocina &&
                 'La comanda ya fue a cocina. Se imprimirá una segunda comanda con leyenda CANCELADA.'}
             </p>
-            <label className="text-sm font-medium text-ink-700 mb-1 block">Motivo</label>
+            <label htmlFor="motivo-anular" className="text-sm font-medium text-ink-700 mb-1 block">
+              Motivo
+            </label>
             <textarea
+              id="motivo-anular"
+              ref={motivoAnularRef}
               value={motivoAnular}
               onChange={(e) => setMotivoAnular(e.target.value)}
               placeholder="ej. cliente se arrepintió, error de carga..."
               className="input min-h-[80px] mb-4"
-              autoFocus
             />
             <div className="flex gap-2 justify-end">
               <Button variant="secondary" onClick={() => setConfirmaAnular(false)}>
