@@ -1,6 +1,6 @@
 {
   "name": "@sta/desktop",
-  "version": "1.27.3",
+  "version": "1.27.4",
   "private": true,
   "description": "Santa Teresita Pastas — desktop app (full local stack)",
   "main": "main.js",

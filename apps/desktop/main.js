@@ -10,7 +10,7 @@
 if (process.env.ELECTRON_RUN_AS_NODE === '1') {
   delete process.env.ELECTRON_RUN_AS_NODE;
 }
-const { app, BrowserWindow, Menu, shell, dialog } = require('electron');
+const { app, BrowserWindow, Menu, shell, dialog, screen } = require('electron');
 
 // Nombre de la app (controla %APPDATA%/<name>/) — antes de cualquier otra cosa
 app.setName('Santa Teresita');
@@ -554,6 +554,31 @@ async function waitForApiHealth(timeoutMs = 60000) {
 
 // ═══ Main window ═══════════════════════════════════════════════════════════
 
+/**
+ * Calcula el zoom factor del renderer según el ancho efectivo de la pantalla.
+ *
+ * El UI fue diseñado pensando en monitores 1920×1080 con DPI 100%. En pantallas
+ * más chicas (1366×768 típico de notebooks de la encargada, 1440×900 de iMac
+ * antiguos, etc.) los elementos se veían "gigantes" porque ocupaban un %
+ * mayor del ancho disponible. Con un zoom adaptativo todo encaja proporcional.
+ *
+ * El `workAreaSize` ya tiene aplicado el DPI scaling de Windows (si la pantalla
+ * está al 125% / 150%, ese ancho viene reducido). Por eso no necesitamos un
+ * factor extra: lo que medimos acá ya es lo que el browser ve como viewport.
+ */
+function calcularZoomFactor() {
+  try {
+    const { width } = screen.getPrimaryDisplay().workAreaSize;
+    if (width <= 1024) return 0.75;   // notebooks viejos / pantallas chicas
+    if (width <= 1366) return 0.85;   // notebooks típicos (1366x768)
+    if (width <= 1600) return 0.92;   // monitores HD intermedios
+    return 1.0;                        // 1920x1080 y up — diseño nativo
+  } catch (e) {
+    log('zoom factor fallback (screen no disponible): ' + (e?.message ?? e));
+    return 1.0;
+  }
+}
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -573,6 +598,15 @@ function createMainWindow() {
 
   Menu.setApplicationMenu(null);
 
+  // Zoom adaptativo según ancho de pantalla — calculado UNA vez al crear la
+  // ventana y aplicado cuando termina de cargar el renderer (antes de eso no
+  // hay webContents listo para recibir setZoomFactor).
+  const zoomFactor = calcularZoomFactor();
+  log(`Zoom factor calculado: ${zoomFactor} (workArea ancho: ${screen.getPrimaryDisplay().workAreaSize.width}px)`);
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow.webContents.setZoomFactor(zoomFactor);
+  });
+
   mainWindow.loadURL(`http://127.0.0.1:${WEB_PORT}`);
 
   mainWindow.once('ready-to-show', () => {
@@ -589,6 +623,20 @@ function createMainWindow() {
       event.preventDefault();
     } else if (key === 'f11') {
       mainWindow.setFullScreen(!mainWindow.isFullScreen());
+      event.preventDefault();
+    } else if (input.control && (key === '+' || key === '=')) {
+      // Ctrl+= zoom in (subir 5% por step). Cap a 1.5 para no romper layout.
+      const next = Math.min(1.5, mainWindow.webContents.getZoomFactor() + 0.05);
+      mainWindow.webContents.setZoomFactor(next);
+      event.preventDefault();
+    } else if (input.control && key === '-') {
+      // Ctrl+- zoom out (bajar 5% por step). Floor a 0.5 para que no se evapore.
+      const next = Math.max(0.5, mainWindow.webContents.getZoomFactor() - 0.05);
+      mainWindow.webContents.setZoomFactor(next);
+      event.preventDefault();
+    } else if (input.control && key === '0') {
+      // Ctrl+0 reset al auto-zoom calculado al inicio.
+      mainWindow.webContents.setZoomFactor(zoomFactor);
       event.preventDefault();
     } else if (input.control && key === 'q') {
       app.quit();
