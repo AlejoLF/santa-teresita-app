@@ -1574,6 +1574,15 @@ function CartItemRow({ item, esParteDePaquete, esPrimeroDelPaquete }: {
               esPrimeroDelPaquete ? 'font-semibold text-ink-900' : 'font-medium text-ink-900',
             )}>
               {item.productoNombre}
+              {/* Salsa que viene incluida con la porción: la mostramos inline
+                  entre paréntesis, NO como item suelto ni como observación. */}
+              {item.modificadores
+                .filter((m) => m.grupoNombre?.startsWith('Tipo — Salsa'))
+                .map((m, i) => (
+                  <span key={i} className="text-ink-500 font-normal">
+                    {' '}({m.opcionNombre})
+                  </span>
+                ))}
             </span>
             {item.categoriaNombre?.toLowerCase().includes('pasta fresca') && (
               <span className="text-2xs uppercase tracking-wider text-teresita-700 bg-teresita-50 px-1.5 py-0.5 rounded font-medium flex-shrink-0">
@@ -2005,22 +2014,64 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
     const items: Array<Omit<CartItem, 'uid'>> = [];
 
     if (isPorcionMode) {
-      // Generamos un instance ID que agrupa porción + salsa + obs como UN paquete
-      // ROOT CAUSE del "Bad Request" v1.27: el backend define
-      // `parteDeComboInstancia` como `@db.Uuid` (Prisma) y el schema Zod la
-      // valida con `z.string().uuid()`. El instanciaId tiene que ser UUID
-      // real, no un string custom — sino la validación de POST /ventas falla
-      // con 400 al cobrar cualquier porción caliente con salsa.
-      const instanciaId = crypto.randomUUID();
       const N = cantidadPaqueteNum;
 
-      // 1. La porción (sabor seleccionado) × N
+      // La porción (sabor de pasta + salsa elegida) × N — un solo item.
+      //
+      // La salsa va dentro del array de modificadores de la porción, NO como
+      // item separado. Es un acompañamiento sin cargo: el precio de la porción
+      // ya la incluye. Así evitamos que la encargada vea una "Salsa simple"
+      // cobrada aparte (bug visible al cobrar).
       const sabor = sabores.find((s) => s.id === saborRadioId) ?? sabores[0];
       if (!sabor) return;
       const precioFinal = Number(producto.precioBase) + Number(sabor.deltaPrecio || 0);
-      const modificadores = sabor.grupoId
+      const modificadores: ModificadorAplicado[] = sabor.grupoId
         ? [{ grupoId: sabor.grupoId, grupoNombre: sabor.grupoNombre!, opcionId: sabor.id, opcionNombre: sabor.nombre, deltaPrecio: sabor.deltaPrecio }]
         : [];
+
+      // Agregamos el "modificador salsa" — distinguible por grupoNombre que
+      // arranca con "Tipo — Salsa". El UI lo renderiza inline entre paréntesis
+      // al lado del nombre de la porción (no como item suelto ni en el cartel
+      // amarillo de observación).
+      const salsasDataActiva = producto.incluyeSalsa === 'SIMPLE' ? salsasData.simple : salsasData.especial;
+      const salsaTipo = producto.incluyeSalsa;
+      if (salsaPorcionId && salsasDataActiva) {
+        const saborSalsaReal = salsasDataActiva.sabores.find((s) => s.opcionId === salsaPorcionId);
+        if (saborSalsaReal) {
+          modificadores.push({
+            grupoId: saborSalsaReal.grupoId,
+            grupoNombre: saborSalsaReal.grupoNombre,
+            opcionId: saborSalsaReal.opcionId,
+            opcionNombre: saborSalsaReal.nombre,
+            deltaPrecio: '0', // incluida — el cargo está en la pasta
+          });
+        } else {
+          // Extras "manuales" (Aceite, Manteca, Mixta) — no son OpcionModificador
+          // reales, son etiquetas frontend-only. El schema admite strings libres
+          // en grupoId/opcionId precisamente para este caso.
+          const extrasMap: Record<string, { nombre: string }> = salsaTipo === 'SIMPLE'
+            ? {
+                '__aceite': { nombre: 'Aceite' },
+                '__aceite_oliva': { nombre: 'Aceite de oliva' },
+                '__manteca': { nombre: 'Manteca' },
+              }
+            : {
+                '__mixta': { nombre: 'Mixta / Rosa' },
+              };
+          const extra = extrasMap[salsaPorcionId];
+          if (extra) {
+            const grupoNombreSintetico = salsaTipo === 'SIMPLE' ? 'Tipo — Salsa simple' : 'Tipo — Salsa especial';
+            modificadores.push({
+              grupoId: salsasDataActiva.producto.id, // sentinel — no es un grupoId real, pero el schema acepta string
+              grupoNombre: grupoNombreSintetico,
+              opcionId: salsaPorcionId, // ej. "__aceite_oliva" — string libre
+              opcionNombre: extra.nombre,
+              deltaPrecio: '0',
+            });
+          }
+        }
+      }
+
       items.push({
         productoId: producto.id,
         productoNombre: producto.nombre,
@@ -2032,59 +2083,7 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
         modificadores,
         observacion: observacion || undefined,
         cocinaInterviene: producto.tipoProducto.cocinaInterviene,
-        parteDeComboInstancia: instanciaId,
       });
-
-      // 2. La salsa elegida × N (incluida con la pasta — precio 0)
-      const salsasDataActiva = producto.incluyeSalsa === 'SIMPLE' ? salsasData.simple : salsasData.especial;
-      const salsaTipo = producto.incluyeSalsa;
-      if (salsaPorcionId && salsasDataActiva) {
-        const saborSalsaReal = salsasDataActiva.sabores.find((s) => s.opcionId === salsaPorcionId);
-        if (saborSalsaReal) {
-          items.push({
-            productoId: salsasDataActiva.producto.id,
-            productoNombre: `Salsa ${saborSalsaReal.nombre} (incluida)`,
-            formaVenta: 'UNIDAD',
-            unidadPrecio: 'POR_UNIDAD',
-            cantidad: N,
-            precioUnitario: 0,
-            modificadores: [{
-              grupoId: saborSalsaReal.grupoId,
-              grupoNombre: saborSalsaReal.grupoNombre,
-              opcionId: saborSalsaReal.opcionId,
-              opcionNombre: saborSalsaReal.nombre,
-              deltaPrecio: saborSalsaReal.deltaPrecio,
-            }],
-            cocinaInterviene: false,
-            parteDeComboInstancia: instanciaId,
-          });
-        } else {
-          const extrasMap: Record<string, { nombre: string; conCargo: boolean }> = salsaTipo === 'SIMPLE'
-            ? {
-                '__aceite': { nombre: 'Aceite', conCargo: false },
-                '__aceite_oliva': { nombre: 'Aceite de oliva', conCargo: false },
-                '__manteca': { nombre: 'Manteca', conCargo: false },
-              }
-            : {
-                '__mixta': { nombre: 'Mixta / Rosa', conCargo: true },
-              };
-          const extra = extrasMap[salsaPorcionId];
-          if (extra) {
-            items.push({
-              productoId: salsasDataActiva.producto.id,
-              productoNombre: `${extra.nombre} (incluida)`,
-              formaVenta: 'UNIDAD',
-              unidadPrecio: 'POR_UNIDAD',
-              cantidad: N,
-              precioUnitario: 0,
-              modificadores: [],
-              observacion: salsaTipo === 'SIMPLE' ? `Acompañamiento (con ${producto.nombre})` : `Salsa ${extra.nombre.toLowerCase()}`,
-              cocinaInterviene: false,
-              parteDeComboInstancia: instanciaId,
-            });
-          }
-        }
-      }
     } else {
       // Modo normal: multi-cantidad por sabor (ej. pasta fresca para llevar)
       for (const s of sabores) {

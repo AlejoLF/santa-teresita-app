@@ -17,7 +17,7 @@ interface ItemVenta {
   precioUnitario: string;
   totalLinea: string;
   observacion?: string | null;
-  modificadoresAplicados?: Array<{ opcionNombre: string }> | null;
+  modificadoresAplicados?: Array<{ opcionNombre: string; grupoNombre?: string | null }> | null;
   cocinaInterviene: boolean;
   parteDeComboInstancia?: string | null;
 }
@@ -308,16 +308,33 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
                 Esta venta no tiene items.
               </p>
             )}
-            {venta.items.map((item) => (
+            {venta.items.map((item) => {
+              // Diferenciamos modificadores "salsa incluida" (van inline al
+              // lado del nombre como aclaración) de los modificadores normales
+              // tipo sabor de pasta (van debajo con `›` como antes).
+              const modsSalsa = (item.modificadoresAplicados ?? []).filter((m) =>
+                m.grupoNombre?.startsWith('Tipo — Salsa'),
+              );
+              const modsOtros = (item.modificadoresAplicados ?? []).filter(
+                (m) => !m.grupoNombre?.startsWith('Tipo — Salsa'),
+              );
+              return (
               <div key={item.id} className="px-4 py-3 flex justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline gap-2">
-                    <span className="font-medium text-ink-900">{item.nombreSnapshot}</span>
+                    <span className="font-medium text-ink-900">
+                      {item.nombreSnapshot}
+                      {modsSalsa.map((m, i) => (
+                        <span key={i} className="text-ink-500 font-normal">
+                          {' '}({m.opcionNombre})
+                        </span>
+                      ))}
+                    </span>
                     {item.cocinaInterviene && (
                       <span className="text-2xs text-saffron-600">🍳 cocina</span>
                     )}
                   </div>
-                  {item.modificadoresAplicados?.map((m, i) => (
+                  {modsOtros.map((m, i) => (
                     <div key={i} className="text-xs text-ink-500">
                       › {m.opcionNombre}
                     </div>
@@ -351,7 +368,8 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {editable && (

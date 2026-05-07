@@ -36,9 +36,14 @@ export const MetodoPagoEnum = z.enum([
 ]);
 
 export const ModificadorAplicadoSchema = z.object({
-  grupoId: z.string().uuid(),
+  // grupoId/opcionId aceptan cualquier string (no estrictamente UUID) — esto
+  // permite incluir "etiquetas libres" como "Aceite de oliva" o "Manteca" que
+  // van con una porción simple pero NO existen como OpcionModificador en la DB
+  // (son acompañamientos sin costo extra). El campo se persiste como JSON, así
+  // que no hay FK que enforzar — basta con que sea string.
+  grupoId: z.string(),
   grupoNombre: z.string(),
-  opcionId: z.string().uuid(),
+  opcionId: z.string(),
   opcionNombre: z.string(),
   deltaPrecio: z.string(),
 });
