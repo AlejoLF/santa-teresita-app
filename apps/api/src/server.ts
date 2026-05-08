@@ -18,6 +18,7 @@ import authRoutes from './routes/auth.js';
 import catalogoRoutes from './routes/catalogo.js';
 import ventasRoutes from './routes/ventas.js';
 import adminRoutes from './routes/admin.js';
+import analyticsRoutes from './routes/analytics.js';
 import proveedoresRoutes from './routes/proveedores.js';
 import empleadosRoutes from './routes/empleados.js';
 import configuracionRoutes from './routes/configuracion.js';
@@ -82,6 +83,7 @@ export async function buildServer() {
       await api.register(catalogoRoutes);
       await api.register(ventasRoutes);
       await api.register(adminRoutes);
+      await api.register(analyticsRoutes);
       await api.register(proveedoresRoutes);
       await api.register(empleadosRoutes);
       await api.register(configuracionRoutes);
