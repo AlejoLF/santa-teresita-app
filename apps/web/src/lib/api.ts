@@ -77,12 +77,48 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
     return res.body as T;
   }
 
-  const res = await fetch(`${BASE_URL}${path}`, {
-    method,
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const isWrite = method !== 'GET';
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      method,
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (e) {
+    // Error de red (cloud caída, internet flaky, etc.). Para writes, auto-
+    // encolamos en el outbox local — el flusher en background los va a
+    // reintentar cuando la cloud vuelva. Para reads, propagamos el error
+    // (los reads no se pueden "encolar", el usuario tiene que reintentar).
+    if (isWrite) {
+      try {
+        await fetch(`${BASE_URL}/sync/queue`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ method, url: path, body }),
+        });
+        // Devolvemos un objeto especial que el caller puede detectar para
+        // mostrar UX optimista ("guardado, sincronizando...").
+        throw new ApiError(
+          202,
+          'Sin conexión — guardado localmente, se va a sincronizar cuando vuelva',
+          { queued: true },
+        );
+      } catch (queueErr) {
+        if (queueErr instanceof ApiError) throw queueErr;
+        // Si NI la API local responde (catastrófico — la API local crasheó),
+        // tiramos el error original.
+        throw new ApiError(
+          0,
+          e instanceof Error ? e.message : 'Error de red',
+          undefined,
+        );
+      }
+    }
+    throw new ApiError(0, e instanceof Error ? e.message : 'Error de red', undefined);
+  }
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
     throw new ApiError(res.status, (errBody as { error?: string })?.error ?? `HTTP ${res.status}`, errBody);

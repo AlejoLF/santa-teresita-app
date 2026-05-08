@@ -502,6 +502,10 @@ function startApi(cloudDbUrl) {
       API_HOST: '127.0.0.1',
       API_PORT: String(API_PORT),
       API_CORS_ORIGINS: `http://127.0.0.1:${WEB_PORT},http://localhost:${WEB_PORT}`,
+      // Path del SQLite que persiste el outbox (writes pendientes cuando
+      // cloud cae). Vive en data/ del usuario, sobrevive uninstall si
+      // deleteAppDataOnUninstall=false.
+      OUTBOX_DB_PATH: path.join(dataDir(), 'outbox.sqlite'),
       AUTH_SECRET: getOrCreateSecret('AUTH_SECRET'),
       AUDIT_HASH_SALT: getOrCreateSecret('AUDIT_HASH_SALT'),
       // Token compartido con el local-agent para que pueda autenticar

@@ -19,6 +19,8 @@ import catalogoRoutes from './routes/catalogo.js';
 import ventasRoutes from './routes/ventas.js';
 import adminRoutes from './routes/admin.js';
 import analyticsRoutes from './routes/analytics.js';
+import syncRoutes from './routes/sync.js';
+import { startOutboxFlusher } from './services/outbox-flusher.js';
 import proveedoresRoutes from './routes/proveedores.js';
 import empleadosRoutes from './routes/empleados.js';
 import configuracionRoutes from './routes/configuracion.js';
@@ -84,6 +86,7 @@ export async function buildServer() {
       await api.register(ventasRoutes);
       await api.register(adminRoutes);
       await api.register(analyticsRoutes);
+      await api.register(syncRoutes);
       await api.register(proveedoresRoutes);
       await api.register(empleadosRoutes);
       await api.register(configuracionRoutes);
@@ -147,6 +150,15 @@ try {
   app.log.info(
     `🍝 API Santa Teresita escuchando en http://${config.API_HOST}:${config.API_PORT}`,
   );
+
+  // Iniciar el flusher del outbox — reintenta writes que se acumularon mientras
+  // la cloud estaba caída. Cada 5s procesa el siguiente evento pendiente.
+  // Si nunca se cae la cloud, el flusher es un no-op (idle ticks).
+  startOutboxFlusher({
+    apiBaseUrl: `http://${config.API_HOST}:${config.API_PORT}/api/v1`,
+    agentToken: process.env.AGENT_API_TOKEN,
+  });
+  app.log.info('Outbox flusher iniciado (interval 5s)');
 } catch (err) {
   app.log.error(err);
   process.exit(1);

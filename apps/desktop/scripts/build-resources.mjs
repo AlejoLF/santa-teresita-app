@@ -78,6 +78,10 @@ function buildApi() {
     '.prisma/client',
     'bcryptjs',
     'pino',
+    // better-sqlite3 tiene binding nativo (.node) — esbuild no puede bundlearlo,
+    // tiene que ir como dep real en resources/api/node_modules. Se usa para
+    // el outbox local de writes pendientes (offline resilience).
+    'better-sqlite3',
     // Fastify y plugins son ESM "modernos" — bundlearlos a CJS suele funcionar pero
     // ante la duda los dejamos external y los traemos por npm install plano.
     // pino-pretty NO se incluye: solo se usa en dev (server.ts línea 33-36 lo
@@ -103,6 +107,9 @@ function buildApi() {
       '@prisma/client': apiPkg.dependencies['@prisma/client'] ?? '^5.22.0',
       bcryptjs: apiPkg.dependencies['bcryptjs'] ?? '^2.4.3',
       pino: apiPkg.dependencies['pino'] ?? '^9.5.0',
+      // better-sqlite3: backend del outbox local. Native binding, ship con
+      // prebuild para Win x64 (incluido en el paquete npm).
+      'better-sqlite3': apiPkg.dependencies['better-sqlite3'] ?? '^11.6.0',
       // pino-pretty solo se usa en dev — no se bundlea en el .exe
     },
   };

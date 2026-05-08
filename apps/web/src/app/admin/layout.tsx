@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { SyncStatusBadge } from '@/components/admin/SyncStatusBadge';
 
 interface NavItem {
   label: string;
@@ -187,6 +188,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             Sesión Admin · <span className="text-ink-700 font-medium">{usuario?.nombre}</span>
           </div>
           <div className="flex items-center gap-4">
+            <SyncStatusBadge />
             <button
               onClick={() => router.push('/cargar-pedido')}
               className="bg-teresita-700 text-cream-50 hover:bg-teresita-900 px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5"
