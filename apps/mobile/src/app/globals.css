@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* PWA-specific: cuando se instala como app en iOS, no queremos selección de
+   texto random ni el highlight tap azul que da Safari. */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: #fdfbf7;
+  color: #2a2a28;
+  font-family: var(--font-body, system-ui), sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar estilo iOS — sutil, no agresivo. */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(92, 92, 88, 0.3);
+  border-radius: 3px;
+}
+
+/* Safe area para notch/home indicator en iPhone X+ */
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
