@@ -31,7 +31,8 @@
     "cloud:reset-schema": "node --env-file=.env scripts/cloud/reset-schema.mjs",
     "cloud:setup-sync": "node --env-file=.env scripts/cloud/setup-sync-and-rls.mjs",
     "cloud:seed": "node --env-file=.env scripts/cloud/seed-with-retry.mjs",
-    "cloud:status": "node --env-file=.env scripts/cloud/status.mjs"
+    "cloud:status": "node --env-file=.env scripts/cloud/status.mjs",
+    "cloud:create-analytics-view": "node --env-file=.env scripts/cloud/create-analytics-view.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
