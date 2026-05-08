@@ -214,88 +214,166 @@ export interface TicketClientePayload {
   cliente: string;
   vendedor: string;
   pcOrigen: string;
+  /** Items con valores numéricos como string sin formatear (ej: "1234.56"). */
   items: Array<{ cantidad: string; nombre: string; precio: string; subtotal: string }>;
   subtotal: string;
   descuento?: { pct: number; monto: string } | null;
   total: string;
   pago: { metodo: string; recibido?: string; cambio?: string };
+  /** ISO date string. El renderer lo formatea como DD/MM/YYYY HH:MM:SS en TZ AR. */
   fecha: string;
 }
 
+// ── Helpers de formato ────────────────────────────────────────────────
+
+/** "1234.56" → "1.234,56" (formato argentino). Acepta number o string. */
+function formatARS(v: string | number): string {
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!isFinite(n)) return String(v);
+  return n.toLocaleString('es-AR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/** ISO o Date → "DD/MM/YYYY HH:MM:SS" en TZ Argentina. */
+function formatFechaAR(input: string | Date): string {
+  const d = typeof input === 'string' ? new Date(input) : input;
+  if (isNaN(d.getTime())) return String(input);
+  return d
+    .toLocaleString('es-AR', {
+      timeZone: 'America/Argentina/Buenos_Aires',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    })
+    .replace(',', '');
+}
+
+/**
+ * Línea tabular de 4 columnas para tickets de 42 chars de ancho.
+ * Layout: Cant(5) ' ' Desc(15) ' ' Unitario(9) ' ' Monto(10) = 42.
+ * Si la descripción excede los 15 chars la truncamos con '…'.
+ */
+function rowTabular(
+  cant: string,
+  desc: string,
+  unitario: string,
+  monto: string,
+  width = 42,
+): string[] {
+  const CANT_W = 5;
+  const UNIT_W = 9;
+  const MONTO_W = 10;
+  const DESC_W = width - CANT_W - UNIT_W - MONTO_W - 3;
+  const cantStr = cant.length > CANT_W ? cant.slice(0, CANT_W) : cant.padEnd(CANT_W);
+  const unitStr = unitario.padStart(UNIT_W).slice(-UNIT_W);
+  const montoStr = monto.padStart(MONTO_W).slice(-MONTO_W);
+  // Si nombre es largo, partimos a 2 líneas: la primera con cant/unit/monto,
+  // la segunda solo el resto del nombre indentado.
+  if (desc.length <= DESC_W) {
+    return [`${cantStr} ${desc.padEnd(DESC_W)} ${unitStr} ${montoStr}`];
+  }
+  const head = desc.slice(0, DESC_W);
+  const tail = desc.slice(DESC_W).slice(0, DESC_W); // máximo 2 líneas
+  return [
+    `${cantStr} ${head} ${unitStr} ${montoStr}`,
+    `${' '.repeat(CANT_W)} ${tail.padEnd(DESC_W)}${' '.repeat(UNIT_W + MONTO_W + 2)}`,
+  ];
+}
+
 export async function imprimirTicketCliente(payload: TicketClientePayload): Promise<void> {
-  // El ticket cliente se imprime en la comandera 1 (Mostrador) — junto con
-  // la comanda del pedido (la cocinera lee la comanda, el cliente recibe este
-  // ticket fiscal en la mano).
   const printer = makePrinter('MOSTRADOR');
 
+  // ── Header ──
   printer.alignCenter();
   printer.bold(true);
-  printer.println('SANTA TERESITA PASTAS');
+  printer.println('Santa Teresita Pastas');
   printer.bold(false);
   printer.println('Av. 44 e. 12 y Plaza Paso');
-  printer.println('La Plata, Bs. As.');
   printer.drawLine();
 
+  // ── Datos venta ──
   printer.alignLeft();
-  printer.println(`Venta:    ${payload.numeroVenta}`);
-  printer.println(`Orden:    # ${String(payload.numeroOrden).padStart(3, '0')}`);
-  printer.println(`Cliente:  ${payload.cliente}`);
-  printer.println(`Vendedor: ${payload.vendedor} (${payload.pcOrigen})`);
+  printer.println(`Venta: ${payload.numeroVenta}`);
+  printer.println(`Cliente: ${payload.cliente}`);
+  printer.println(`Vendedor: ${payload.vendedor}`);
   printer.drawLine();
 
+  // ── Tabla de items ──
+  printer.println(rowTabular('Cant.', 'Descripción', 'Unitario', 'Monto')[0]!);
+  printer.newLine();
   for (const it of payload.items) {
-    printer.println(`${it.cantidad.padEnd(8)} ${it.nombre}`);
-    printer.alignRight();
-    printer.println(`${it.precio} = ${it.subtotal}`);
-    printer.alignLeft();
+    const lineas = rowTabular(
+      it.cantidad,
+      it.nombre,
+      formatARS(it.precio),
+      formatARS(it.subtotal),
+    );
+    for (const linea of lineas) printer.println(linea);
   }
   printer.drawLine();
 
+  // ── Totales ──
   printer.alignRight();
-  printer.println(`Subtotal: $ ${payload.subtotal}`);
+  printer.println(`Subtotal: $${formatARS(payload.subtotal)}`);
   if (payload.descuento) {
-    printer.println(`Descuento ${payload.descuento.pct}%: -$ ${payload.descuento.monto}`);
+    printer.println(
+      `-> Descuento ${payload.descuento.pct}% (-${payload.descuento.pct},00 %)`,
+    );
   }
   printer.bold(true);
   printer.setTextDoubleHeight();
-  printer.println(`TOTAL: $ ${payload.total}`);
+  printer.println(`TOTAL: $${formatARS(payload.total)}`);
   printer.setTextNormal();
   printer.bold(false);
   printer.newLine();
 
+  // ── Método de pago (siempre, no solo efectivo) ──
   printer.alignLeft();
-  printer.println(`Pago:    ${payload.pago.metodo}`);
-  if (payload.pago.recibido) printer.println(`Recibí:  $ ${payload.pago.recibido}`);
-  if (payload.pago.cambio) printer.println(`Cambio:  $ ${payload.pago.cambio}`);
+  printer.println(`Forma de pago: ${payload.pago.metodo}`);
+  if (payload.pago.recibido) {
+    printer.println(`Recibí: $${formatARS(payload.pago.recibido)}`);
+  }
+  if (payload.pago.cambio && Number(payload.pago.cambio) > 0) {
+    printer.println(`Cambio: $${formatARS(payload.pago.cambio)}`);
+  }
   printer.newLine();
 
+  // ── Pie ──
   printer.alignCenter();
-  printer.println('¡Gracias por su compra!');
   printer.drawLine();
-
   printer.println('Ticket no fiscal');
-  printer.println(payload.fecha);
+  printer.println(`Fecha y hora: ${formatFechaAR(payload.fecha)}`);
+  printer.drawLine();
   printer.cut();
 
   await printer.execute();
 }
 
-// ─── Ticket de delivery (Wireframe 10 — Ticket 3) ─────────────────────
+// ─── Ticket de delivery ───────────────────────────────────────────────
 //
-// Se imprime al pasar venta a PROCESADA cuando modalidad = DELIVERY_*.
-// Sale en la láser Lexmark E460 (oficina delivery) en formato compacto.
-// Por ahora dejamos solo el tipo de payload documentado — el render concreto
-// se implementa cuando se conecte el local-agent con la impresora real.
+// Se imprime en la comandera DELIVERY al pasar la venta a PROCESADA cuando
+// modalidad es DELIVERY_PROPIO (ventas TELEFONO/WHATSAPP/WEB). Lleva todos
+// los datos que el motoquero necesita para entregar y cobrar:
+//   - Header del comercio + número de delivery
+//   - Cliente: nombre, teléfono, dirección, indicaciones
+//   - Items en columnas (Cant | Descripción | Precio | Total)
+//   - Total + costo de envío si aplica
+//   - Hora prometida de entrega
+//   - Forma de pago (importante: si es A_COBRAR el motoquero sabe cuánto cobrar)
+//   - Fecha y hora de impresión + usuario emisor
 
 export interface TicketDeliveryPayload {
+  numeroVenta: number;
   numeroOrden: number;
-  numeroDelivery: number;
   canal: string;
   idExterno?: string;
 
-  // Repartidor: viene del campo `delivery_info`. Solo uno de los dos:
-  //   - empleadoNombre = "Damián" o nombre del empleado del local
-  //   - empresaExterna = "DELIVERATE", "PEDIDOS YA", "RAPPI", "MELI"
   empleadoNombre?: string;
   empresaExterna?: string;
 
@@ -305,23 +383,138 @@ export interface TicketDeliveryPayload {
     direccion: string;
     indicaciones?: string;
   };
-  horaPrometida?: string;
+  /** ISO o null. Si está, sale como "Entrega: HH:MM hs.". */
+  horaPrometida?: string | null;
   items: Array<{
     cantidad: string;
     nombre: string;
     precioUnitario: string;
     subtotal: string;
-    componentesCombo?: string[];
   }>;
+  /** Costo de envío. Si > 0, sale como una línea ENVIO al final de los items. */
+  envio?: string | null;
   total: string;
   pago: {
     metodo: string;
+    /** PAGADO = ya pagó (online/anticipado). A_COBRAR = el motoquero cobra al entregar. */
     estado: 'PAGADO' | 'A_COBRAR';
     montoACobrar?: string;
   };
   cajero: string;
   pcOrigen: string;
+  /** ISO date string. */
   fecha: string;
+}
+
+export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Promise<void> {
+  const printer = makePrinter('DELIVERY');
+
+  // ── Header ──
+  printer.alignCenter();
+  printer.bold(true);
+  printer.println('Santa Teresita Pastas');
+  printer.bold(false);
+  printer.println('Av. 44 e. 12 y Plaza Paso');
+  printer.println('La Plata, Bs. As.');
+  printer.newLine();
+
+  printer.bold(true);
+  printer.setTextDoubleHeight();
+  printer.println(`Delivery: ${payload.numeroVenta}`);
+  printer.setTextNormal();
+  printer.bold(false);
+  printer.drawLine();
+
+  // ── Datos cliente ──
+  printer.alignLeft();
+  printer.bold(true);
+  printer.println(`Cliente: ${payload.cliente.nombre}`);
+  printer.bold(false);
+  if (payload.cliente.telefono) {
+    printer.println(`Teléfono: ${payload.cliente.telefono}`);
+  }
+  printer.println(`Dirección: ${payload.cliente.direccion}`);
+  if (payload.cliente.indicaciones) {
+    printer.println(`Indicaciones: ${payload.cliente.indicaciones}`);
+  }
+  if (payload.empleadoNombre) {
+    printer.println(`Repartidor: ${payload.empleadoNombre}`);
+  } else if (payload.empresaExterna) {
+    printer.println(`Repartidor: ${payload.empresaExterna}`);
+  }
+  printer.drawLine();
+
+  // ── Tabla de items (mismo helper que ticket cliente) ──
+  printer.println(rowTabular('Cant.', 'Descripción', 'Precio', 'Total')[0]!);
+  printer.newLine();
+  for (const it of payload.items) {
+    const lineas = rowTabular(
+      it.cantidad,
+      it.nombre,
+      formatARS(it.precioUnitario),
+      formatARS(it.subtotal),
+    );
+    for (const linea of lineas) printer.println(linea);
+  }
+  if (payload.envio && Number(payload.envio) > 0) {
+    const envioLineas = rowTabular(
+      '1',
+      'ENVIO',
+      formatARS(payload.envio),
+      formatARS(payload.envio),
+    );
+    for (const linea of envioLineas) printer.println(linea);
+  }
+  printer.drawLine();
+
+  // ── Total ──
+  printer.alignRight();
+  printer.bold(true);
+  printer.setTextDoubleHeight();
+  printer.println(`TOTAL: $${formatARS(payload.total)}`);
+  printer.setTextNormal();
+  printer.bold(false);
+  printer.newLine();
+
+  // ── Pago ──
+  printer.alignLeft();
+  printer.bold(true);
+  if (payload.pago.estado === 'A_COBRAR') {
+    printer.println(`A COBRAR: ${payload.pago.metodo}`);
+    if (payload.pago.montoACobrar) {
+      printer.println(`Monto a cobrar: $${formatARS(payload.pago.montoACobrar)}`);
+    }
+  } else {
+    printer.println(`PAGADO: ${payload.pago.metodo}`);
+  }
+  printer.bold(false);
+  printer.newLine();
+
+  // ── Hora de entrega ──
+  if (payload.horaPrometida) {
+    const d = new Date(payload.horaPrometida);
+    if (!isNaN(d.getTime())) {
+      const hhmm = d.toLocaleTimeString('es-AR', {
+        timeZone: 'America/Argentina/Buenos_Aires',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+      printer.alignCenter();
+      printer.bold(true);
+      printer.println(`Entrega: ${hhmm} hs.`);
+      printer.bold(false);
+    }
+  }
+
+  // ── Pie ──
+  printer.drawLine();
+  printer.alignLeft();
+  printer.println(`Impresión: ${formatFechaAR(payload.fecha)}`);
+  printer.println(`Usuario: ${payload.cajero}`);
+  printer.cut();
+
+  await printer.execute();
 }
 
 /**

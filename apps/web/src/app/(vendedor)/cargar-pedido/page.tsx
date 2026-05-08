@@ -7,6 +7,7 @@ import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { PedidosAbiertosList } from '@/components/PedidosAbiertosList';
+import { ClienteDeliveryFields } from '@/components/vendedor/ClienteDeliveryFields';
 import {
   useCart,
   selectSubtotal,
@@ -1181,43 +1182,18 @@ export default function CargarPedidoPage() {
                       </p>
                     </>
                   ) : (
-                    /* DELIVERY PROPIO (TELEFONO / WHATSAPP): nombre + tel + dirección */
-                    <>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <input
-                          type="text"
-                          value={cart.clienteNombre}
-                          onChange={(e) => cart.setClienteNombre(e.target.value)}
-                          placeholder="Nombre"
-                          maxLength={120}
-                          className="input text-sm py-1 px-2"
-                        />
-                        <input
-                          type="tel"
-                          value={cart.clienteTelefono}
-                          onChange={(e) => cart.setClienteTelefono(e.target.value)}
-                          placeholder="Teléfono"
-                          maxLength={40}
-                          className="input text-sm py-1 px-2"
-                        />
-                      </div>
-                      <input
-                        type="text"
-                        value={cart.direccionEntrega}
-                        onChange={(e) => cart.setDireccionEntrega(e.target.value)}
-                        placeholder="Dirección (calle, número, piso/dpto)"
-                        maxLength={300}
-                        className="input text-sm py-1 px-2 w-full"
-                      />
-                      <input
-                        type="text"
-                        value={cart.indicacionesEntrega}
-                        onChange={(e) => cart.setIndicacionesEntrega(e.target.value)}
-                        placeholder="Indicaciones (opcional — entre calles, timbre, color de casa…)"
-                        maxLength={300}
-                        className="input text-2xs py-1 px-2 w-full"
-                      />
-                    </>
+                    /* DELIVERY PROPIO (TELEFONO / WHATSAPP): nombre + tel + dirección
+                       con autocomplete por teléfono y búsqueda por nombre. */
+                    <ClienteDeliveryFields
+                      nombre={cart.clienteNombre}
+                      telefono={cart.clienteTelefono}
+                      direccion={cart.direccionEntrega}
+                      indicaciones={cart.indicacionesEntrega}
+                      onNombre={cart.setClienteNombre}
+                      onTelefono={cart.setClienteTelefono}
+                      onDireccion={cart.setDireccionEntrega}
+                      onIndicaciones={cart.setIndicacionesEntrega}
+                    />
                   )}
                 </div>
               );

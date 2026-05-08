@@ -20,6 +20,7 @@ import pino from 'pino';
 import {
   imprimirComanda,
   imprimirTicketCliente,
+  imprimirTicketDelivery,
   testPrinter,
   setPrinterConfig,
   getPrinterConfig,
@@ -204,11 +205,9 @@ async function procesar(t: TrabajoImpresion): Promise<void> {
         );
         break;
       case 'TICKET_DELIVERY':
-        // Sprint 4 — todavía no implementado el render dedicado de delivery.
-        // La comanda de cocina ya incluye los datos del cliente delivery, así
-        // que el motoquero puede usar esa misma copia. Reportamos OK para no
-        // dejar el job en ERROR permanente.
-        logger.warn({ id: t.id }, 'TICKET_DELIVERY: usar la comanda de cocina por ahora');
+        await imprimirTicketDelivery(
+          t.payload as unknown as Parameters<typeof imprimirTicketDelivery>[0],
+        );
         break;
       case 'TEST':
         await testPrinter(t.destino);

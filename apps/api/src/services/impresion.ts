@@ -146,14 +146,17 @@ export async function buildComandaPayload(
 
 /**
  * Encolar comandas para una venta — aplica las reglas de `determinarDestinos`
- * y crea N trabajos (uno por destino físico). Por ejemplo:
- *   - Venta mostrador con pasta caliente → 2 trabajos (MOSTRADOR + COCINA)
- *   - Venta WhatsApp con bebida → 1 trabajo (DELIVERY)
- *   - Venta RAPPI con cualquier cosa → 1 trabajo (COCINA)
+ * y crea trabajos del tipo correcto por destino:
+ *   - COCINA   → COMANDA_COCINA (formato comanda con items para preparar)
+ *   - DELIVERY → TICKET_DELIVERY (ticket completo: cliente, dirección, total,
+ *                forma de pago, hora prometida — todo lo que el motoquero
+ *                necesita para entregar y cobrar)
  *
- * Se llama al crear venta y al agregar items (la cocinera ve la versión
- * actualizada). Idempotente para retries: cada llamada genera trabajos
- * nuevos; los viejos quedan en la cola con su propia historia.
+ * MOSTRADOR no se encola desde acá — el ticket cliente sale en
+ * `encolarTicketClienteParaVenta` al finalizar la venta.
+ *
+ * Se llama al crear venta y al agregar items. Idempotente para retries: cada
+ * llamada genera trabajos nuevos.
  */
 export async function encolarComandasParaVenta(
   ventaId: string,
@@ -168,17 +171,156 @@ export async function encolarComandasParaVenta(
   const destinos = determinarDestinos(venta.canal, venta.tieneCocina);
   if (destinos.length === 0) return [];
 
-  const payload = await buildComandaPayload(ventaId, tx);
+  // Cocina y delivery tienen payloads distintos; las construimos solo si
+  // hace falta para no pegarle a la DB de más.
+  let comandaPayload: Record<string, unknown> | null = null;
+  let deliveryPayload: Record<string, unknown> | null = null;
+
   for (const destino of destinos) {
-    await encolarTrabajo({
-      tipo: TipoTrabajoImpresion.COMANDA_COCINA,
-      destino,
-      payload,
-      ventaId,
-      tx,
-    });
+    if (destino === 'COCINA') {
+      comandaPayload ??= await buildComandaPayload(ventaId, tx);
+      await encolarTrabajo({
+        tipo: TipoTrabajoImpresion.COMANDA_COCINA,
+        destino,
+        payload: comandaPayload,
+        ventaId,
+        tx,
+      });
+    } else if (destino === 'DELIVERY') {
+      deliveryPayload ??= await buildTicketDeliveryPayload(ventaId, tx);
+      if (deliveryPayload) {
+        await encolarTrabajo({
+          tipo: TipoTrabajoImpresion.TICKET_DELIVERY,
+          destino,
+          payload: deliveryPayload,
+          ventaId,
+          tx,
+        });
+      }
+    }
   }
   return destinos;
+}
+
+/**
+ * Construye el TicketDeliveryPayload con datos del cliente, dirección, items,
+ * total, hora prometida y forma de pago. Devuelve null si la venta no tiene
+ * deliveryInfo (no debería pasar para canales delivery, pero por las dudas).
+ */
+async function buildTicketDeliveryPayload(
+  ventaId: string,
+  client: DbClient = prisma,
+): Promise<Record<string, unknown> | null> {
+  const venta = await client.venta.findUnique({
+    where: { id: ventaId },
+    include: {
+      items: { orderBy: { orden: 'asc' } },
+      pagos: { orderBy: { fecha: 'asc' } },
+      cliente: true,
+      usuarioApertura: true,
+      deliveryInfo: true,
+    },
+  });
+  if (!venta) return null;
+
+  const snap = (venta.deliveryInfo?.direccionSnapshot as Record<string, unknown>) ?? {};
+  const clienteNombre =
+    (typeof snap.clienteNombre === 'string' && snap.clienteNombre) ||
+    (venta.cliente
+      ? `${venta.cliente.nombre}${venta.cliente.apellido ? ' ' + venta.cliente.apellido : ''}`
+      : 'Sin nombre');
+  const clienteTelefono =
+    (typeof snap.clienteTelefono === 'string' && snap.clienteTelefono) ||
+    venta.cliente?.telefono ||
+    undefined;
+
+  // direccion puede venir como string (snapshot legacy) o como objeto
+  // estructurado. Normalizamos a string.
+  let direccion = '';
+  if (typeof snap.direccion === 'string') {
+    direccion = snap.direccion;
+  } else if (snap.direccion && typeof snap.direccion === 'object') {
+    const d = snap.direccion as Record<string, unknown>;
+    const partes = [
+      [d.calle, d.numero].filter(Boolean).join(' '),
+      d.piso ? `piso ${d.piso}` : null,
+      d.depto ? `dpto ${d.depto}` : null,
+      d.entreCalles ? `entre ${d.entreCalles}` : null,
+      d.localidad,
+    ].filter((x): x is string => typeof x === 'string' && x.length > 0);
+    direccion = partes.join(', ');
+  } else {
+    // fallback: campos planos en el snapshot
+    const partes = [
+      [snap.calle, snap.numero].filter(Boolean).join(' '),
+      snap.piso ? `piso ${snap.piso}` : null,
+      snap.depto ? `dpto ${snap.depto}` : null,
+      snap.entreCalles ? `entre ${snap.entreCalles}` : null,
+    ].filter((x): x is string => typeof x === 'string' && x.length > 0);
+    direccion = partes.join(', ');
+  }
+
+  const indicaciones =
+    (typeof snap.indicaciones === 'string' && snap.indicaciones) ||
+    venta.deliveryInfo?.observaciones ||
+    undefined;
+
+  const empleadoNombre =
+    typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
+  const empresaExterna =
+    venta.deliveryInfo?.empresaExterna ??
+    (typeof snap._empresaExterna === 'string' ? snap._empresaExterna : undefined);
+
+  // Pago: si hay pagos confirmados → PAGADO. Sino A_COBRAR (motoquero cobra).
+  const pagosConfirmados = venta.pagos.filter((p) => p.estado === 'CONFIRMADO');
+  let pago: { metodo: string; estado: 'PAGADO' | 'A_COBRAR'; montoACobrar?: string };
+  if (pagosConfirmados.length > 0) {
+    const metodo =
+      pagosConfirmados.length === 1
+        ? pagosConfirmados[0]!.metodo
+        : pagosConfirmados.map((p) => p.metodo).join(' + ');
+    pago = { metodo, estado: 'PAGADO' };
+  } else {
+    // Default: efectivo a cobrar al entregar (caso típico).
+    pago = {
+      metodo: 'EFECTIVO',
+      estado: 'A_COBRAR',
+      montoACobrar: Number(venta.total).toFixed(2),
+    };
+  }
+
+  return {
+    numeroVenta: venta.numero,
+    numeroOrden: venta.numeroOrdenTurno,
+    canal: venta.canal,
+    idExterno: venta.idExternoCanal ?? undefined,
+    empleadoNombre,
+    empresaExterna,
+    cliente: {
+      nombre: clienteNombre,
+      telefono: clienteTelefono,
+      direccion,
+      indicaciones,
+    },
+    horaPrometida: venta.deliveryInfo?.horaPrometida
+      ? venta.deliveryInfo.horaPrometida.toISOString()
+      : null,
+    items: venta.items.map((it) => ({
+      cantidad: String(it.cantidad),
+      nombre: it.nombreSnapshot,
+      precioUnitario: Number(it.precioUnitario).toFixed(2),
+      subtotal: Number(it.totalLinea).toFixed(2),
+    })),
+    envio:
+      venta.modalidad === 'DELIVERY_PROPIO' && Number(venta.recargoCanal) > 0
+        ? Number(venta.recargoCanal).toFixed(2)
+        : null,
+    total: Number(venta.total).toFixed(2),
+    pago,
+    cajero: venta.usuarioApertura?.nombre ?? 'NN',
+    pcOrigen: venta.pcOrigen,
+    fecha: venta.fechaApertura.toISOString(),
+  };
 }
 
 /**
@@ -273,11 +415,6 @@ export async function encolarTicketClienteParaVenta(
       : null;
 
   const fechaIso = (venta.fechaFinalizacion ?? venta.fechaApertura).toISOString();
-  const fechaArg = new Date(fechaIso).toLocaleString('es-AR', {
-    timeZone: 'America/Argentina/Buenos_Aires',
-    dateStyle: 'short',
-    timeStyle: 'short',
-  });
 
   const payload = {
     numeroVenta: venta.numero,
@@ -295,7 +432,8 @@ export async function encolarTicketClienteParaVenta(
     descuento,
     total: Number(venta.total).toFixed(2),
     pago: pagoInfo,
-    fecha: fechaArg,
+    // ISO — el renderer del local-agent lo formatea como DD/MM/YYYY HH:MM:SS AR
+    fecha: fechaIso,
   };
 
   await encolarTrabajo({

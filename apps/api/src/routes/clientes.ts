@@ -394,4 +394,88 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
       return { ok: true };
     },
   );
+
+  // GET /clientes/buscar — autocomplete para vendedor en cargar-pedido.
+  // Acepta `telefono` (búsqueda por prefijo, hasta 5 resultados ordenados
+  // por uso) o `nombre` (búsqueda case-insensitive, hasta 20 resultados).
+  // Devuelve cliente + direcciones (ordenadas con la default primero) para
+  // que el frontend pueda autocompletar nombre/dirección/indicaciones.
+  //
+  // Acceso: ADMIN + VENDEDOR (la vendedora lo necesita en el flujo de
+  // cargar pedido por teléfono / WSP).
+  fastify.get(
+    '/clientes/buscar',
+    {
+      preHandler: fastify.requireAuth(),
+      schema: {
+        querystring: z.object({
+          telefono: z.string().min(2).optional(),
+          nombre: z.string().min(1).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const q = req.query as { telefono?: string; nombre?: string };
+      if (!q.telefono && !q.nombre) {
+        return reply.code(400).send({ error: 'Pasá `telefono` o `nombre`' });
+      }
+
+      const where = q.telefono
+        ? {
+            activo: true,
+            telefono: { contains: q.telefono.replace(/[\s-]/g, '') },
+          }
+        : {
+            activo: true,
+            OR: [
+              { nombre: { contains: q.nombre!, mode: 'insensitive' as const } },
+              { apellido: { contains: q.nombre!, mode: 'insensitive' as const } },
+            ],
+          };
+
+      const limit = q.telefono ? 5 : 20;
+      const clientes = await prisma.cliente.findMany({
+        where,
+        include: {
+          direcciones: {
+            // Default primero, después por etiqueta. Permite que el
+            // autocomplete por teléfono auto-elija la dirección de "Casa".
+            orderBy: [{ esDefault: 'desc' }, { etiqueta: 'asc' }],
+          },
+          _count: { select: { ventas: true } },
+        },
+        orderBy: [
+          // Más usados arriba (los con más ventas finalizadas tienden a
+          // ser los que la cajera busca primero)
+          { ventas: { _count: 'desc' } },
+          { nombre: 'asc' },
+        ],
+        take: limit,
+      });
+
+      return {
+        clientes: clientes.map((c) => ({
+          id: c.id,
+          tipo: c.tipo,
+          nombre: c.nombre,
+          apellido: c.apellido,
+          telefono: c.telefono,
+          email: c.email,
+          ventasCount: c._count.ventas,
+          direcciones: c.direcciones.map((d) => ({
+            id: d.id,
+            etiqueta: d.etiqueta,
+            calle: d.calle,
+            numero: d.numero,
+            piso: d.piso,
+            depto: d.depto,
+            entreCalles: d.entreCalles,
+            localidad: d.localidad,
+            indicaciones: d.indicaciones,
+            esDefault: d.esDefault,
+          })),
+        })),
+      };
+    },
+  );
 }
