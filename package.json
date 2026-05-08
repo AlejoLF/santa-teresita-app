@@ -25,11 +25,20 @@
     "db:studio": "pnpm --filter @sta/db studio",
     "docker:up": "docker compose -f infra/docker/docker-compose.dev.yml up -d",
     "docker:down": "docker compose -f infra/docker/docker-compose.dev.yml down",
-    "docker:logs": "docker compose -f infra/docker/docker-compose.dev.yml logs -f"
+    "docker:logs": "docker compose -f infra/docker/docker-compose.dev.yml logs -f",
+    "cloud:test": "node --env-file=.env scripts/cloud/test-connection.mjs",
+    "cloud:migrate": "node --env-file=.env scripts/cloud/migrate.mjs",
+    "cloud:reset-schema": "node --env-file=.env scripts/cloud/reset-schema.mjs",
+    "cloud:setup-sync": "node --env-file=.env scripts/cloud/setup-sync-and-rls.mjs",
+    "cloud:seed": "node --env-file=.env scripts/cloud/seed-with-retry.mjs",
+    "cloud:status": "node --env-file=.env scripts/cloud/status.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
     "prettier": "^3.3.3",
     "typescript": "^5.6.3"
+  },
+  "optionalDependencies": {
+    "pg": "^8.13.1"
   }
 }
