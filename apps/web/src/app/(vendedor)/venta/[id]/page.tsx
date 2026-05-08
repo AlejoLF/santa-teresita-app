@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { calcularDescuentoEfectivo } from '@sta/shared';
 import { cn } from '@/lib/cn';
+import { useVentaWatch } from '@/hooks/useVentaWatch';
 
 interface ItemVenta {
   id: string;
@@ -119,6 +120,16 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
   useEffect(() => {
     void refetch();
   }, [refetch]);
+
+  // Realtime: nos avisa si otro cliente (otra PC, mobile, sync agent)
+  // modificó la venta mientras la teníamos abierta. La política es LWW
+  // en el servidor; el aviso en UI es para que el cajero recargue antes
+  // de seguir tipeando sobre datos viejos.
+  const avisoRemoto = useVentaWatch(venta?.id ?? null);
+  const [avisoVisible, setAvisoVisible] = useState(false);
+  useEffect(() => {
+    if (avisoRemoto) setAvisoVisible(true);
+  }, [avisoRemoto]);
 
   // Focusear el textarea de motivo cuando se abre el modal de anulación.
   // `autoFocus` solo no alcanza en Electron — el modal se monta dinámicamente
@@ -287,6 +298,38 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
           </span>
         </div>
       </header>
+
+      {/* Toast Realtime: aviso de modificación remota mid-flight */}
+      {avisoVisible && avisoRemoto && (
+        <div className="bg-saffron-600 text-white px-4 py-2 flex items-center justify-between text-sm">
+          <div className="flex items-center gap-2">
+            <span>⚠</span>
+            <span>
+              Esta venta fue modificada por otro usuario
+              {avisoRemoto.nuevoEstado ? ` — nuevo estado: ${avisoRemoto.nuevoEstado}` : ''}
+              . Recargá para ver los cambios.
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setAvisoVisible(false);
+                void refetch();
+              }}
+              className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded text-2xs font-medium"
+            >
+              Recargar
+            </button>
+            <button
+              onClick={() => setAvisoVisible(false)}
+              className="text-white/80 hover:text-white text-lg leading-none"
+              aria-label="Cerrar"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-6 px-6 py-6 max-w-6xl mx-auto w-full">
         {/* Items */}
