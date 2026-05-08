@@ -228,11 +228,27 @@ async function startPostgres() {
     persistent: true,
   });
 
+  // En el primer arranque, intentamos copiar el cluster pre-baked (template
+  // generado en CI con initdb + schema + seed ya aplicados). Eso ahorra
+  // ~10 min de wall-clock de cara al usuario en la primera instalación.
+  // Si por algún motivo el template no existe (build viejo, dev mode, etc.)
+  // caemos al flow tradicional con `initialise()`.
+  let templateAplicado = false;
   if (isFirstRun) {
-    log('Primer arranque: inicializando cluster Postgres');
-    setSplashStatus('Inicializando base de datos (solo primera vez)...');
-    fs.mkdirSync(path.dirname(dbDir()), { recursive: true });
-    await pgInstance.initialise();
+    const templatePath = path.join(resourcesDir(), 'pgdata-template');
+    if (fs.existsSync(path.join(templatePath, 'PG_VERSION'))) {
+      log('Primer arranque: copiando cluster pre-baked desde ' + templatePath);
+      setSplashStatus('Inicializando base de datos (template pre-baked)...');
+      fs.mkdirSync(path.dirname(dbDir()), { recursive: true });
+      copiarDirectorio(templatePath, dbDir());
+      log('Cluster pre-baked copiado');
+      templateAplicado = true;
+    } else {
+      log('Primer arranque: template no encontrado, fallback a initdb tradicional');
+      setSplashStatus('Inicializando base de datos (solo primera vez)...');
+      fs.mkdirSync(path.dirname(dbDir()), { recursive: true });
+      await pgInstance.initialise();
+    }
   }
 
   await pgInstance.start();
@@ -260,18 +276,36 @@ async function startPostgres() {
     await adminClient.end();
   }
 
-  if (isFirstRun) {
+  if (isFirstRun && !templateAplicado) {
+    // Sin template: aplicamos schema + seed manualmente (~3-4 min).
     setSplashStatus('Aplicando esquema...');
     await applySchema();
     setSplashStatus('Cargando datos iniciales (productos, sabores, etc.)...');
     await runSeed();
     log('Seed completo');
+  } else if (isFirstRun && templateAplicado) {
+    // Con template: schema + seed ya están dentro. Pero corremos upgradeSchema
+    // por consistencia con installs upgradeados — no aplica nada nuevo si el
+    // template está al día con el schema.
+    log('Template ya tiene schema + seed aplicados — saltando applySchema/runSeed');
+    setSplashStatus('Verificando actualizaciones de base...');
+    await upgradeSchema();
   } else {
     // Upgrade-path: aplicar migraciones idempotentes para columnas/tablas nuevas
     // que se agregaron entre versiones. Cada bloque debe ser seguro de re-ejecutar.
     setSplashStatus('Verificando actualizaciones de base...');
     await upgradeSchema();
   }
+}
+
+/**
+ * Copia un directorio recursivamente. Usamos fs.cpSync (Node 16.7+) que es
+ * la API nativa de Node. Si más adelante hace falta progreso o resumibilidad,
+ * cambiar por una lib (ej. fs-extra) — por ahora KISS.
+ */
+function copiarDirectorio(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  fs.cpSync(src, dest, { recursive: true });
 }
 
 /**

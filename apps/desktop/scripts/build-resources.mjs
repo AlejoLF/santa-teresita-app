@@ -11,7 +11,7 @@
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_DIR = path.resolve(__dirname, '..');
@@ -287,6 +287,13 @@ function buildAgent() {
   run('npm install --omit=dev --no-package-lock --no-fund --no-audit', agentDir);
 }
 
+async function prebakePgdata() {
+  step('Pre-bake del cluster Postgres (initdb + schema + seed)');
+  // Importamos el script — corre side-effects al cargar.
+  const url = pathToFileURL(path.join(DESKTOP_DIR, 'scripts', 'prebake-pgdata.mjs')).href;
+  await import(url);
+}
+
 async function main() {
   reset();
   generateSchemaSql();
@@ -295,6 +302,8 @@ async function main() {
   buildWeb();
   buildAgent();
   copyExcels();
+  // Pre-bake al final: necesita api/seed/schema.sql ya construidos.
+  await prebakePgdata();
   step('✓ Resources listas en ' + RESOURCES);
 }
 

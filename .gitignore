@@ -75,6 +75,9 @@ apps/desktop/dist/
 # VC++ Redist se descarga en cada build (script ensure:vcredist) — 25MB de
 # binario que no aporta a git history, mejor regenerarlo on-demand.
 apps/desktop/build/vc_redist.x64.exe
+# Cluster Postgres pre-baked (regenerado en cada build de CI con initdb +
+# schema + seed). No tiene sentido commitearlo — es output, no source.
+apps/desktop/build/pgdata-template/
 
 # Postgres data dir (si alguien arranca el agente local en este directorio)
 pgdata/
