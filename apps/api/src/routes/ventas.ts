@@ -15,7 +15,10 @@ import {
 import { getOrCreateSesionActual } from '../services/sesion-caja.js';
 import { recordAudit } from '../services/audit.js';
 import { aprobarConPinAdmin } from '../services/auth.js';
-import { encolarComandasCanceladas } from '../services/impresion.js';
+import {
+  encolarComandasCanceladas,
+  encolarTicketClienteParaVenta,
+} from '../services/impresion.js';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta, EstadoPago } from '@sta/db';
 
@@ -366,10 +369,14 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           tx,
         });
 
+        // Encolamos el ticket del cliente DENTRO de la misma transacción.
+        // Si la transición rolleba, no queda print job huérfano. Solo se
+        // encola si canal=MOSTRADOR (el cliente está físicamente acá).
+        await encolarTicketClienteParaVenta(venta.id, tx);
+
         return updated;
       });
 
-      // TODO: encolar trabajo de impresión TICKET_CLIENTE (Sección 8)
       return finalizada;
     },
   );

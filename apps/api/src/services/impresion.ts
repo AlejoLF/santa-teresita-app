@@ -8,9 +8,13 @@ import { TipoTrabajoImpresion } from '@sta/db';
  * Encolar trabajos es idempotente vía `tx` opcional para que la creación de
  * la venta y la encolada del trabajo sean un único commit atómico.
  *
- * REGLAS DE ROUTING (qué venta va a qué comandera):
+ * REGLAS DE ROUTING (qué venta va a qué comandera) — SOLO PARA COMANDAS.
+ * El TICKET_CLIENTE va siempre a MOSTRADOR y se enqueua aparte en
+ * `encolarTicketClienteParaVenta` al finalizar la venta.
  *
- *   Comandera 1 = MOSTRADOR — todos los pedidos cobrados en mostrador
+ *   Comandera 1 = MOSTRADOR — solo TICKET_CLIENTE (no comandas, la cajera
+ *                              ve el pedido en pantalla y le entrega al
+ *                              cliente el ticket fiscal con totales).
  *   Comandera 2 = DELIVERY  — todos los pedidos de delivery propio
  *                              (TELEFONO/WHATSAPP/WEB con DELIVERY_PROPIO)
  *   Comandera 3 = COCINA    — pedidos con items que requieren preparación
@@ -19,8 +23,8 @@ import { TipoTrabajoImpresion } from '@sta/db';
  *
  * | Caso                                    | MOSTRADOR | DELIVERY | COCINA |
  * |-----------------------------------------|-----------|----------|--------|
- * | Mostrador + sin cocina                  | ✓         | ·        | ·      |
- * | Mostrador + con cocina                  | ✓         | ·        | ✓      |
+ * | Mostrador + sin cocina                  | ·         | ·        | ·      |
+ * | Mostrador + con cocina                  | ·         | ·        | ✓      |
  * | Delivery propio + sin cocina            | ·         | ✓        | ·      |
  * | Delivery propio + con cocina            | ·         | ✓        | ✓      |
  * | Apps externas (RAPPI/PYA/MELI/DELIVERATE)| ·        | ·        | ✓      |
@@ -55,9 +59,10 @@ export function determinarDestinos(
     return tieneCocina ? ['DELIVERY', 'COCINA'] : ['DELIVERY'];
   }
 
-  // Mostrador (default para canales no clasificados): Comandera 1.
-  // + Cocina si tiene items que cocinan.
-  return tieneCocina ? ['MOSTRADOR', 'COCINA'] : ['MOSTRADOR'];
+  // Mostrador: solo va a cocina si hay items calientes. La cajera ve el
+  // pedido en pantalla, no necesita comanda en papel — el TICKET_CLIENTE
+  // se imprime aparte al finalizar (con precios, totales, header del comercio).
+  return tieneCocina ? ['COCINA'] : [];
 }
 
 interface EncolarArgs {
@@ -206,6 +211,101 @@ export async function encolarComandasCanceladas(
     });
   }
   return destinos;
+}
+
+/**
+ * Encola el TICKET_CLIENTE — comprobante con datos completos (precios,
+ * descuento, total, método de pago, fecha, header del comercio) que se
+ * imprime en la comandera de MOSTRADOR al finalizar la venta y se entrega
+ * al cliente.
+ *
+ * Sólo aplica para canal = MOSTRADOR (el cliente está físicamente en el
+ * local). Delivery propio + apps externas reciben el comprobante por otros
+ * medios (motoquero / la propia app).
+ *
+ * Para multi-pago se concatenan los métodos ("EFECTIVO + DEBITO"). Si es
+ * single y EFECTIVO, mostramos `recibido` + `cambio` para que cierre la
+ * conciliación de caja del cliente.
+ */
+export async function encolarTicketClienteParaVenta(
+  ventaId: string,
+  tx: Prisma.TransactionClient,
+): Promise<boolean> {
+  const venta = await tx.venta.findUnique({
+    where: { id: ventaId },
+    include: {
+      items: { orderBy: { orden: 'asc' } },
+      pagos: { orderBy: { fecha: 'asc' } },
+      cliente: true,
+      usuarioCierre: true,
+      usuarioApertura: true,
+    },
+  });
+  if (!venta) return false;
+  if (venta.canal !== 'MOSTRADOR') return false;
+
+  const pagosConfirmados = venta.pagos.filter((p) => p.estado === 'CONFIRMADO');
+  let pagoInfo: { metodo: string; recibido?: string; cambio?: string };
+  const primer = pagosConfirmados[0];
+  if (pagosConfirmados.length === 1 && primer) {
+    const isEfectivo = primer.metodo === 'EFECTIVO';
+    const cambio = Number(primer.cambioDado);
+    pagoInfo = {
+      metodo: primer.metodo,
+      recibido: isEfectivo ? Number(primer.monto).toFixed(2) : undefined,
+      cambio: isEfectivo && cambio > 0 ? cambio.toFixed(2) : undefined,
+    };
+  } else {
+    pagoInfo = { metodo: pagosConfirmados.map((p) => p.metodo).join(' + ') || 'MIXTO' };
+  }
+
+  const clienteNombre = venta.cliente
+    ? `${venta.cliente.nombre}${venta.cliente.apellido ? ' ' + venta.cliente.apellido : ''}`
+    : 'Mostrador';
+  const vendedorNombre =
+    venta.usuarioCierre?.nombre ?? venta.usuarioApertura?.nombre ?? 'NN';
+
+  const subtotal = Number(venta.subtotal);
+  const descuentoMonto = Number(venta.descuentoTotal);
+  const descuento =
+    descuentoMonto > 0 && subtotal > 0
+      ? { pct: Math.round((descuentoMonto / subtotal) * 100), monto: descuentoMonto.toFixed(2) }
+      : null;
+
+  const fechaIso = (venta.fechaFinalizacion ?? venta.fechaApertura).toISOString();
+  const fechaArg = new Date(fechaIso).toLocaleString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    dateStyle: 'short',
+    timeStyle: 'short',
+  });
+
+  const payload = {
+    numeroVenta: venta.numero,
+    numeroOrden: venta.numeroOrdenTurno,
+    cliente: clienteNombre,
+    vendedor: vendedorNombre,
+    pcOrigen: venta.pcOrigen,
+    items: venta.items.map((it) => ({
+      cantidad: String(it.cantidad),
+      nombre: it.nombreSnapshot,
+      precio: Number(it.precioUnitario).toFixed(2),
+      subtotal: Number(it.totalLinea).toFixed(2),
+    })),
+    subtotal: subtotal.toFixed(2),
+    descuento,
+    total: Number(venta.total).toFixed(2),
+    pago: pagoInfo,
+    fecha: fechaArg,
+  };
+
+  await encolarTrabajo({
+    tipo: TipoTrabajoImpresion.TICKET_CLIENTE,
+    destino: 'MOSTRADOR',
+    payload,
+    ventaId,
+    tx,
+  });
+  return true;
 }
 
 /**
