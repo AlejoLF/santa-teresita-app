@@ -723,7 +723,11 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         GROUP BY 1
       `);
 
-      // Aging cuentas a cobrar (pendientes de liquidar)
+      // Aging cuentas a cobrar (pendientes de liquidar). El "envejecimiento"
+      // se mide desde `creado_at` (cuando se generó la liquidación pendiente,
+      // típicamente al cerrar la venta con pago RAPPI/PYA/etc.) hasta hoy.
+      // Usamos `monto_bruto` (lo facturado, antes de comisión) — otra opción
+      // sería `monto_neto_esperado` (lo que vamos a cobrar realmente).
       const aging = await prisma.$queryRaw<
         Array<{
           cuenta: string;
@@ -736,17 +740,17 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
       >(Prisma.sql`
         SELECT
           ca.nombre AS cuenta,
-          COALESCE(SUM(lp.monto), 0)::text AS monto_total,
-          COALESCE(SUM(CASE WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - lp.fecha_pendiente)) <= 7 THEN lp.monto ELSE 0 END), 0)::text AS dias_0_7,
-          COALESCE(SUM(CASE WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - lp.fecha_pendiente)) BETWEEN 8 AND 15 THEN lp.monto ELSE 0 END), 0)::text AS dias_8_15,
-          COALESCE(SUM(CASE WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - lp.fecha_pendiente)) BETWEEN 16 AND 30 THEN lp.monto ELSE 0 END), 0)::text AS dias_16_30,
-          COALESCE(SUM(CASE WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - lp.fecha_pendiente)) > 30 THEN lp.monto ELSE 0 END), 0)::text AS dias_31plus
+          COALESCE(SUM(lp.monto_bruto), 0)::text AS monto_total,
+          COALESCE(SUM(CASE WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - lp.creado_at)) <= 7 THEN lp.monto_bruto ELSE 0 END), 0)::text AS dias_0_7,
+          COALESCE(SUM(CASE WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - lp.creado_at)) BETWEEN 8 AND 15 THEN lp.monto_bruto ELSE 0 END), 0)::text AS dias_8_15,
+          COALESCE(SUM(CASE WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - lp.creado_at)) BETWEEN 16 AND 30 THEN lp.monto_bruto ELSE 0 END), 0)::text AS dias_16_30,
+          COALESCE(SUM(CASE WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - lp.creado_at)) > 30 THEN lp.monto_bruto ELSE 0 END), 0)::text AS dias_31plus
         FROM liquidaciones_pendientes lp
         JOIN cuentas_a_cobrar ca ON ca.id = lp.cuenta_a_cobrar_id
         WHERE lp.estado = 'PENDIENTE'
         GROUP BY ca.nombre
-        HAVING SUM(lp.monto) > 0
-        ORDER BY SUM(lp.monto) DESC
+        HAVING SUM(lp.monto_bruto) > 0
+        ORDER BY SUM(lp.monto_bruto) DESC
       `);
 
       return { canales, dso, aging };
@@ -766,6 +770,9 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
       const q = req.query as z.infer<typeof QuerySchema>;
       const { desde, hasta } = resolverRango(q);
 
+      // Performance por vendedor: agregamos en CTEs separadas para evitar
+      // subqueries correlacionadas. Una para totales por venta, otra para
+      // items-por-venta promedio.
       const vendedores = await prisma.$queryRaw<
         Array<{
           usuario_id: string;
@@ -778,33 +785,53 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
           items_por_venta: number;
         }>
       >(Prisma.sql`
+        WITH ventas_periodo AS (
+          SELECT
+            v.usuario_apertura_id AS usuario_id,
+            v.id AS venta_id,
+            v.estado::text AS estado,
+            v.total
+          FROM ventas v
+          WHERE COALESCE(v.fecha_finalizacion, v.fecha_anulacion, v.fecha_apertura) >= ${desde}
+            AND COALESCE(v.fecha_finalizacion, v.fecha_anulacion, v.fecha_apertura) <= ${hasta}
+        ),
+        agregado AS (
+          SELECT
+            usuario_id,
+            COUNT(*) FILTER (WHERE estado = 'FINALIZADA')::int AS cantidad,
+            COALESCE(SUM(CASE WHEN estado = 'FINALIZADA' THEN total ELSE 0 END), 0) AS monto_num,
+            COALESCE(AVG(CASE WHEN estado = 'FINALIZADA' THEN total ELSE NULL END), 0) AS ticket_num,
+            COUNT(*) FILTER (WHERE estado = 'ANULADA')::int AS anuladas_cantidad,
+            COUNT(*)::int AS total_eventos
+          FROM ventas_periodo
+          GROUP BY usuario_id
+        ),
+        items_por_venta_prom AS (
+          SELECT
+            vp.usuario_id,
+            ROUND(AVG(item_count)::numeric, 1)::float AS items_por_venta
+          FROM ventas_periodo vp
+          JOIN (
+            SELECT venta_id, COUNT(*) AS item_count
+            FROM items_venta
+            GROUP BY venta_id
+          ) ic ON ic.venta_id = vp.venta_id
+          WHERE vp.estado = 'FINALIZADA'
+          GROUP BY vp.usuario_id
+        )
         SELECT
           u.id::text AS usuario_id,
           u.nombre,
-          COUNT(*) FILTER (WHERE v.estado = 'FINALIZADA')::int AS cantidad,
-          COALESCE(SUM(CASE WHEN v.estado = 'FINALIZADA' THEN v.total ELSE 0 END), 0)::text AS monto,
-          COALESCE(AVG(CASE WHEN v.estado = 'FINALIZADA' THEN v.total ELSE NULL END), 0)::text AS ticket_promedio,
-          COUNT(*) FILTER (WHERE v.estado = 'ANULADA')::int AS anuladas_cantidad,
-          ROUND(
-            COUNT(*) FILTER (WHERE v.estado = 'ANULADA')::numeric
-            / NULLIF(COUNT(*), 0) * 100, 2
-          )::float AS anuladas_pct,
-          COALESCE(ROUND(
-            (SELECT AVG(c) FROM (
-              SELECT COUNT(*) AS c FROM items_venta i WHERE i.venta_id IN (
-                SELECT v2.id FROM ventas v2 WHERE v2.usuario_apertura_id = u.id
-                  AND v2.estado = 'FINALIZADA'
-                  AND v2.fecha_finalizacion >= ${desde}
-                  AND v2.fecha_finalizacion <= ${hasta}
-              ) GROUP BY i.venta_id
-            ) sub)::numeric, 1
-          )::float, 0) AS items_por_venta
-        FROM usuarios u
-        JOIN ventas v ON v.usuario_apertura_id = u.id
-        WHERE COALESCE(v.fecha_finalizacion, v.fecha_anulacion, v.fecha_apertura) >= ${desde}
-          AND COALESCE(v.fecha_finalizacion, v.fecha_anulacion, v.fecha_apertura) <= ${hasta}
-        GROUP BY u.id, u.nombre
-        ORDER BY monto::numeric DESC
+          a.cantidad,
+          a.monto_num::text AS monto,
+          a.ticket_num::text AS ticket_promedio,
+          a.anuladas_cantidad,
+          ROUND(a.anuladas_cantidad::numeric / NULLIF(a.total_eventos, 0) * 100, 2)::float AS anuladas_pct,
+          COALESCE(ipv.items_por_venta, 0) AS items_por_venta
+        FROM agregado a
+        JOIN usuarios u ON u.id = a.usuario_id
+        LEFT JOIN items_por_venta_prom ipv ON ipv.usuario_id = a.usuario_id
+        ORDER BY a.monto_num DESC
       `);
 
       // Cocina: tiempo desde "venta finalizada" a "comanda lista" (proxy)
