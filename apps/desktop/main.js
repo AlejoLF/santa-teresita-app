@@ -276,20 +276,15 @@ async function startPostgres() {
     await adminClient.end();
   }
 
-  if (isFirstRun && !templateAplicado) {
-    // Sin template: aplicamos schema + seed manualmente (~3-4 min).
+  if (isFirstRun) {
+    // Tanto con template como sin: schema + seed los aplicamos en la PC del
+    // user. El template solo nos ahorró el initdb (los CI runners no pueden
+    // pre-bakear schema/seed porque Postgres rehúsa arrancar como admin).
     setSplashStatus('Aplicando esquema...');
     await applySchema();
     setSplashStatus('Cargando datos iniciales (productos, sabores, etc.)...');
     await runSeed();
     log('Seed completo');
-  } else if (isFirstRun && templateAplicado) {
-    // Con template: schema + seed ya están dentro. Pero corremos upgradeSchema
-    // por consistencia con installs upgradeados — no aplica nada nuevo si el
-    // template está al día con el schema.
-    log('Template ya tiene schema + seed aplicados — saltando applySchema/runSeed');
-    setSplashStatus('Verificando actualizaciones de base...');
-    await upgradeSchema();
   } else {
     // Upgrade-path: aplicar migraciones idempotentes para columnas/tablas nuevas
     // que se agregaron entre versiones. Cada bloque debe ser seguro de re-ejecutar.
