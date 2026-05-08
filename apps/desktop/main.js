@@ -151,9 +151,71 @@ function setSplashStatus(text) {
 
 // ═══ Postgres ═════════════════════════════════════════════════════════════
 
+/**
+ * Verifica si un puerto local está ocupado intentando un connect rápido.
+ * Si conecta en menos de 500ms, hay alguien escuchando.
+ */
+async function puertoOcupado(port) {
+  return new Promise((resolve) => {
+    const net = require('net');
+    const socket = new net.Socket();
+    let resolved = false;
+    const done = (ocupado) => {
+      if (resolved) return;
+      resolved = true;
+      try { socket.destroy(); } catch {}
+      resolve(ocupado);
+    };
+    socket.setTimeout(500);
+    socket.on('connect', () => done(true));
+    socket.on('timeout', () => done(false));
+    socket.on('error', () => done(false));
+    socket.connect(port, '127.0.0.1');
+  });
+}
+
+/**
+ * Pre-cleanup antes de arrancar Postgres:
+ *   1. Si el puerto está libre PERO existe `postmaster.pid` → es stale,
+ *      lo borramos para que initdb no se queje.
+ *   2. Si el puerto está OCUPADO → tiramos error amigable explicando
+ *      que probablemente hay otra instancia corriendo, en vez de dejar
+ *      que embedded-postgres falle con "undefined".
+ *
+ * No matamos procesos huérfanos automáticamente porque podría ser otra app
+ * legítima del usuario usando ese puerto. Solo informamos.
+ */
+async function precheckPostgres() {
+  const ocupado = await puertoOcupado(PG_PORT);
+  if (ocupado) {
+    throw new Error(
+      `El puerto ${PG_PORT} ya está en uso. Probablemente hay otra instancia ` +
+        `de Santa Teresita corriendo. Cerrá la app desde la bandeja del sistema ` +
+        `(o desde el Administrador de Tareas → "Santa Teresita" + "postgres") ` +
+        `e intentá de nuevo.`,
+    );
+  }
+  // Puerto libre + postmaster.pid presente → stale, hay que limpiarlo o
+  // initdb tira "another server might be running".
+  const pidFile = path.join(dbDir(), 'postmaster.pid');
+  if (fs.existsSync(pidFile)) {
+    try {
+      fs.unlinkSync(pidFile);
+      log('Limpieza: postmaster.pid stale removido');
+    } catch (e) {
+      log('No se pudo borrar postmaster.pid stale: ' + (e?.message ?? e));
+    }
+  }
+}
+
 async function startPostgres() {
   setSplashStatus('Iniciando base de datos...');
   log('Iniciando Postgres embebido en ' + dbDir());
+
+  // Sanity check antes de spawnear pg — si el puerto está tomado por una
+  // instancia previa, fallamos con un mensaje accionable en vez de el
+  // críptico "FATAL: undefined" que daba embedded-postgres antes.
+  await precheckPostgres();
 
   const isFirstRun = !fs.existsSync(path.join(dbDir(), 'PG_VERSION'));
   const EP = await loadEmbeddedPostgres();
@@ -726,11 +788,26 @@ async function bootstrap() {
     // reiniciar ahora o después.
     setupAutoUpdater();
   } catch (err) {
-    log('FATAL: ' + (err && err.stack ? err.stack : err));
+    // Serializar el error de forma robusta — algunos throws de embedded-postgres
+    // y otras libs nativas tiran objetos sin .message ni .stack, lo que daba
+    // como resultado el infame "FATAL: undefined" que no le decía nada al usuario.
+    const mensaje = (() => {
+      if (!err) return 'Error desconocido (no se recibió objeto de error)';
+      if (typeof err === 'string') return err;
+      if (err.message) return String(err.message);
+      if (err.stack) return String(err.stack);
+      // Último recurso: enumerar las propias keys del error.
+      try {
+        const json = JSON.stringify(err, Object.getOwnPropertyNames(err));
+        if (json && json !== '{}') return json;
+      } catch {}
+      return `Error sin formato — type: ${typeof err}, ctor: ${err?.constructor?.name ?? 'unknown'}`;
+    })();
+    log('FATAL: ' + mensaje);
     if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
     dialog.showErrorBox(
       'Santa Teresita — Error de arranque',
-      `No se pudo iniciar la aplicación.\n\nError: ${err && err.message ? err.message : err}\n\nLog: ${logFile()}`,
+      `No se pudo iniciar la aplicación.\n\nError: ${mensaje}\n\nLog: ${logFile()}`,
     );
     app.quit();
   }
