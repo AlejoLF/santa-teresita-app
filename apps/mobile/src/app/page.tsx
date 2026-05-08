@@ -3,15 +3,18 @@ import { leerSesion } from '@/lib/auth';
 import { Dashboard } from '@/components/Dashboard';
 
 /**
- * Home — si hay sesión válida, muestra el Dashboard. Si no, redirige al login.
+ * Home — si hay sesión válida, muestra el Dashboard (ADMIN) o redirige a
+ * /cargar-pedido (VENDEDOR). Si no hay sesión, login.
  *
- * Esta page es Server Component, así que el check de sesión corre en el
- * servidor (no flash de contenido protegido al cliente).
+ * Server Component → el check corre en el servidor (sin flash de contenido).
  */
 export default async function HomePage() {
   const session = await leerSesion();
   if (!session) {
     redirect('/login');
   }
-  return <Dashboard nombre={session.nombre} />;
+  if (session.rol === 'VENDEDOR') {
+    redirect('/cargar-pedido');
+  }
+  return <Dashboard nombre={session.nombre} rol={session.rol} />;
 }

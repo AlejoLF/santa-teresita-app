@@ -22,7 +22,7 @@
 import { SignJWT, jwtVerify } from 'jose';
 import bcrypt from 'bcryptjs';
 import { cookies } from 'next/headers';
-import { queryOne } from './db';
+// query se importa dinámicamente dentro de verificarPin para mantener el bundle de auth chico
 
 const COOKIE_NAME = 'sta_mobile_session';
 const TOKEN_TTL_HOURS = 24 * 7; // 7 días
@@ -47,8 +47,10 @@ function getSecret(): Uint8Array {
 
 /**
  * Verifica el PIN contra `usuarios.pin_hash` y devuelve los datos del user
- * si matchea. NULL si no hay match. Solo retorna usuarios con rol ADMIN
- * — el flujo mobile NO permite VENDEDOR.
+ * si matchea. NULL si no hay match.
+ *
+ * Acepta ADMIN y VENDEDOR. El rol se devuelve en el JWT y los componentes
+ * lo usan para decidir qué mostrar (admin dashboard vs cargar-pedido).
  */
 export async function verificarPin(pin: string): Promise<{
   id: string;
@@ -57,31 +59,17 @@ export async function verificarPin(pin: string): Promise<{
 } | null> {
   if (!/^\d{4,8}$/.test(pin)) return null;
 
-  const usuarios = await queryOne<{ id: string; nombre: string; rol: string; pin_hash: string }>(
+  const { query } = await import('./db');
+  const rows = await query<{ id: string; nombre: string; rol: string; pin_hash: string }>(
     `SELECT id::text, nombre, rol::text, pin_hash
      FROM usuarios
-     WHERE rol = 'ADMIN' AND activo = true`,
+     WHERE rol IN ('ADMIN', 'VENDEDOR') AND activo = true`,
   );
-  // Hay múltiples ADMIN — buscamos en todos hasta match. Para 5 usuarios
-  // esto es trivial; si crecen mucho hay que indexar.
-  const todos = await queryOne<{ count: string }>(
-    `SELECT count(*)::text FROM usuarios WHERE rol = 'ADMIN' AND activo = true`,
-  );
-  if (Number(todos?.count ?? 0) > 1) {
-    // Actualmente queryOne devuelve solo 1. Necesitamos query() para múltiples.
-    const { query } = await import('./db');
-    const rows = await query<{ id: string; nombre: string; rol: string; pin_hash: string }>(
-      `SELECT id::text, nombre, rol::text, pin_hash FROM usuarios WHERE rol = 'ADMIN' AND activo = true`,
-    );
-    for (const u of rows) {
-      const ok = await bcrypt.compare(pin, u.pin_hash);
-      if (ok) return { id: u.id, nombre: u.nombre, rol: u.rol };
-    }
-    return null;
+  for (const u of rows) {
+    const ok = await bcrypt.compare(pin, u.pin_hash);
+    if (ok) return { id: u.id, nombre: u.nombre, rol: u.rol };
   }
-  if (!usuarios) return null;
-  const ok = await bcrypt.compare(pin, usuarios.pin_hash);
-  return ok ? { id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol } : null;
+  return null;
 }
 
 export async function crearSesion(user: { id: string; nombre: string; rol: string }) {
