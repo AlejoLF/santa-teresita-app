@@ -49,6 +49,14 @@ jobs:
 
       - name: Build resources (api + seed + web + agent)
         working-directory: apps/desktop
+        # NEXT_PUBLIC_* se bakean en el bundle del web durante `next build`.
+        # Las leemos de GitHub Actions secrets (configuradas a mano en Repo →
+        # Settings → Secrets and variables → Actions) y las exponemos al step.
+        # Si los secrets no existen, Realtime queda no-op silencioso (la app
+        # sigue andando sin notificaciones cross-PC).
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: pnpm run build:resources
 
       # electron-builder con la layout de symlinks de pnpm cuelga silently en
