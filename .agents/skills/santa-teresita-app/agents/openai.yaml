@@ -1,0 +1,6 @@
+interface:
+  display_name: "Santa Teresita App"
+  short_description: "Repo-specific patterns and workflows for santa-teresita-app"
+  default_prompt: "Use the santa-teresita-app repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
