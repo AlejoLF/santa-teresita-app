@@ -6,12 +6,17 @@ import { useState, useRef, useEffect } from 'react';
  * Tooltip con explicación académica para una métrica.
  * Click muestra/oculta. Click afuera lo cierra.
  *
- * Uso:
- *   <InfoTooltip>
- *     <strong>RFM</strong> (Recency, Frequency, Monetary) — segmentación
- *     que clasifica clientes según hace cuánto compraron, con qué frecuencia
- *     y cuánta plata gastaron acumulada.
- *   </InfoTooltip>
+ * IMPORTANTE: Este componente es block-level (renderiza <div> + <button>).
+ * NO lo metas dentro de un <p> — HTML no permite <div> dentro de <p>, el
+ * browser hace "tag rescue" y mueve los nodos, rompiendo la hidratación de
+ * React 19 con un client-side exception. Usá <div className="flex"> o <span>
+ * como contenedor cuando lo combines con texto + tooltip.
+ *
+ * Uso correcto:
+ *   <div className="flex items-center">
+ *     <span>Mi métrica</span>
+ *     <InfoTooltip>...</InfoTooltip>
+ *   </div>
  */
 export function InfoTooltip({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);

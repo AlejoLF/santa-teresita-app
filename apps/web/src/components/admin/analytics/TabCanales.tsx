@@ -57,7 +57,7 @@ export function TabCanales(props: TabProps) {
           <p className="text-xl font-semibold text-ink-900">{fmtPesos(totalBruto)}</p>
         </div>
         <div className="card p-3">
-          <p className="text-xs text-ink-500 uppercase tracking-wide font-medium">
+          <div className="text-xs text-ink-500 uppercase tracking-wide font-medium flex items-center">
             Total comisiones de plataformas
             <InfoTooltip>
               <strong>Comisiones</strong> que cobran las plataformas externas
@@ -69,7 +69,7 @@ export function TabCanales(props: TabProps) {
               otros, hay que cambiarlos en el código (próxima iteración:
               configurables desde Configuración → Sistema).
             </InfoTooltip>
-          </p>
+          </div>
           <p className="text-xl font-semibold text-pomodoro-600">−{fmtPesos(totalComisiones)}</p>
         </div>
         <div className="card p-3 bg-basil-100">
