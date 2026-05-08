@@ -287,23 +287,29 @@ function buildAgent() {
   run('npm install --omit=dev --no-package-lock --no-fund --no-audit', agentDir);
 }
 
-async function prebakePgdata() {
-  step('Pre-bake del cluster Postgres (initdb + schema + seed)');
-  // Importamos el script — corre side-effects al cargar.
-  const url = pathToFileURL(path.join(DESKTOP_DIR, 'scripts', 'prebake-pgdata.mjs')).href;
-  await import(url);
+function copyCloudConfig() {
+  step('Copiando cloud-config.json (URL de Supabase)');
+  const src = path.join(DESKTOP_DIR, 'cloud-config.json');
+  if (!fs.existsSync(src)) {
+    console.log('  ⚠ cloud-config.json no existe — el .exe va a fallar al boot.');
+    console.log('  Generalo con: cp apps/desktop/cloud-config.example.json apps/desktop/cloud-config.json');
+    console.log('  Y completalo con la connection string del pooler de Supabase.');
+    return;
+  }
+  fs.copyFileSync(src, path.join(RESOURCES, 'cloud-config.json'));
+  console.log('  ✓ cloud-config.json copiado a resources/');
 }
 
 async function main() {
   reset();
-  generateSchemaSql();
+  // v2.x: ya NO generamos schema.sql ni bundlemos el seed. La cloud DB ya
+  // tiene todo aplicado. Las PCs cliente solo corren API + Web + Agent
+  // contra cloud.
   buildApi();
-  buildSeed();
   buildWeb();
   buildAgent();
   copyExcels();
-  // Pre-bake al final: necesita api/seed/schema.sql ya construidos.
-  await prebakePgdata();
+  copyCloudConfig();
   step('✓ Resources listas en ' + RESOURCES);
 }
 

@@ -396,8 +396,59 @@ async function applySchema() {
   }
 }
 
-function dbUrl() {
-  return `postgresql://${PG_USER}:${PG_PASSWORD}@127.0.0.1:${PG_PORT}/${PG_DB}?schema=public`;
+/**
+ * Lee la URL de la cloud DB en orden de precedencia:
+ *
+ *   1. ENV var `SUPABASE_DB_URL` (override para dev / CI)
+ *   2. `userData/config.json` → `cloudDbUrl` (configurable desde la UI admin)
+ *   3. Bundle compilado: `resources/cloud-config.json` → `cloudDbUrl`
+ *      (default que ship con el .exe)
+ *   4. null (la app va a fallar al boot con mensaje claro)
+ *
+ * Por qué este orden: queremos que el .exe pueda venir con un default
+ * (apuntando a la Supabase de Santa Teresita) pero permitir override
+ * para testing / dev / staging sin recompilar.
+ *
+ * Si la URL es del pooler de Supabase, automáticamente le agregamos los
+ * flags `?pgbouncer=true&connection_limit=1` que necesita Prisma para
+ * funcionar bien en transaction-mode pooling. Si ya los tiene, no los
+ * duplicamos.
+ */
+function leerCloudDbUrl() {
+  let raw = process.env.SUPABASE_DB_URL;
+  if (!raw) {
+    const userConfigPath = path.join(app.getPath('userData'), 'config.json');
+    if (fs.existsSync(userConfigPath)) {
+      try {
+        const cfg = JSON.parse(fs.readFileSync(userConfigPath, 'utf8'));
+        if (typeof cfg.cloudDbUrl === 'string' && cfg.cloudDbUrl) raw = cfg.cloudDbUrl;
+      } catch (e) {
+        log('Error leyendo config.json: ' + (e?.message ?? e));
+      }
+    }
+  }
+  if (!raw) {
+    const bundleConfigPath = path.join(resourcesDir(), 'cloud-config.json');
+    if (fs.existsSync(bundleConfigPath)) {
+      try {
+        const cfg = JSON.parse(fs.readFileSync(bundleConfigPath, 'utf8'));
+        if (typeof cfg.cloudDbUrl === 'string' && cfg.cloudDbUrl) raw = cfg.cloudDbUrl;
+      } catch (e) {
+        log('Error leyendo cloud-config.json bundle: ' + (e?.message ?? e));
+      }
+    }
+  }
+  if (!raw) return null;
+
+  // Agregar flags de pgbouncer si la URL es del pooler de Supabase y no
+  // los trae ya. Esto hace que Prisma desactive prepared statements y
+  // limite conexiones — necesario en transaction-mode pooling.
+  const hasFlags = raw.includes('pgbouncer=') || raw.includes('connection_limit=');
+  if (raw.includes('.pooler.supabase.com') && !hasFlags) {
+    const sep = raw.includes('?') ? '&' : '?';
+    raw = `${raw}${sep}pgbouncer=true&connection_limit=1`;
+  }
+  return raw;
 }
 
 async function runSeed() {
@@ -428,10 +479,11 @@ async function runSeed() {
 
 // ═══ API server ════════════════════════════════════════════════════════════
 
-function startApi() {
+function startApi(cloudDbUrl) {
   setSplashStatus('Iniciando servidor de la app...');
   const apiEntry = path.join(resourcesDir(), 'api', 'server.mjs');
   log('Spawning API: ' + apiEntry);
+  log('API → cloud DB (Supabase) — sin Postgres local');
 
   apiProcess = spawn(process.execPath, [apiEntry], {
     env: {
@@ -443,7 +495,10 @@ function startApi() {
       // independiente del locale regional de Windows. AR no observa DST desde
       // 2009, valor estable.
       TZ: 'America/Argentina/Buenos_Aires',
-      DATABASE_URL: dbUrl(),
+      // ── v2.x ── La API ya NO se conecta a Postgres local (no existe más).
+      // Apunta directamente al pooler de Supabase. Si en Fase 2 se instala
+      // el server local, las PCs cliente cambian este URL al server LAN.
+      DATABASE_URL: cloudDbUrl,
       API_HOST: '127.0.0.1',
       API_PORT: String(API_PORT),
       API_CORS_ORIGINS: `http://127.0.0.1:${WEB_PORT},http://localhost:${WEB_PORT}`,
@@ -788,15 +843,24 @@ async function bootstrap() {
     fs.mkdirSync(dataDir(), { recursive: true });
     fs.mkdirSync(logsDir(), { recursive: true });
     log('═════════════════════════════════════════');
-    log('Santa Teresita Desktop — booting');
+    log('Santa Teresita Desktop v2.x — booting (cloud-first)');
     log('Data dir: ' + dataDir());
     log('Resources: ' + resourcesDir());
 
     createSplash();
-    await startPostgres();
+
+    // Validar que tengamos config de cloud DB. Sin esto la app no puede arrancar.
+    const cloudUrl = leerCloudDbUrl();
+    if (!cloudUrl) {
+      throw new Error(
+        'No hay config de Supabase. Esperaba SUPABASE_DB_URL en variables de entorno o en data/config.json. ' +
+          'Pedile al admin que la configure (Settings → Cloud).',
+      );
+    }
+    log('Cloud DB URL configurada (host: ' + cloudUrl.replace(/:[^:@/]+@/, ':***@').slice(0, 80) + '...)');
 
     setSplashStatus('Iniciando servicios...');
-    startApi();
+    startApi(cloudUrl);
     startWeb();
 
     await waitForApiHealth(90000);

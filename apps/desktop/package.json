@@ -1,8 +1,8 @@
 {
   "name": "@sta/desktop",
-  "version": "1.29.1",
+  "version": "2.0.0-alpha.1",
   "private": true,
-  "description": "Santa Teresita Pastas — desktop app (full local stack)",
+  "description": "Santa Teresita Pastas — desktop app (cloud-first, sin Postgres local)",
   "main": "main.js",
   "author": {
     "name": "Santa Teresita Pastas"

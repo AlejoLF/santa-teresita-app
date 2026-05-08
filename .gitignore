@@ -78,6 +78,9 @@ apps/desktop/build/vc_redist.x64.exe
 # Cluster Postgres pre-baked (regenerado en cada build de CI con initdb +
 # schema + seed). No tiene sentido commitearlo — es output, no source.
 apps/desktop/build/pgdata-template/
+# Config de cloud DB con credenciales reales (URL incluye password). NO
+# commitear. Ver cloud-config.example.json para template.
+apps/desktop/cloud-config.json
 
 # Postgres data dir (si alguien arranca el agente local en este directorio)
 pgdata/

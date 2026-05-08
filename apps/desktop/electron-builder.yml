@@ -30,11 +30,8 @@ files:
 extraResources:
   - from: resources
     to: resources
-  # Cluster Postgres pre-baked en CI (initdb + schema + seed ya aplicados).
-  # main.js lo copia al userData en el primer arranque, salteando 8-10 min de
-  # setup. Si el archivo no está, fallback: corre initdb + seed normal.
-  - from: build/pgdata-template
-    to: pgdata-template
+  # v2.x: ya no bundleamos pgdata-template (no hay Postgres local en las PCs
+  # cliente). El cloud-config.json va dentro de resources/ vía build-resources.mjs.
 
 # embedded-postgres trae binarios nativos por plataforma (postgres.exe, initdb,
 # etc.). El asar empaqueta TODO en un único archivo y rompe la ejecución de

@@ -1,0 +1,4 @@
+{
+  "_comment": "Copiá este archivo a cloud-config.json (sin .example) y completá la connection string del pooler de Supabase. main.js lo lee en el primer arranque y la API se conecta a esa DB. NO commitear la versión sin .example — está en .gitignore.",
+  "cloudDbUrl": "postgresql://postgres.<PROJECT_REF>:<PASSWORD>@aws-X-<REGION>.pooler.supabase.com:6543/postgres"
+}
