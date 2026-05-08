@@ -349,7 +349,9 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         LIMIT 100
       `);
 
-      // Distribución por segmento (para chart)
+      // Distribución por segmento (para chart). Postgres NO permite usar el
+      // alias `segmento` dentro de un `CASE segmento WHEN ...` en ORDER BY,
+      // así que envolvemos en una sub-CTE para poder ordenarlo limpio.
       const segmentos = await prisma.$queryRaw<
         Array<{ segmento: string; cantidad: number; monto: string }>
       >(Prisma.sql`
@@ -362,19 +364,25 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
           FROM ventas v
           WHERE v.estado = 'FINALIZADA' AND v.cliente_id IS NOT NULL
           GROUP BY v.cliente_id
+        ),
+        clasificado AS (
+          SELECT
+            CASE
+              WHEN frequency >= 5 AND EXTRACT(DAY FROM (CURRENT_TIMESTAMP - ultima_compra)) <= 30 THEN 'VIP'
+              WHEN frequency >= 3 AND EXTRACT(DAY FROM (CURRENT_TIMESTAMP - ultima_compra)) <= 60 THEN 'Fiel'
+              WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - ultima_compra)) <= 90 THEN 'Activo'
+              WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - ultima_compra)) <= 180 THEN 'En riesgo'
+              ELSE 'Perdido'
+            END AS segmento,
+            monetary
+          FROM base
         )
         SELECT
-          CASE
-            WHEN frequency >= 5 AND EXTRACT(DAY FROM (CURRENT_TIMESTAMP - ultima_compra)) <= 30 THEN 'VIP'
-            WHEN frequency >= 3 AND EXTRACT(DAY FROM (CURRENT_TIMESTAMP - ultima_compra)) <= 60 THEN 'Fiel'
-            WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - ultima_compra)) <= 90 THEN 'Activo'
-            WHEN EXTRACT(DAY FROM (CURRENT_TIMESTAMP - ultima_compra)) <= 180 THEN 'En riesgo'
-            ELSE 'Perdido'
-          END AS segmento,
+          segmento,
           COUNT(*)::int AS cantidad,
           SUM(monetary)::text AS monto
-        FROM base
-        GROUP BY 1
+        FROM clasificado
+        GROUP BY segmento
         ORDER BY
           CASE segmento
             WHEN 'VIP' THEN 1
@@ -669,6 +677,9 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         DELIVERATE: 5,
       };
 
+      // Postgres no acepta `ORDER BY <alias>::numeric` cuando el alias se
+      // generó con `::text` en la SELECT — repetimos la expresión SUM en el
+      // ORDER BY directamente.
       const porCanal = await prisma.$queryRaw<
         Array<{
           canal: string;
@@ -688,7 +699,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         WHERE COALESCE(v.fecha_finalizacion, v.fecha_anulacion, v.fecha_apertura) >= ${desde}
           AND COALESCE(v.fecha_finalizacion, v.fecha_anulacion, v.fecha_apertura) <= ${hasta}
         GROUP BY 1
-        ORDER BY monto::numeric DESC
+        ORDER BY COALESCE(SUM(CASE WHEN v.estado = 'FINALIZADA' THEN v.total ELSE 0 END), 0) DESC
       `);
 
       const canales = porCanal.map((c) => {
