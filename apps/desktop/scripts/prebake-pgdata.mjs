@@ -22,17 +22,25 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync, cpSync, mkdtempSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DESKTOP_DIR = join(__dirname, '..');
 const REPO_ROOT = join(DESKTOP_DIR, '..', '..');
-const TEMPLATE_DIR = join(DESKTOP_DIR, 'build', 'pgdata-template');
+const FINAL_DIR = join(DESKTOP_DIR, 'build', 'pgdata-template');
 const RESOURCES_DIR = join(DESKTOP_DIR, 'resources');
 const SEED_FILE = join(RESOURCES_DIR, 'seed', 'seed.mjs');
+
+// initdb necesita poder cambiar permisos del directorio. En Windows runners
+// de GitHub Actions, el workspace en `D:\a\...` tiene ACLs heredadas que
+// initdb no puede modificar, así que falla con "could not change permissions
+// of directory". Workaround: corremos initdb en un tmpdir (en %TEMP%, que
+// pertenece al user runner y tiene permisos completos), y al final copiamos
+// el cluster terminado a `build/pgdata-template/`.
+const WORK_DIR = mkdtempSync(join(tmpdir(), 'sta-prebake-'));
 
 // Las constantes deben coincidir con apps/desktop/main.js
 const PG_USER = 'teresita';
@@ -45,20 +53,14 @@ function step(msg) {
 }
 
 async function main() {
-  // Limpieza: si quedó un template viejo, lo borramos. Postgres no soporta
-  // initdb sobre un dir no vacío.
-  if (existsSync(TEMPLATE_DIR)) {
-    step(`Limpiando template anterior en ${TEMPLATE_DIR}`);
-    rmSync(TEMPLATE_DIR, { recursive: true, force: true });
-  }
-  mkdirSync(TEMPLATE_DIR, { recursive: true });
+  step(`Trabajando en ${WORK_DIR}`);
 
   step('Cargando embedded-postgres');
   // Esta carga es lazy porque el require puede tirar warnings sobre native deps.
   const { default: EmbeddedPostgres } = await import('embedded-postgres');
 
   const pg = new EmbeddedPostgres({
-    databaseDir: TEMPLATE_DIR,
+    databaseDir: WORK_DIR,
     user: PG_USER,
     password: PG_PASSWORD,
     port: PG_PORT,
@@ -141,12 +143,29 @@ async function main() {
   step('Parando Postgres temporal');
   await pg.stop();
 
-  // Confirmar que el template tiene PG_VERSION (señal de cluster válido)
-  if (!existsSync(join(TEMPLATE_DIR, 'PG_VERSION'))) {
-    throw new Error('PG_VERSION no existe en el template — initdb falló silenciosamente');
+  // Confirmar que el cluster tiene PG_VERSION (señal de cluster válido)
+  if (!existsSync(join(WORK_DIR, 'PG_VERSION'))) {
+    throw new Error('PG_VERSION no existe en el cluster — initdb falló silenciosamente');
   }
 
-  step(`✓ Template listo en ${TEMPLATE_DIR}`);
+  // Copiar el cluster terminado al destino final (dentro del repo, gitignored)
+  // donde electron-builder lo va a bundlear como extraResources.
+  step(`Copiando cluster a ${FINAL_DIR}`);
+  if (existsSync(FINAL_DIR)) {
+    rmSync(FINAL_DIR, { recursive: true, force: true });
+  }
+  mkdirSync(dirname(FINAL_DIR), { recursive: true });
+  cpSync(WORK_DIR, FINAL_DIR, { recursive: true });
+
+  // Cleanup del workdir tmp para no dejar basura en el runner.
+  step(`Limpiando workdir ${WORK_DIR}`);
+  try {
+    rmSync(WORK_DIR, { recursive: true, force: true });
+  } catch (e) {
+    console.warn('No se pudo limpiar workdir (no fatal): ' + (e?.message ?? e));
+  }
+
+  step(`✓ Template listo en ${FINAL_DIR}`);
   console.log(
     'Este directorio se va a bundlear como extraResources y main.js lo copia\n' +
       'al userData en el primer arranque, salteando initdb + schema + seed.',
