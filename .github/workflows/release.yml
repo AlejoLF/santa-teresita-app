@@ -47,6 +47,25 @@ jobs:
         working-directory: apps/desktop
         run: pnpm run ensure:vcredist
 
+      # `cloud-config.json` está gitignored (la URL incluye password). Lo
+      # generamos en CI desde el secret SUPABASE_DB_URL para que el installer
+      # ya venga preconfigurado y la encargada no tenga que crear archivos a
+      # mano. Si el secret no está, el .exe se buildea igual pero al primer
+      # arranque va a pedir config manual en %APPDATA%/Santa Teresita/config.json.
+      - name: Write cloud-config.json from SUPABASE_DB_URL secret
+        working-directory: apps/desktop
+        shell: pwsh
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:SUPABASE_DB_URL)) {
+            Write-Output "::warning::SUPABASE_DB_URL secret no seteada — installer va a requerir config manual al primer arranque"
+          } else {
+            $cfg = @{ cloudDbUrl = $env:SUPABASE_DB_URL } | ConvertTo-Json -Compress
+            Set-Content -Path cloud-config.json -Value $cfg -Encoding utf8 -NoNewline
+            Write-Output "OK cloud-config.json escrito ($($env:SUPABASE_DB_URL.Length) chars en URL)"
+          }
+
       - name: Build resources (api + seed + web + agent)
         working-directory: apps/desktop
         # NEXT_PUBLIC_* se bakean en el bundle del web durante `next build`.
