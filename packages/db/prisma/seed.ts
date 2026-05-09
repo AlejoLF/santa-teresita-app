@@ -961,18 +961,31 @@ async function aplicarCodigosSantaTeresita() {
     return false;
   };
 
-  // Helper: cambiar código de producto por nombre exacto del tipoProducto
+  // Helper: cambiar código de producto por nombre exacto del tipoProducto.
+  // Idempotente: en re-runs prioriza el producto que YA tiene el código
+  // (estable entre corridas) en lugar de uno cualquiera (findFirst no
+  // garantiza orden y rompía el UNIQUE constraint en re-seeds).
   const setProductoCodigoByTipo = async (tipoProductoNombre: string, codigo: string) => {
     const tp = await prisma.tipoProducto.findFirst({ where: { nombre: tipoProductoNombre } });
     if (!tp) return false;
-    // Tomamos el primer producto activo de ese tipo
-    const prod = await prisma.producto.findFirst({ where: { tipoProductoId: tp.id, activo: true } });
+    // Preferimos el producto que ya tiene este código (estable entre runs).
+    let prod = await prisma.producto.findFirst({
+      where: { tipoProductoId: tp.id, codigo, activo: true },
+    });
+    if (!prod) {
+      prod = await prisma.producto.findFirst({
+        where: { tipoProductoId: tp.id, activo: true },
+        orderBy: { creadoAt: 'asc' }, // determinístico
+      });
+    }
     if (!prod) return false;
-    // Verificar que el código no esté tomado por otro producto
-    const otro = await prisma.producto.findFirst({ where: { codigo, NOT: { id: prod.id } } });
-    if (otro) {
-      // Liberamos el código del otro (le ponemos el de prod)
-      await prisma.producto.update({ where: { id: otro.id }, data: { codigo: prod.codigo ?? null } });
+    // Liberar el código de cualquier OTRO producto que lo tenga (NULL en
+    // vez de swap — el swap crea cadenas de conflictos en re-runs).
+    const otros = await prisma.producto.findMany({
+      where: { codigo, NOT: { id: prod.id } },
+    });
+    for (const otro of otros) {
+      await prisma.producto.update({ where: { id: otro.id }, data: { codigo: null } });
     }
     await prisma.producto.update({ where: { id: prod.id }, data: { codigo } });
     return true;
