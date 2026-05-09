@@ -31,6 +31,11 @@ const TOKEN_KEY = 'sta_auth_token';
 export function setAuthToken(token: string): void {
   try {
     if (typeof window !== 'undefined') {
+      // Limpiar cache cliente al cambiar de sesión: si el usuario anterior
+      // era VENDEDOR y este es ADMIN (o viceversa), el /auth/me cacheado
+      // tiene datos del usuario viejo y los layouts redirigen mal.
+      // Igual con /catalogo/cuentas etc — pueden depender del rol.
+      memCache.clear();
       window.localStorage.setItem(TOKEN_KEY, token);
     }
   } catch {
@@ -52,6 +57,9 @@ export function getAuthToken(): string | null {
 export function clearAuthToken(): void {
   try {
     if (typeof window !== 'undefined') {
+      // Idem setAuthToken: al cerrar sesión limpiamos el cache para que el
+      // próximo login no vea datos del usuario anterior.
+      memCache.clear();
       window.localStorage.removeItem(TOKEN_KEY);
     }
   } catch {
