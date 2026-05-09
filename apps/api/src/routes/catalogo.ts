@@ -1,20 +1,35 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@sta/db/client';
+import { getCached } from '../lib/cache.js';
+
+// TTLs por endpoint. Las categorías cambian rara vez (la encargada agrega
+// una sub-categoría tal vez 1 vez al mes), pero los precios sí — TTL más
+// corto en productos para que la propagación sea aceptable. Con TTL 60s,
+// si la encargada cambia un precio, los demás vendedores lo ven en ≤60s.
+const TTL_CATEGORIAS = 5 * 60_000; // 5 min
+const TTL_PRODUCTOS = 60_000;       // 1 min
+const TTL_LISTAS_PRECIOS = 5 * 60_000;
+const TTL_CUENTAS = 5 * 60_000;
+const TTL_SALSA = 60_000;
 
 export default async function catalogoRoutes(fastify: FastifyInstance) {
   // GET /catalogo/categorias — todas las categorías activas con sus tipos.
+  // Cacheado 5 min: las categorías cambian rara vez. Si la admin agrega una
+  // nueva, se ve a lo sumo en 5 min (o reiniciás la API local para refrescar).
   fastify.get('/catalogo/categorias', { preHandler: fastify.requireAuth() }, async () => {
-    const categorias = await prisma.categoria.findMany({
-      where: { activa: true },
-      orderBy: { orden: 'asc' },
-      include: {
-        tipos: {
-          where: { activo: true },
-          orderBy: [{ orden: 'asc' }, { nombre: 'asc' }],
+    const categorias = await getCached('catalogo:categorias', TTL_CATEGORIAS, () =>
+      prisma.categoria.findMany({
+        where: { activa: true },
+        orderBy: { orden: 'asc' },
+        include: {
+          tipos: {
+            where: { activo: true },
+            orderBy: [{ orden: 'asc' }, { nombre: 'asc' }],
+          },
         },
-      },
-    });
+      }),
+    );
     return { categorias };
   });
 
@@ -43,7 +58,12 @@ export default async function catalogoRoutes(fastify: FastifyInstance) {
       // Si la búsqueda es solo dígitos (1-4), buscamos por código exacto o prefijo.
       const buscarPorCodigo = q.q && /^\d{1,4}$/.test(q.q.trim());
 
-      const productos = await prisma.producto.findMany({
+      // Cache key con todos los params relevantes. La query "vacía" (sin
+      // filtros, full catálogo) es la más caliente — la cajera abre
+      // cargar-pedido y hace cientos de hits sobre la misma respuesta.
+      const cacheKey = `catalogo:productos:${q.tipoProductoId ?? '_'}:${q.q ?? '_'}:${q.listaPreciosId ?? '_'}:${q.limit}`;
+      const productos = await getCached(cacheKey, TTL_PRODUCTOS, () =>
+        prisma.producto.findMany({
         where: {
           activo: true,
           tipoProductoId: q.tipoProductoId,
@@ -94,7 +114,8 @@ export default async function catalogoRoutes(fastify: FastifyInstance) {
           { codigo: 'asc' },
         ],
         take: q.limit,
-      });
+        }),
+      );
 
       // Sabores: el código viene del campo `OpcionModificador.codigo` (asignado en el seed).
       // Si está vacío, fallback a código derivado del producto (legacy).
@@ -291,19 +312,21 @@ export default async function catalogoRoutes(fastify: FastifyInstance) {
     async (req, reply) => {
       const { tipo } = req.params as { tipo: 'SIMPLE' | 'ESPECIAL' };
       const nombreProducto = tipo === 'SIMPLE' ? 'Salsa simple' : 'Salsa especial';
-      const producto = await prisma.producto.findFirst({
-        where: { nombre: nombreProducto, activo: true },
-        include: {
-          tipoProducto: { include: { categoria: true } },
-          modificadores: {
-            include: {
-              grupoModificador: {
-                include: { opciones: { where: { activa: true }, orderBy: { orden: 'asc' } } },
+      const producto = await getCached(`catalogo:salsa:${tipo}`, TTL_SALSA, () =>
+        prisma.producto.findFirst({
+          where: { nombre: nombreProducto, activo: true },
+          include: {
+            tipoProducto: { include: { categoria: true } },
+            modificadores: {
+              include: {
+                grupoModificador: {
+                  include: { opciones: { where: { activa: true }, orderBy: { orden: 'asc' } } },
+                },
               },
             },
           },
-        },
-      });
+        }),
+      );
       if (!producto) {
         return reply.code(404).send({ error: `No existe el producto "${nombreProducto}"` });
       }
@@ -340,20 +363,24 @@ export default async function catalogoRoutes(fastify: FastifyInstance) {
 
   // GET /catalogo/listas-precios
   fastify.get('/catalogo/listas-precios', { preHandler: fastify.requireAuth() }, async () => {
-    const listas = await prisma.listaPrecios.findMany({
-      where: { activa: true },
-      orderBy: { nombre: 'asc' },
-    });
+    const listas = await getCached('catalogo:listas-precios', TTL_LISTAS_PRECIOS, () =>
+      prisma.listaPrecios.findMany({
+        where: { activa: true },
+        orderBy: { nombre: 'asc' },
+      }),
+    );
     return { listas };
   });
 
   // GET /catalogo/cuentas — cuentas activas (vendedor las necesita para registrar pagos)
   fastify.get('/catalogo/cuentas', { preHandler: fastify.requireAuth() }, async () => {
-    const cuentas = await prisma.cuenta.findMany({
-      where: { activa: true },
-      select: { id: true, nombre: true, tipo: true },
-      orderBy: { nombre: 'asc' },
-    });
+    const cuentas = await getCached('catalogo:cuentas', TTL_CUENTAS, () =>
+      prisma.cuenta.findMany({
+        where: { activa: true },
+        select: { id: true, nombre: true, tipo: true },
+        orderBy: { nombre: 'asc' },
+      }),
+    );
     return { cuentas };
   });
 

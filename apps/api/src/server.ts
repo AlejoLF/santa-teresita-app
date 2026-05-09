@@ -26,6 +26,7 @@ import empleadosRoutes from './routes/empleados.js';
 import configuracionRoutes from './routes/configuracion.js';
 import clientesRoutes from './routes/clientes.js';
 import impresionRoutes from './routes/impresion.js';
+import { invalidate as cacheInvalidate } from './lib/cache.js';
 
 const isProd = config.NODE_ENV === 'production';
 
@@ -77,6 +78,26 @@ export async function buildServer() {
     env: config.NODE_ENV,
     time: new Date().toISOString(),
   }));
+
+  // Hook global: invalidar el cache del catálogo después de mutaciones
+  // exitosas en /admin/productos, /admin/categorias, /admin/tipos-producto,
+  // /admin/precios y /admin/listas-precios. Sin esto, una actualización
+  // de precio tarda hasta el TTL en propagar (60s para productos). Con el
+  // hook, propaga al instante en la PC que hizo el cambio (las otras PCs
+  // siguen viendo cache hasta su propio TTL — aceptable).
+  app.addHook('onResponse', async (req, reply) => {
+    if (
+      reply.statusCode >= 200 &&
+      reply.statusCode < 300 &&
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) &&
+      typeof req.url === 'string' &&
+      /\/admin\/(productos|categorias|tipos-producto|precios|listas-precios|grupos-modificador|opciones-modificador|cuentas)\b/.test(
+        req.url,
+      )
+    ) {
+      cacheInvalidate('catalogo:');
+    }
+  });
 
   // Rutas montadas bajo /api/v1
   await app.register(
