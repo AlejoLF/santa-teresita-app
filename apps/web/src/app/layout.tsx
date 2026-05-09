@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { DemoBanner } from '@/components/DemoBanner';
+import { ServiceWorkerRegister } from '@/components/ServiceWorkerRegister';
 
 export const metadata: Metadata = {
   title: 'Santa Teresita Pastas — Demo',
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>{FONTS_LINK}</head>
       <body className="min-h-screen antialiased">
         <DemoBanner />
+        <ServiceWorkerRegister />
         {children}
       </body>
     </html>
