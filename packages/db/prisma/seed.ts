@@ -938,6 +938,18 @@ async function aplicarCodigosSantaTeresita() {
         const norm = op.nombre.toLowerCase().trim();
         const matches = saborMatch.every((kw) => norm.includes(kw.toLowerCase()));
         if (matches) {
+          // Idempotencia: si otra opción ya tiene este código (por una corrida
+          // previa que matcheó otra opción), liberamos esa primero. Sin esto,
+          // re-ejecutar el seed contra la misma DB falla con UNIQUE constraint.
+          const otroConCodigo = await prisma.opcionModificador.findFirst({
+            where: { codigo, NOT: { id: op.id } },
+          });
+          if (otroConCodigo) {
+            await prisma.opcionModificador.update({
+              where: { id: otroConCodigo.id },
+              data: { codigo: null },
+            });
+          }
           await prisma.opcionModificador.update({
             where: { id: op.id },
             data: { codigo },
