@@ -476,9 +476,13 @@ export default function CargarPedidoPage() {
   useEffect(() => {
     (async () => {
       try {
-        const me = await api.get<{ usuario: { nombre: string; rol: string } }>('/auth/me');
+        // Paralelo: /auth/me + /catalogo/categorias en lugar de secuencial.
+        // En Portugal (~150ms RTT) eso achica el TTFI a la mitad.
+        const [me, cats] = await Promise.all([
+          api.getCached<{ usuario: { nombre: string; rol: string } }>('/auth/me', 5 * 60_000),
+          api.getCached<{ categorias: Categoria[] }>('/catalogo/categorias', 5 * 60_000),
+        ]);
         setUsuario(me.usuario);
-        const cats = await api.get<{ categorias: Categoria[] }>('/catalogo/categorias');
         // Categorías ordenadas alfabéticamente (la encargada lo pidió así)
         const ordenadas = [...cats.categorias].sort((a, b) =>
           a.nombre.localeCompare(b.nombre, 'es'),

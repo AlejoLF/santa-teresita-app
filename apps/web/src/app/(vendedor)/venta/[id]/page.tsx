@@ -87,7 +87,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
   useEffect(() => {
     (async () => {
       try {
-        const me = await api.get<{ usuario: { rol: string } }>('/auth/me');
+        const me = await api.getCached<{ usuario: { rol: string } }>('/auth/me', 5 * 60_000);
         setUsuario(me.usuario);
       } catch {
         /* silencioso */

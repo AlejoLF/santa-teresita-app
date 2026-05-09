@@ -32,7 +32,7 @@ export default function ConfigUsuariosPage() {
   const fetchData = useCallback(async () => {
     try {
       const [me, list] = await Promise.all([
-        api.get<Me>('/auth/me'),
+        api.getCached<Me>('/auth/me', 5 * 60_000),
         api.get<{ usuarios: Usuario[] }>('/admin/usuarios'),
       ]);
       setMeId(me.usuario.id);

@@ -26,7 +26,10 @@ interface AbiertasResp {
   ventas: PedidoDetalle[];
 }
 
-const POLL_MS = 8000;
+// Antes: 8000ms. Ahora 15s — alivia carga sobre Supabase + el cache
+// cliente del prefetch hace que la primera carga sea instantánea. Si la
+// vendedora necesita ver un pedido más rápido, refresca con F5.
+const POLL_MS = 15000;
 
 function horaCorta(iso: string): string {
   const d = new Date(iso);
@@ -117,7 +120,7 @@ export function PedidosAbiertosList({ className }: { className?: string }) {
         {loading && pedidos.length === 0 && (
           <p className="px-4 py-8 text-center text-ink-300 text-sm">Cargando...</p>
         )}
-        {!loading && pedidos.length === 0 && (
+        {!loading && pedidos.length === 0 && !error && (
           <div className="px-4 py-12 text-center">
             <div className="text-3xl mb-2">✨</div>
             <p className="text-sm text-ink-500">Sin pedidos abiertos</p>
@@ -195,7 +198,7 @@ export function PedidosAbiertosList({ className }: { className?: string }) {
       )}
 
       <footer className="border-t border-cream-300 px-4 py-2 text-xs text-ink-500 text-center bg-surface-sunken">
-        actualiza cada 8 segundos
+        actualiza cada 15 segundos
       </footer>
     </div>
   );

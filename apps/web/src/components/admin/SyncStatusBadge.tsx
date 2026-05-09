@@ -32,7 +32,10 @@ export function SyncStatusBadge() {
           setStatus(null);
         }
       } finally {
-        if (!cancelled) timer = setTimeout(tick, 10_000);
+        // Polling cada 30s — antes era 10s pero suma muchas requests al
+        // pool de Supabase. 30s es más que suficiente: cuando hay un
+        // problema de sync el badge va a aparecer en menos de 1 minuto.
+        if (!cancelled) timer = setTimeout(tick, 30_000);
       }
     }
     void tick();

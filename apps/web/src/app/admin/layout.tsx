@@ -55,7 +55,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   useEffect(() => {
     (async () => {
       try {
-        const me = await api.get<{ usuario: { nombre: string; rol: string } }>('/auth/me');
+        const me = await api.getCached<{ usuario: { nombre: string; rol: string } }>(
+          '/auth/me',
+          5 * 60_000,
+        );
         if (me.usuario.rol !== 'ADMIN') {
           router.replace('/cargar-pedido');
           return;

@@ -4,7 +4,7 @@ import { useState, useEffect, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { PinInput } from '@/components/ui/PinInput';
 import { Numpad } from '@/components/ui/Numpad';
-import { api, ApiError, setAuthToken } from '@/lib/api';
+import { api, ApiError, setAuthToken, prefetch } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { setDemoRol } from '@/lib/demo/mocks';
 
@@ -61,6 +61,23 @@ export default function VendedorLoginPage() {
       // (web servido por Vercel ↔ API local). En same-origin/desktop la
       // cookie ya está seteada y el token es redundante pero no estorba.
       if (res.token) setAuthToken(res.token);
+
+      // Prefetch agresivo: paralelizamos las llamadas que el usuario va a
+      // hacer en cuanto entre a su pantalla destino. Cuando navega, el
+      // cache cliente las tiene fresh → 0 round-trips.
+      // Para Portugal (~150ms RTT a SP) esto es la diferencia entre
+      // "tarda 1.5s en abrir cargar-pedido" y "abre instantáneo".
+      prefetch('/auth/me', 5 * 60_000);
+      prefetch('/catalogo/categorias', 5 * 60_000);
+      prefetch('/catalogo/cuentas', 5 * 60_000);
+      prefetch('/catalogo/listas-precios', 5 * 60_000);
+      prefetch('/catalogo/productos?limit=1000', 60_000);
+      prefetch('/catalogo/salsa/SIMPLE', 10 * 60_000);
+      prefetch('/catalogo/salsa/ESPECIAL', 10 * 60_000);
+      if (res.usuario.rol === 'VENDEDOR') {
+        prefetch('/ventas/abiertas', 5_000);
+      }
+
       setEstado('EXITO');
       startTransition(() => {
         router.push(res.usuario.rol === 'VENDEDOR' ? '/cargar-pedido' : '/admin');
