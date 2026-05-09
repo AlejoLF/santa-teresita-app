@@ -44,8 +44,18 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [usuario, setUsuario] = useState<{ nombre: string; rol: string } | null>(null);
   const [verificando, setVerificando] = useState(true);
   const [pendientes, setPendientes] = useState(0);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   // Sheet: en mobile, sidebar oculta detrás de hamburger / "Más"
   const [sheetOpen, setSheetOpen] = useState(false);
+
+  // Versión del .exe — la trae /version del API local. Cacheamos el
+  // resultado 1h porque la versión solo cambia al instalar update.
+  useEffect(() => {
+    api
+      .getCached<{ version: string }>('/version', 60 * 60_000)
+      .then((r) => setAppVersion(r.version))
+      .catch(() => setAppVersion(null));
+  }, []);
 
   // Cerrar el sheet al cambiar de ruta
   useEffect(() => {
@@ -179,7 +189,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <nav className="flex-1 overflow-y-auto py-3">{renderNavGroups()}</nav>
 
         <div className="px-5 py-3 border-t border-cream-300 text-xs text-ink-500">
-          v0.1.0 · {usuario?.nombre}
+          {appVersion ? `v${appVersion}` : 'v?'} · {usuario?.nombre}
         </div>
       </aside>
 

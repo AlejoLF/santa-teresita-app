@@ -94,7 +94,9 @@ export async function buildServer() {
   app.get('/health', async () => ({
     ok: true,
     name: 'santa-teresita-api',
-    version: '0.1.0',
+    // Versión del .exe (la pasa Electron al spawnear el API). En modo dev
+    // local sin Electron, sale como "dev".
+    version: process.env.STA_DESKTOP_VERSION ?? 'dev',
     env: config.NODE_ENV,
     time: new Date().toISOString(),
   }));
@@ -122,6 +124,12 @@ export async function buildServer() {
   // Rutas montadas bajo /api/v1
   await app.register(
     async (api) => {
+      // /api/v1/version — duplicado público de /health para que el web pueda
+      // consultar la versión del .exe via api.getCached() (que prefija /api/v1).
+      api.get('/version', async () => ({
+        version: process.env.STA_DESKTOP_VERSION ?? 'dev',
+        time: new Date().toISOString(),
+      }));
       await api.register(authRoutes);
       await api.register(catalogoRoutes);
       await api.register(ventasRoutes);

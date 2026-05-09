@@ -565,6 +565,10 @@ function startApi(cloudDbUrl) {
       // Token compartido con el local-agent para que pueda autenticar
       // contra la API local sin tener una sesión de usuario.
       AGENT_API_TOKEN: getOrCreateSecret('AGENT_API_TOKEN'),
+      // Pasamos la versión del .exe al API para que /health la exponga
+      // al UI (Configuración → Acerca de). Sin esto el endpoint reportaba
+      // "0.1.0" hardcodeado.
+      STA_DESKTOP_VERSION: app.getVersion(),
       LOG_LEVEL: 'info',
     },
     cwd: path.join(resourcesDir(), 'api'),

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { AcercaDe } from '@/components/admin/AcercaDe';
 
 const SECCIONES = [
   {
@@ -54,6 +55,8 @@ export default function ConfiguracionInicio() {
           </Link>
         ))}
       </div>
+
+      <AcercaDe />
     </div>
   );
 }

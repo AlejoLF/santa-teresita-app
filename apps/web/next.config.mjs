@@ -18,6 +18,16 @@ const nextConfig = {
     // todavía. Cuando se agregue (Sprint 4 con e2e), revertir a false.
     ignoreDuringBuilds: true,
   },
+  // Exponemos al cliente las env vars que Vercel inyecta al build con
+  // metadata del deploy. Nos permite mostrar la versión actual (commit SHA
+  // + branch + fecha) en la pantalla "Acerca de" del admin. En builds
+  // locales (dev / desktop bundleado) estas vars están undefined.
+  env: {
+    NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA ?? '',
+    NEXT_PUBLIC_VERCEL_GIT_COMMIT_REF: process.env.VERCEL_GIT_COMMIT_REF ?? '',
+    NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE: (process.env.VERCEL_GIT_COMMIT_MESSAGE ?? '').slice(0, 100),
+    NEXT_PUBLIC_VERCEL_DEPLOY_TIME: new Date().toISOString(),
+  },
   // El package @sta/shared usa imports ESM con extensión .js que apuntan a .ts (NodeNext-style).
   // Webpack por defecto no hace ese mapping → le decimos cómo.
   webpack: (config) => {
