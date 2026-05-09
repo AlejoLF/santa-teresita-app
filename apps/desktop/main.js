@@ -414,6 +414,52 @@ async function applySchema() {
  * funcionar bien en transaction-mode pooling. Si ya los tiene, no los
  * duplicamos.
  */
+/**
+ * Lee la URL del web remoto (Vercel) en orden de precedencia:
+ *
+ *   1. ENV var `STA_WEB_REMOTE_URL` (override para dev / staging)
+ *   2. `userData/config.json` → `webRemoteUrl`
+ *   3. Bundle compilado: `resources/cloud-config.json` → `webRemoteUrl`
+ *   4. Default hardcodeado: 'https://sta-desktop.vercel.app'
+ *   5. Para forzar el modo "local-only" (cargar el web bundleado en vez
+ *      del remoto), poner `webRemoteUrl: ""` (string vacío) en config.json.
+ *      Útil si Vercel está permanentemente caído o para auditorías
+ *      offline-only.
+ */
+function leerWebRemoteUrl() {
+  const DEFAULT_URL = 'https://sta-desktop.vercel.app';
+
+  if (typeof process.env.STA_WEB_REMOTE_URL === 'string') {
+    return process.env.STA_WEB_REMOTE_URL || null; // string vacío → null = local
+  }
+
+  const userConfigPath = path.join(app.getPath('userData'), 'config.json');
+  if (fs.existsSync(userConfigPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(userConfigPath, 'utf8'));
+      if (typeof cfg.webRemoteUrl === 'string') {
+        return cfg.webRemoteUrl || null;
+      }
+    } catch (e) {
+      log('Error leyendo webRemoteUrl de config.json: ' + (e?.message ?? e));
+    }
+  }
+
+  const bundleConfigPath = path.join(resourcesDir(), 'cloud-config.json');
+  if (fs.existsSync(bundleConfigPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(bundleConfigPath, 'utf8'));
+      if (typeof cfg.webRemoteUrl === 'string') {
+        return cfg.webRemoteUrl || null;
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  return DEFAULT_URL;
+}
+
 function leerCloudDbUrl() {
   let raw = process.env.SUPABASE_DB_URL;
   if (!raw) {
@@ -502,13 +548,13 @@ function startApi(cloudDbUrl) {
       API_HOST: '127.0.0.1',
       API_PORT: String(API_PORT),
       // CORS: aceptamos el web local (loopback) + el dominio de Vercel
-      // donde se hostea la UI. Si la PC carga la UI desde Vercel, el
-      // browser hace fetch cross-origin a 127.0.0.1 y necesitamos esa
-      // entrada acá. Configurable via env STA_WEB_REMOTE_ORIGIN.
+      // donde se hostea la UI. El plugin de cors además acepta wildcard
+      // *.vercel.app para preview deploys. Configurable via env
+      // STA_WEB_REMOTE_ORIGIN.
       API_CORS_ORIGINS: [
         `http://127.0.0.1:${WEB_PORT}`,
         `http://localhost:${WEB_PORT}`,
-        process.env.STA_WEB_REMOTE_ORIGIN ?? 'https://desktop.santateresita.app',
+        process.env.STA_WEB_REMOTE_ORIGIN ?? 'https://sta-desktop.vercel.app',
       ].join(','),
       // Path del SQLite que persiste el outbox (writes pendientes cuando
       // cloud cae). Vive en data/ del usuario, sobrevive uninstall si
@@ -765,7 +811,48 @@ function createMainWindow() {
     mainWindow.webContents.setZoomFactor(zoomFactor);
   });
 
-  mainWindow.loadURL(`http://127.0.0.1:${WEB_PORT}`);
+  // Cargamos el web remoto si está configurado, sino el local bundleado.
+  // El leerWebRemoteUrl() ya hizo la decisión durante el boot — repetimos
+  // la lectura acá para tener la URL en el momento de loadURL.
+  const remoteUrl = leerWebRemoteUrl();
+  const targetUrl = remoteUrl ?? `http://127.0.0.1:${WEB_PORT}`;
+  log('mainWindow.loadURL → ' + targetUrl);
+  mainWindow.loadURL(targetUrl);
+
+  // Si el remoto falla (Vercel caído, sin internet), mostramos un mensaje
+  // claro en lugar de la pantalla blanca de Chromium. La encargada puede
+  // (a) reintentar, (b) editar config.json para forzar webRemoteUrl=""
+  // y caer al bundle local.
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    log(`[loadURL FAIL] code=${errorCode} desc=${errorDescription} url=${validatedURL}`);
+    // -3 = ABORTED (load redirigido o cancelado intencionalmente, no es error real)
+    if (errorCode === -3) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.loadURL(
+        'data:text/html;charset=utf-8,' +
+          encodeURIComponent(`
+            <html><body style="font-family:system-ui;padding:40px;background:#fdfbf7;color:#2a2a2a">
+              <h1 style="color:#1f4d3c">No se pudo cargar Santa Teresita</h1>
+              <p>URL: <code>${validatedURL}</code></p>
+              <p>Error: <code>${errorDescription}</code> (${errorCode})</p>
+              <p>Posibles causas:</p>
+              <ul>
+                <li>Sin conexión a internet</li>
+                <li>Vercel está caído (chequeá <a href="https://www.vercel-status.com/" style="color:#1f4d3c">status</a>)</li>
+                <li>Firewall corporativo bloqueando vercel.app</li>
+              </ul>
+              <p><button onclick="location.reload()" style="padding:10px 20px;background:#1f4d3c;color:white;border:0;border-radius:4px;cursor:pointer">Reintentar</button></p>
+              <p style="color:#888;font-size:12px;margin-top:40px">
+                Si el problema persiste, el admin puede editar
+                <code>%APPDATA%/Santa Teresita/config.json</code> y agregar
+                <code>"webRemoteUrl": ""</code> para usar la versión bundleada del .exe.
+              </p>
+            </body></html>
+          `),
+      );
+    }
+  });
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
@@ -871,14 +958,28 @@ async function bootstrap() {
     }
     log('Cloud DB URL configurada (host: ' + cloudUrl.replace(/:[^:@/]+@/, ':***@').slice(0, 80) + '...)');
 
+    // Web remoto (Vercel) o local bundleado. En el flujo cloud-first del
+    // alpha.9+ cargamos directo desde Vercel — ahí los UI fixes se
+    // deployan sin necesidad de actualizar el .exe (hot deploy de UI).
+    // Si la config dice webRemoteUrl="" o el archivo bundleado no existe,
+    // caemos al modo legacy (spawn local Next y cargar 127.0.0.1:3000).
+    const webRemoteUrl = leerWebRemoteUrl();
+
     setSplashStatus('Iniciando servicios...');
     startApi(cloudUrl);
-    startWeb();
+    if (!webRemoteUrl) {
+      log('Web mode: LOCAL (bundleado en .exe)');
+      startWeb();
+    } else {
+      log('Web mode: REMOTE (' + webRemoteUrl + ')');
+    }
 
     await waitForApiHealth(90000);
     log('API OK');
-    await waitForPort('127.0.0.1', WEB_PORT, 'Web', 90000);
-    log('Web OK');
+    if (!webRemoteUrl) {
+      await waitForPort('127.0.0.1', WEB_PORT, 'Web', 90000);
+      log('Web local OK');
+    }
 
     // Local-agent (impresión térmica) — arranca en cuanto la API responde.
     // No esperamos health check: si el agent crashea, el resto sigue OK.
