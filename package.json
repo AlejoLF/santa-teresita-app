@@ -23,6 +23,7 @@
     "db:reset": "pnpm --filter @sta/db reset",
     "db:seed": "pnpm --filter @sta/db seed",
     "db:studio": "pnpm --filter @sta/db studio",
+    "sync-local": "node scripts/sync-local.mjs",
     "docker:up": "docker compose -f infra/docker/docker-compose.dev.yml up -d",
     "docker:down": "docker compose -f infra/docker/docker-compose.dev.yml down",
     "docker:logs": "docker compose -f infra/docker/docker-compose.dev.yml logs -f",
