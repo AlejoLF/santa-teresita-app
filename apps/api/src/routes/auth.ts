@@ -26,8 +26,15 @@ export default async function authRoutes(fastify: FastifyInstance) {
           secure: config.NODE_ENV === 'production',
           expires: result.expiraAt,
         });
+        // Devolvemos el token en el body además del cookie. Esto habilita
+        // el flujo cross-origin (web servido por Vercel ↔ API local en
+        // 127.0.0.1): el frontend guarda el token en localStorage y lo
+        // manda en `Authorization: Bearer <token>`. Para el flujo
+        // tradicional (mismo origen) la cookie sigue funcionando — el
+        // requireAuth acepta cualquiera de las dos vías.
         return reply.send({
           usuario: result.usuario,
+          token: result.token,
           expiraAt: result.expiraAt.toISOString(),
         });
       } catch (e) {

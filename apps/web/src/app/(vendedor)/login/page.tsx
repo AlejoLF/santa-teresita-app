@@ -4,7 +4,7 @@ import { useState, useEffect, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { PinInput } from '@/components/ui/PinInput';
 import { Numpad } from '@/components/ui/Numpad';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, setAuthToken } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { setDemoRol } from '@/lib/demo/mocks';
 
@@ -55,7 +55,12 @@ export default function VendedorLoginPage() {
     try {
       const res = await api.post<{
         usuario: { id: string; nombre: string; rol: 'VENDEDOR' | 'ADMIN' };
+        token?: string;
       }>('/auth/login', { pin: pinValue, pcOrigen });
+      // Guardamos el token para Authorization header en cross-origin
+      // (web servido por Vercel ↔ API local). En same-origin/desktop la
+      // cookie ya está seteada y el token es redundante pero no estorba.
+      if (res.token) setAuthToken(res.token);
       setEstado('EXITO');
       startTransition(() => {
         router.push(res.usuario.rol === 'VENDEDOR' ? '/cargar-pedido' : '/admin');

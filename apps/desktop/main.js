@@ -501,7 +501,15 @@ function startApi(cloudDbUrl) {
       DATABASE_URL: cloudDbUrl,
       API_HOST: '127.0.0.1',
       API_PORT: String(API_PORT),
-      API_CORS_ORIGINS: `http://127.0.0.1:${WEB_PORT},http://localhost:${WEB_PORT}`,
+      // CORS: aceptamos el web local (loopback) + el dominio de Vercel
+      // donde se hostea la UI. Si la PC carga la UI desde Vercel, el
+      // browser hace fetch cross-origin a 127.0.0.1 y necesitamos esa
+      // entrada acá. Configurable via env STA_WEB_REMOTE_ORIGIN.
+      API_CORS_ORIGINS: [
+        `http://127.0.0.1:${WEB_PORT}`,
+        `http://localhost:${WEB_PORT}`,
+        process.env.STA_WEB_REMOTE_ORIGIN ?? 'https://desktop.santateresita.app',
+      ].join(','),
       // Path del SQLite que persiste el outbox (writes pendientes cuando
       // cloud cae). Vive en data/ del usuario, sobrevive uninstall si
       // deleteAppDataOnUninstall=false.

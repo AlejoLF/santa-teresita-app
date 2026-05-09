@@ -48,8 +48,28 @@ export async function buildServer() {
   app.setSerializerCompiler(serializerCompiler);
 
   await app.register(helmet, { contentSecurityPolicy: false });
+  // CORS: lista explícita + wildcard `*.vercel.app` para que cualquier
+  // preview deploy de Vercel pueda hablarle al API local. La cookie
+  // viaja con `credentials: true`, pero en cross-origin el web usa
+  // tokens en localStorage + Authorization header (las cookies cross-
+  // origin requieren SameSite=None+Secure y el API es HTTP).
+  const allowedExact = config.API_CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
   await app.register(cors, {
-    origin: config.API_CORS_ORIGINS.split(',').map((o) => o.trim()),
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true); // requests sin Origin (Postman, server-to-server)
+      if (allowedExact.includes(origin)) return cb(null, true);
+      // Wildcard: cualquier subdominio *.vercel.app es aceptable. Esto
+      // permite preview deploys (PRs) y branches sin tener que actualizar
+      // la lista cada vez. El riesgo es bajo porque el API local está en
+      // 127.0.0.1 — solo accesible desde la máquina del usuario.
+      try {
+        const u = new URL(origin);
+        if (u.hostname.endsWith('.vercel.app')) return cb(null, true);
+      } catch {
+        /* malformed origin */
+      }
+      cb(new Error(`Origin no permitido: ${origin}`), false);
+    },
     credentials: true,
   });
   await app.register(cookie, { secret: config.AUTH_SECRET });

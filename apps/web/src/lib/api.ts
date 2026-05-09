@@ -1,20 +1,63 @@
 /**
- * Cliente HTTP simple para la API. Todas las requests pasan por /api/v1/*
- * (proxied por Next a la API Fastify).
+ * Cliente HTTP para la API.
+ *
+ * BASE_URL:
+ *   - Modo dev / desktop bundleado: `/api/v1` (relativo, proxied por Next).
+ *   - Modo Vercel + API local cross-origin: `${NEXT_PUBLIC_API_URL}/api/v1`
+ *     donde NEXT_PUBLIC_API_URL=http://127.0.0.1:3001. El browser hace
+ *     fetch directo al API local de cada PC. El API responde con CORS
+ *     allowlist + el web manda token en Authorization header (no usa
+ *     cookies por restricciones SameSite/Secure cross-origin).
+ *
+ * Auth:
+ *   - Si hay token en localStorage (tras login exitoso), se manda como
+ *     `Authorization: Bearer <token>`.
+ *   - Si no hay token, se envía igual con `credentials: 'include'` para
+ *     que la cookie funcione (mismo-origen / dev).
+ *   - 401 → limpia el token (sesión expirada).
  *
  * En modo demo (NEXT_PUBLIC_DEMO_MODE=true) cortocircuitamos a un router
- * mock en memoria — no hay backend, todo el estado es local.
- *
- * Excepción: el cierre de caja en demo dispara un email real vía /api/cierre
- * (ruta server-side de Next). Es la única "ventana" abierta al mundo.
+ * mock en memoria — no hay backend.
  */
 
 // El módulo demo SOLO se carga cuando NEXT_PUBLIC_DEMO_MODE='true'.
-// Se importa dinámicamente más abajo para que en producción el bundle
-// no incluya las ~500 líneas de mocks/datos ficticios.
 
-const BASE_URL = '/api/v1';
+const RAW_API_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
+const BASE_URL = RAW_API_URL ? `${RAW_API_URL.replace(/\/$/, '')}/api/v1` : '/api/v1';
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
+const TOKEN_KEY = 'sta_auth_token';
+
+export function setAuthToken(token: string): void {
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(TOKEN_KEY, token);
+    }
+  } catch {
+    /* localStorage bloqueado (modo privado) — la cookie hace fallback */
+  }
+}
+
+export function getAuthToken(): string | null {
+  try {
+    if (typeof window !== 'undefined') {
+      return window.localStorage.getItem(TOKEN_KEY);
+    }
+  } catch {
+    /* idem */
+  }
+  return null;
+}
+
+export function clearAuthToken(): void {
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(TOKEN_KEY);
+    }
+  } catch {
+    /* idem */
+  }
+}
 
 let demoModulePromise:
   | Promise<typeof import('./demo/mocks')>
@@ -78,12 +121,16 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
   }
 
   const isWrite = method !== 'GET';
+  const token = getAuthToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
   let res: Response;
   try {
     res = await fetch(`${BASE_URL}${path}`, {
       method,
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (e) {
@@ -96,7 +143,7 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
         await fetch(`${BASE_URL}/sync/queue`, {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ method, url: path, body }),
         });
         // Devolvemos un objeto especial que el caller puede detectar para
@@ -120,8 +167,18 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
     throw new ApiError(0, e instanceof Error ? e.message : 'Error de red', undefined);
   }
   if (!res.ok) {
+    if (res.status === 401) {
+      // Sesión expirada/invalidada — limpiamos el token de localStorage
+      // para que el próximo render redirija a /login. El layout de cada
+      // sección hace el redirect cuando /auth/me devuelve 401.
+      clearAuthToken();
+    }
     const errBody = await res.json().catch(() => ({}));
     throw new ApiError(res.status, (errBody as { error?: string })?.error ?? `HTTP ${res.status}`, errBody);
+  }
+  // Logout exitoso → limpiamos el token (la cookie ya la limpia el server)
+  if (path === '/auth/logout' && method === 'POST') {
+    clearAuthToken();
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
