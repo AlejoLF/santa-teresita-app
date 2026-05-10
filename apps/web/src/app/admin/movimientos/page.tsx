@@ -497,6 +497,21 @@ function FormNuevoMovimiento({
   const faltante = montoNum - totalAsignado;
   const cuadra = Math.abs(faltante) < 0.5;
 
+  // Auto-fill: cuando hay UNA sola cuenta destino, monto = monto total del
+  // movimiento. Se distribuye manualmente solo cuando hay 2+ cuentas. Antes
+  // el campo arrancaba vacío y había que retipear el total.
+  useEffect(() => {
+    if (usaMulti && cuentasLineas.length === 1 && montoNum > 0) {
+      const totalStr = montoNum.toFixed(2);
+      if (cuentasLineas[0]!.monto !== totalStr) {
+        setCuentasLineas((arr) =>
+          arr.map((c, i) => (i === 0 ? { ...c, monto: totalStr } : c)),
+        );
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [montoNum, cuentasLineas.length, usaMulti]);
+
   function setCuentaLinea(idx: number, patch: Partial<CuentaLinea>) {
     setCuentasLineas((arr) => arr.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
   }

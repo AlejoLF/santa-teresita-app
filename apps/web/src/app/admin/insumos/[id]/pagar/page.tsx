@@ -133,6 +133,20 @@ export default function PagarFacturasPage({ params }: { params: Promise<{ id: st
 
   const diferencia = totalAsignado - totalAPagar;
 
+  // Auto-fill: cuando hay UNA sola cuenta destino, el monto = total. Solo
+  // cuando la encargada agrega una 2da cuenta empieza a distribuir manualmente.
+  // Antes el campo arrancaba vacío y había que retipear el total — fricción
+  // innecesaria en el caso simple (que es el 90%).
+  useEffect(() => {
+    if (pagos.length === 1 && totalAPagar > 0) {
+      const totalStr = totalAPagar.toFixed(2);
+      if (pagos[0]!.monto !== totalStr) {
+        setPagos((arr) => arr.map((p, i) => (i === 0 ? { ...p, monto: totalStr } : p)));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalAPagar, pagos.length]);
+
   if (error) return <div className="text-pomodoro-600 p-6">{error}</div>;
   if (!data) return <div className="text-ink-500 p-6">Cargando...</div>;
 
