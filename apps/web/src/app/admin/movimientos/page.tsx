@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
+import { MovimientoDetailModal } from '@/components/admin/MovimientoDetailModal';
 import { cn } from '@/lib/cn';
 
 interface Cuenta {
@@ -29,6 +30,8 @@ interface Movimiento {
   cuentaDestino?: { nombre: string } | null;
   categoria: { nombre: string };
   usuario: { nombre: string };
+  modificado?: boolean;
+  modificadoAt?: string | null;
 }
 
 interface Listado {
@@ -55,6 +58,8 @@ export default function AdminMovimientosPage() {
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // ID del movimiento que la encargada hizo click → abre el modal de detalle
+  const [detalleId, setDetalleId] = useState<string | null>(null);
 
   // Sincronizar filtro con URL al cambiar (back/forward o navegación lateral)
   useEffect(() => {
@@ -201,19 +206,20 @@ export default function AdminMovimientosPage() {
               <th className="text-right px-4 py-2">Monto</th>
               <th className="text-left px-4 py-2">Usuario</th>
               <th className="text-center px-4 py-2">Estado</th>
+              <th className="text-center px-4 py-2 w-24">Acciones</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-cream-200">
             {loading && (
               <tr>
-                <td colSpan={7} className="text-center text-ink-500 py-8">
+                <td colSpan={8} className="text-center text-ink-500 py-8">
                   Cargando...
                 </td>
               </tr>
             )}
             {!loading && data?.movimientos.length === 0 && (
               <tr>
-                <td colSpan={7} className="text-center text-ink-500 py-8">
+                <td colSpan={8} className="text-center text-ink-500 py-8">
                   Sin movimientos
                 </td>
               </tr>
@@ -228,7 +234,12 @@ export default function AdminMovimientosPage() {
               return (
                 <tr
                   key={m.id}
-                  className={cn('hover:bg-cream-100', m.estado === 'ANULADO' && 'opacity-50')}
+                  onClick={() => setDetalleId(m.id)}
+                  className={cn(
+                    'hover:bg-cream-100 cursor-pointer',
+                    m.estado === 'ANULADO' && 'opacity-50',
+                  )}
+                  title="Click para ver detalle e historial"
                 >
                   <td className="px-4 py-2 font-mono text-ink-700 text-xs">
                     {new Date(m.fechaComputo).toLocaleDateString('es-AR', {
@@ -239,6 +250,18 @@ export default function AdminMovimientosPage() {
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
+                    {m.modificado && (
+                      <span
+                        className="ml-2 text-2xs px-1.5 py-0.5 bg-saffron-100 text-saffron-600 rounded"
+                        title={
+                          m.modificadoAt
+                            ? `Modificado: ${new Date(m.modificadoAt).toLocaleString('es-AR')}`
+                            : 'Modificado'
+                        }
+                      >
+                        ✎ MOD
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2">
                     <span
@@ -278,12 +301,44 @@ export default function AdminMovimientosPage() {
                       {m.estado.toLowerCase()}
                     </span>
                   </td>
+                  <td
+                    className="px-4 py-2 text-center"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {m.estado !== 'ANULADO' && (
+                      <div className="flex justify-center gap-1">
+                        <button
+                          onClick={() => setDetalleId(m.id)}
+                          className="px-1.5 py-0.5 text-ink-500 hover:text-saffron-600 hover:bg-saffron-100 rounded"
+                          title="Editar / ver detalle"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => setDetalleId(m.id)}
+                          className="px-1.5 py-0.5 text-ink-500 hover:text-pomodoro-600 hover:bg-pomodoro-100 rounded"
+                          title="Anular"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </section>
+
+      {detalleId && (
+        <MovimientoDetailModal
+          movimientoId={detalleId}
+          cuentas={cuentas}
+          onClose={() => setDetalleId(null)}
+          onUpdated={() => void fetchMovimientos()}
+        />
+      )}
 
       {totalPages > 1 && (
         <nav className="flex items-center justify-center gap-2 text-sm">

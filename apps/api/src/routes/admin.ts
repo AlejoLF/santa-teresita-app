@@ -666,8 +666,33 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         sumas.find((s) => s.tipo === 'EGRESO')?._sum.monto ?? 0,
       );
 
+      // Marcar cuáles fueron modificados o anulados — consultamos el audit
+      // log de los movimientos del page actual en una sola query y mapeamos
+      // por id. Sin esto la UI no sabría qué fila tiene tag "modificado".
+      const ids = movimientos.map((m) => m.id);
+      const auditEntries = ids.length
+        ? await prisma.auditLog.findMany({
+            where: {
+              tabla: 'movimientos',
+              registroId: { in: ids },
+              accion: { in: ['UPDATE', 'TRANSITION'] },
+            },
+            select: { registroId: true, accion: true, timestamp: true },
+          })
+        : [];
+      const modificadoMap = new Map<string, string>();
+      for (const a of auditEntries) {
+        if (a.accion === 'UPDATE') {
+          modificadoMap.set(a.registroId, a.timestamp.toISOString());
+        }
+      }
+
       return {
-        movimientos,
+        movimientos: movimientos.map((m) => ({
+          ...m,
+          modificado: modificadoMap.has(m.id),
+          modificadoAt: modificadoMap.get(m.id) ?? null,
+        })),
         total,
         page: q.page,
         pageSize: q.pageSize,
@@ -818,6 +843,173 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       });
 
       return reply.code(201).send(created);
+    },
+  );
+
+  // GET /admin/movimientos/:id — detalle + audit log para el modal de detalle.
+  fastify.get(
+    '/admin/movimientos/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const mov = await prisma.movimiento.findUnique({
+        where: { id: params.id },
+        include: {
+          cuentaOrigen: { select: { nombre: true } },
+          cuentaDestino: { select: { nombre: true } },
+          categoria: { select: { nombre: true } },
+          usuario: { select: { nombre: true } },
+        },
+      });
+      if (!mov) return reply.code(404).send({ error: 'Movimiento no encontrado' });
+
+      // Audit log: todas las modificaciones del movimiento
+      const audits = await prisma.auditLog.findMany({
+        where: { tabla: 'movimientos', registroId: mov.id },
+        orderBy: { timestamp: 'asc' },
+        include: { usuario: { select: { nombre: true } } },
+      });
+
+      return {
+        ...mov,
+        audits: audits.map((a) => ({
+          id: a.id,
+          accion: a.accion,
+          fecha: a.timestamp.toISOString(),
+          usuarioNombre: a.usuario?.nombre ?? null,
+          valorAnterior: a.valorAnterior,
+          valorNuevo: a.valorNuevo,
+        })),
+        modificado: audits.some((a) => a.accion === 'UPDATE'),
+        anulado: mov.estado === EstadoMovimiento.ANULADO,
+      };
+    },
+  );
+
+  // PATCH /admin/movimientos/:id — editar monto / observación / cuenta del
+  // movimiento. Recalcula saldos de las cuentas afectadas si cambia el monto
+  // o la cuenta. Cualquier edición se registra en el audit log para que el
+  // historial quede visible en la UI.
+  fastify.patch(
+    '/admin/movimientos/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z
+          .object({
+            monto: z.string().regex(/^\d+(\.\d{1,2})?$/, 'Monto inválido').optional(),
+            observacion: z.string().max(500).nullable().optional(),
+            cuentaOrigenId: z.string().uuid().nullable().optional(),
+            cuentaDestinoId: z.string().uuid().nullable().optional(),
+            fechaComputo: z.string().datetime().optional(),
+          })
+          .refine(
+            (d) =>
+              d.monto !== undefined ||
+              d.observacion !== undefined ||
+              d.cuentaOrigenId !== undefined ||
+              d.cuentaDestinoId !== undefined ||
+              d.fechaComputo !== undefined,
+            { message: 'Hay que enviar al menos un campo' },
+          ),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const body = req.body as {
+        monto?: string;
+        observacion?: string | null;
+        cuentaOrigenId?: string | null;
+        cuentaDestinoId?: string | null;
+        fechaComputo?: string;
+      };
+
+      const mov = await prisma.movimiento.findUnique({ where: { id: params.id } });
+      if (!mov) return reply.code(404).send({ error: 'Movimiento no encontrado' });
+      if (mov.estado === EstadoMovimiento.ANULADO) {
+        return reply.code(400).send({ error: 'No se puede editar un movimiento anulado' });
+      }
+
+      const montoAnterior = Number(mov.monto);
+      const montoNuevo = body.monto !== undefined ? Number(body.monto) : montoAnterior;
+      const cuentaOrigenAnterior = mov.cuentaOrigenId;
+      const cuentaOrigenNueva =
+        body.cuentaOrigenId !== undefined ? body.cuentaOrigenId : cuentaOrigenAnterior;
+      const cuentaDestinoAnterior = mov.cuentaDestinoId;
+      const cuentaDestinoNueva =
+        body.cuentaDestinoId !== undefined ? body.cuentaDestinoId : cuentaDestinoAnterior;
+
+      const updated = await prisma.$transaction(async (tx) => {
+        // 1. Revertir el efecto del movimiento original
+        if (cuentaOrigenAnterior) {
+          await tx.cuenta.update({
+            where: { id: cuentaOrigenAnterior },
+            data: { saldoActual: { increment: montoAnterior } },
+          });
+        }
+        if (cuentaDestinoAnterior) {
+          await tx.cuenta.update({
+            where: { id: cuentaDestinoAnterior },
+            data: { saldoActual: { decrement: montoAnterior } },
+          });
+        }
+        // 2. Update del movimiento con valores nuevos
+        const nuevo = await tx.movimiento.update({
+          where: { id: mov.id },
+          data: {
+            ...(body.monto !== undefined && { monto: body.monto }),
+            ...(body.observacion !== undefined && { observacion: body.observacion }),
+            ...(body.cuentaOrigenId !== undefined && {
+              cuentaOrigenId: body.cuentaOrigenId,
+            }),
+            ...(body.cuentaDestinoId !== undefined && {
+              cuentaDestinoId: body.cuentaDestinoId,
+            }),
+            ...(body.fechaComputo && { fechaComputo: new Date(body.fechaComputo) }),
+          },
+        });
+        // 3. Aplicar el efecto nuevo (con cuenta nueva y monto nuevo)
+        if (cuentaOrigenNueva) {
+          await tx.cuenta.update({
+            where: { id: cuentaOrigenNueva },
+            data: { saldoActual: { decrement: montoNuevo } },
+          });
+        }
+        if (cuentaDestinoNueva) {
+          await tx.cuenta.update({
+            where: { id: cuentaDestinoNueva },
+            data: { saldoActual: { increment: montoNuevo } },
+          });
+        }
+        return nuevo;
+      });
+
+      await recordAudit({
+        tabla: 'movimientos',
+        registroId: mov.id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: {
+          monto: mov.monto.toString(),
+          observacion: mov.observacion,
+          cuentaOrigenId: mov.cuentaOrigenId,
+          cuentaDestinoId: mov.cuentaDestinoId,
+          fechaComputo: mov.fechaComputo.toISOString(),
+        },
+        valorNuevo: {
+          monto: updated.monto.toString(),
+          observacion: updated.observacion,
+          cuentaOrigenId: updated.cuentaOrigenId,
+          cuentaDestinoId: updated.cuentaDestinoId,
+          fechaComputo: updated.fechaComputo.toISOString(),
+        },
+      });
+
+      return reply.send(updated);
     },
   );
 
