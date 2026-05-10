@@ -414,6 +414,11 @@ function FormNuevoMovimiento({
   const [proveedores, setProveedores] = useState<ProveedorLite[]>([]);
   const [proveedorId, setProveedorId] = useState<string>('');
   const [metodoPago, setMetodoPago] = useState<MetodoPagoProveedor>('TRANSFERENCIA');
+  // Nº de operación bancaria o código interno de referencia. Lo pedimos
+  // cuando la categoría es proveedor (pago a cuenta corriente). Si el pago
+  // es por transferencia/depósito, debería tener el nº de operación. Si es
+  // efectivo, la encargada pone un código nuestro (ej "EF-20260510-001").
+  const [numeroReferencia, setNumeroReferencia] = useState<string>('');
 
   // Categorías disponibles para el tipo elegido
   const categoriasFiltradas = categorias.filter((c) => {
@@ -582,15 +587,24 @@ function FormNuevoMovimiento({
 
     setGuardando(true);
     try {
-      // Caso especial: pago a proveedor con FIFO automático sobre facturas pendientes.
-      // Solo soportamos 1 cuenta para este flujo (el caso multi-cuenta se hace por
-      // el wizard de "pagos-multicuenta" en la sección de Insumos/Proveedores).
+      // Pago a proveedor: SIEMPRE como pago a cuenta corriente, sin allocar
+      // FIFO contra facturas. Antes el flujo egreso-a-proveedor asignaba el
+      // monto a la factura más vieja, lo cual era incorrecto cuando hay
+      // múltiples facturas pendientes (no sabemos cuál pagó realmente).
+      // Ahora queda como un evento independiente que descuenta del saldo
+      // adeudado total. La encargada después puede ir a "Pagar facturas"
+      // (en Insumos) y asignar específicamente si quiere cancelar una.
       if (esCategoriaProveedor && proveedorId) {
-        await api.post('/admin/egreso-a-proveedor', {
+        await api.post('/admin/pagos-a-cuenta', {
           proveedorId,
-          monto,
-          cuentaId: cuentasLineas[0]!.cuentaId,
-          metodo: metodoPago,
+          pagos: [
+            {
+              cuentaId: cuentasLineas[0]!.cuentaId,
+              metodo: metodoPago,
+              monto,
+              numeroReferencia: numeroReferencia.trim() || undefined,
+            },
+          ],
           observaciones: observacion || undefined,
         });
         onCreated();
@@ -807,29 +821,49 @@ function FormNuevoMovimiento({
                         })()}
                       </div>
                       <p className="text-2xs text-ink-400 mt-1.5">
-                        Se aplica FIFO sobre {proveedorActual.facturasPendientes}{' '}
-                        factura{proveedorActual.facturasPendientes !== 1 ? 's' : ''} pendiente
-                        {proveedorActual.facturasPendientes !== 1 ? 's' : ''} (la más vieja
-                        primero).
+                        Se registra como pago a cuenta corriente (no se asigna
+                        a una factura específica). La encargada puede asignar
+                        después desde "Pagar facturas".
                       </p>
                     </>
                   )}
                 </div>
               )}
 
-              <div>
-                <label className="block text-2xs font-medium text-ink-700 mb-1">Método de pago</label>
-                <select
-                  value={metodoPago}
-                  onChange={(e) => setMetodoPago(e.target.value as MetodoPagoProveedor)}
-                  className="input text-sm"
-                >
-                  {METODOS_PAGO_PROVEEDOR.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-2xs font-medium text-ink-700 mb-1">
+                    Método de pago
+                  </label>
+                  <select
+                    value={metodoPago}
+                    onChange={(e) => setMetodoPago(e.target.value as MetodoPagoProveedor)}
+                    className="input text-sm"
+                  >
+                    {METODOS_PAGO_PROVEEDOR.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-2xs font-medium text-ink-700 mb-1">
+                    Nº de referencia
+                  </label>
+                  <input
+                    type="text"
+                    value={numeroReferencia}
+                    onChange={(e) => setNumeroReferencia(e.target.value)}
+                    placeholder={
+                      metodoPago === 'TRANSFERENCIA' || metodoPago === 'DEPOSITO' || metodoPago === 'CHEQUE'
+                        ? 'Nº operación bancaria'
+                        : 'ej. EF-001 (opcional)'
+                    }
+                    maxLength={80}
+                    className="input text-sm font-mono"
+                  />
+                </div>
               </div>
             </div>
           )}

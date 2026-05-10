@@ -101,15 +101,16 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         saldo: (calcSaldoFactura(f)).toFixed(2),
       }));
 
-      const saldoAdeudado = facturas
+      const saldoFacturas = facturas
         .filter((f) => ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'].includes(f.estado))
         .reduce((acc, f) => acc + Number(f.saldo), 0);
 
       // Pagos "a cuenta corriente": pagos hechos al proveedor que NO están
       // asociados a una factura específica (pagosFactura join vacío). Ej:
-      // se paga $1.5M de un saldo de $2M sin coincidir con facturas
-      // específicas → queda como pago a cuenta. La encargada los necesita
-      // ver como líneas separadas con fecha + nº de operación + monto.
+      // se paga $200k de un saldo de $400k desde Movimientos — queda como
+      // pago a cuenta sin asignar. La encargada después puede ir a "Pagar
+      // facturas" y asignarlo a una específica si quiere. Mientras tanto,
+      // descuenta del saldo total adeudado.
       const pagosRaw = await prisma.pago.findMany({
         where: {
           movimiento: { entidadId: params.id, tipo: 'EGRESO' },
@@ -131,10 +132,18 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         observacion: p.movimiento?.observacion ?? null,
       }));
 
+      // Saldo adeudado real = saldo de facturas pendientes - pagos a cuenta
+      // sin asignar (que son créditos a favor del proveedor todavía no
+      // imputados a ninguna factura).
+      const totalPagosACuenta = pagosACuenta.reduce((acc, p) => acc + Number(p.monto), 0);
+      const saldoAdeudado = Math.max(0, saldoFacturas - totalPagosACuenta);
+
       return {
         proveedor: { ...proveedor, facturas: undefined },
         facturas,
         pagosACuenta,
+        saldoFacturas: saldoFacturas.toFixed(2),
+        totalPagosACuenta: totalPagosACuenta.toFixed(2),
         saldoAdeudado: saldoAdeudado.toFixed(2),
       };
     },
