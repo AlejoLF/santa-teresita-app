@@ -68,6 +68,10 @@ infra/docker/data/
 # Vercel local — contiene OIDC token y project linkage
 .vercel/
 
+# SQLite outbox del API (writes pendientes durante outage de cloud).
+# Se genera en runtime en apps/api/. NO commitear — son datos efímeros.
+apps/api/outbox.sqlite*
+
 # Desktop build artifacts (resources/ se regenera, out/ ya cubierto arriba,
 # dist/ es el output de electron-builder)
 apps/desktop/resources/

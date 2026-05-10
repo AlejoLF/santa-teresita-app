@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { PedidosAbiertosList } from '@/components/PedidosAbiertosList';
 import { ClienteDeliveryFields } from '@/components/vendedor/ClienteDeliveryFields';
+import { ObservacionEditable } from '@/components/ObservacionEditable';
 import {
   useCart,
   selectSubtotal,
@@ -1570,19 +1571,21 @@ function CartItemRow({ item, esParteDePaquete, esPrimeroDelPaquete }: {
               </span>
             )}
           </div>
-          {item.observacion && (
-            esParteDePaquete && esPrimeroDelPaquete ? (
-              <div className="mt-1 px-2.5 py-1.5 bg-saffron-100 border-l-4 border-saffron-600 rounded-r">
-                <div className="text-2xs font-bold uppercase tracking-widest text-saffron-600">
-                  ⚠ Observación
-                </div>
-                <div className="text-sm font-bold text-ink-900 leading-tight">
-                  {item.observacion}
-                </div>
-              </div>
-            ) : (
-              <div className="text-xs italic text-saffron-600 mt-0.5">{item.observacion}</div>
-            )
+          {/* Observación editable: click → edita inline. Si no hay obs,
+              muestra un botón ✏️ para agregar. Para items que son parte
+              de un paquete pero no son el primero, no mostramos editor
+              (la obs viaja con el item principal). */}
+          {(!esParteDePaquete || esPrimeroDelPaquete) && (
+            <ObservacionEditable
+              observacion={item.observacion}
+              variant={esParteDePaquete && esPrimeroDelPaquete ? 'block' : 'inline'}
+              onSave={(nueva) =>
+                cart.editar(item.uid, { observacion: nueva || undefined })
+              }
+            />
+          )}
+          {esParteDePaquete && !esPrimeroDelPaquete && item.observacion && (
+            <div className="text-xs italic text-saffron-600 mt-0.5">{item.observacion}</div>
           )}
         </div>
         <div className="text-right flex flex-col items-end gap-3">

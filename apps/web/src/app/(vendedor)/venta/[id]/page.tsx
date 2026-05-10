@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
+import { ObservacionEditable } from '@/components/ObservacionEditable';
 import { calcularDescuentoEfectivo } from '@sta/shared';
 import { cn } from '@/lib/cn';
 import { useVentaWatch } from '@/hooks/useVentaWatch';
@@ -382,15 +383,30 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
                       › {m.opcionNombre}
                     </div>
                   ))}
-                  {item.observacion && (
-                    <div className="mt-1.5 px-3 py-2 bg-saffron-100 border-l-4 border-saffron-600 rounded-r-md">
-                      <div className="text-2xs font-bold uppercase tracking-widest text-saffron-600 mb-0.5">
-                        ⚠ Observación
+                  {/* Observación editable solo cuando la venta está en
+                      estado PROCESADA (editable). Sino, render readonly
+                      del bloque amarillo. */}
+                  {editable ? (
+                    <ObservacionEditable
+                      observacion={item.observacion}
+                      onSave={async (nueva) => {
+                        await api.patch(`/ventas/${venta.id}/items/${item.id}`, {
+                          observacion: nueva || null,
+                        });
+                        await refetch();
+                      }}
+                    />
+                  ) : (
+                    item.observacion && (
+                      <div className="mt-1.5 px-3 py-2 bg-saffron-100 border-l-4 border-saffron-600 rounded-r-md">
+                        <div className="text-2xs font-bold uppercase tracking-widest text-saffron-600 mb-0.5">
+                          ⚠ Observación
+                        </div>
+                        <div className="text-base font-bold text-ink-900 leading-tight">
+                          {item.observacion}
+                        </div>
                       </div>
-                      <div className="text-base font-bold text-ink-900 leading-tight">
-                        {item.observacion}
-                      </div>
-                    </div>
+                    )
                   )}
                   <div className="text-xs text-ink-500 mt-1 font-mono">
                     {item.cantidad}{' '}

@@ -302,6 +302,40 @@ export async function agregarItemsAVenta(args: {
 /**
  * Quita un item específico de una venta PROCESADA y recalcula totales.
  */
+/**
+ * Edita campos editables de un ItemVenta (por ahora solo observacion).
+ * Se llama desde PATCH /ventas/:id/items/:itemId. La venta debe estar
+ * PROCESADA — no editamos items de ventas finalizadas/anuladas.
+ *
+ * Encola re-impresión de comanda si el item interviene en cocina (la
+ * cocinera necesita ver la observación nueva).
+ */
+export async function editarItemDeVenta(args: {
+  ventaId: string;
+  itemId: string;
+  observacion: string | null;
+  usuarioId: string;
+}) {
+  const venta = await prisma.venta.findUnique({
+    where: { id: args.ventaId },
+    include: { items: true },
+  });
+  if (!venta) throw new Error('Venta no encontrada');
+  const item = venta.items.find((i) => i.id === args.itemId);
+  if (!item) throw new Error('Item no encontrado en esta venta');
+
+  await prisma.itemVenta.update({
+    where: { id: args.itemId },
+    data: {
+      observacion: args.observacion,
+      editadoAt: new Date(),
+      editadoPorId: args.usuarioId,
+    },
+  });
+
+  return getVentaCompleta(args.ventaId);
+}
+
 export async function quitarItemDeVenta(args: { ventaId: string; itemId: string }) {
   const venta = await prisma.venta.findUnique({
     where: { id: args.ventaId },

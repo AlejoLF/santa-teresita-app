@@ -11,6 +11,7 @@ import {
   listarVentasDeSesionActual,
   agregarItemsAVenta,
   quitarItemDeVenta,
+  editarItemDeVenta,
 } from '../services/venta.js';
 import { getOrCreateSesionActual } from '../services/sesion-caja.js';
 import { recordAudit } from '../services/audit.js';
@@ -229,6 +230,51 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       });
 
       return reply.send(await getVentaCompleta(venta.id));
+    },
+  );
+
+  // PATCH /ventas/:id/items/:itemId — editar campos del item (por ahora
+  // sólo observacion). Solo permitido en ventas PROCESADAS.
+  fastify.patch(
+    '/ventas/:id/items/:itemId',
+    {
+      preHandler: fastify.requireAuth(),
+      schema: {
+        params: z.object({ id: z.string().uuid(), itemId: z.string().uuid() }),
+        body: z.object({
+          observacion: z.string().max(500).nullable(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string; itemId: string };
+      const body = req.body as { observacion: string | null };
+
+      const venta = await prisma.venta.findUnique({ where: { id: params.id } });
+      if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (venta.estado !== EstadoVenta.PROCESADA) {
+        return reply.code(400).send({
+          error: 'Solo se pueden editar items de ventas PROCESADAS',
+        });
+      }
+
+      const updated = await editarItemDeVenta({
+        ventaId: venta.id,
+        itemId: params.itemId,
+        observacion: body.observacion?.trim() || null,
+        usuarioId: req.usuario!.id,
+      });
+
+      await recordAudit({
+        tabla: 'items_venta',
+        registroId: params.itemId,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { observacion: body.observacion },
+        contexto: { ventaId: venta.id },
+      });
+
+      return reply.send(updated);
     },
   );
 
