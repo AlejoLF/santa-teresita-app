@@ -105,9 +105,36 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         .filter((f) => ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'].includes(f.estado))
         .reduce((acc, f) => acc + Number(f.saldo), 0);
 
+      // Pagos "a cuenta corriente": pagos hechos al proveedor que NO están
+      // asociados a una factura específica (pagosFactura join vacío). Ej:
+      // se paga $1.5M de un saldo de $2M sin coincidir con facturas
+      // específicas → queda como pago a cuenta. La encargada los necesita
+      // ver como líneas separadas con fecha + nº de operación + monto.
+      const pagosRaw = await prisma.pago.findMany({
+        where: {
+          movimiento: { entidadId: params.id, tipo: 'EGRESO' },
+          pagosFactura: { none: {} },
+        },
+        include: {
+          cuenta: { select: { nombre: true } },
+          movimiento: { select: { observacion: true } },
+        },
+        orderBy: { fecha: 'desc' },
+      });
+      const pagosACuenta = pagosRaw.map((p) => ({
+        id: p.id,
+        fecha: p.fecha.toISOString(),
+        metodo: p.metodo,
+        monto: p.monto.toFixed(2),
+        cuentaNombre: p.cuenta?.nombre ?? null,
+        numeroReferencia: p.numeroReferencia,
+        observacion: p.movimiento?.observacion ?? null,
+      }));
+
       return {
         proveedor: { ...proveedor, facturas: undefined },
         facturas,
+        pagosACuenta,
         saldoAdeudado: saldoAdeudado.toFixed(2),
       };
     },

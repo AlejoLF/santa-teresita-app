@@ -36,9 +36,20 @@ interface Factura {
   observaciones: string | null;
 }
 
+interface PagoACuenta {
+  id: string;
+  fecha: string;
+  metodo: string;
+  monto: string;
+  cuentaNombre: string | null;
+  numeroReferencia: string | null;
+  observacion: string | null;
+}
+
 interface DetalleResp {
   proveedor: Proveedor;
   facturas: Factura[];
+  pagosACuenta: PagoACuenta[];
   saldoAdeudado: string;
 }
 
@@ -226,6 +237,74 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                   </tr>
                 );
               })}
+              {/* Pagos a cuenta corriente — registros de pagos NO asociados
+                  a una factura específica. No tienen checkbox (no son
+                  "pagables", ya están pagados). Se muestran en la misma
+                  tabla con un fondo distinto para diferenciarlos. */}
+              {data.pagosACuenta?.map((p) => (
+                <tr key={p.id} className="bg-saffron-100/40 hover:bg-saffron-100/70">
+                  <td className="px-4 py-3" />
+                  <td className="px-4 py-3">
+                    <div className="text-2xs uppercase tracking-wider text-saffron-600 font-semibold">
+                      Pago a cuenta
+                    </div>
+                    <div className="font-mono text-xs text-ink-700">
+                      {p.numeroReferencia ?? `(sin ref)`}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-ink-700">
+                    {new Date(p.fecha).toLocaleDateString('es-AR')}
+                  </td>
+                  <td className="px-4 py-3 text-2xs text-ink-500">
+                    <span className="inline-flex items-center gap-1">
+                      <span>{p.metodo.replace('_', ' ').toLowerCase()}</span>
+                      {p.cuentaNombre && (
+                        <span className="text-ink-300">· {p.cuentaNombre}</span>
+                      )}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right text-ink-300">—</td>
+                  <td className="px-4 py-3 text-right">
+                    <MoneyAmount value={p.monto} className="text-basil-600 font-medium" />
+                  </td>
+                  <td className="px-4 py-3 text-right text-ink-300">—</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {/* Si no hay facturas pendientes pero sí pagos a cuenta, los
+            mostramos en una tabla mínima propia. */}
+        {facturasPendientes.length === 0 && (data.pagosACuenta?.length ?? 0) > 0 && (
+          <table className="w-full text-sm">
+            <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
+              <tr>
+                <th className="text-left px-4 py-2">Pago a cuenta</th>
+                <th className="text-left px-4 py-2">Fecha</th>
+                <th className="text-left px-4 py-2">Método</th>
+                <th className="text-right px-4 py-2">Monto</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-cream-200">
+              {data.pagosACuenta.map((p) => (
+                <tr key={p.id} className="bg-saffron-100/40 hover:bg-saffron-100/70">
+                  <td className="px-4 py-3 font-mono text-xs text-ink-700">
+                    {p.numeroReferencia ?? '(sin ref)'}
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-ink-700">
+                    {new Date(p.fecha).toLocaleDateString('es-AR')}
+                  </td>
+                  <td className="px-4 py-3 text-2xs text-ink-500">
+                    {p.metodo.replace('_', ' ').toLowerCase()}
+                    {p.cuentaNombre && (
+                      <span className="text-ink-300"> · {p.cuentaNombre}</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <MoneyAmount value={p.monto} className="text-basil-600 font-medium" />
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}
