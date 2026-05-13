@@ -905,6 +905,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             observacion: z.string().max(500).nullable().optional(),
             cuentaOrigenId: z.string().uuid().nullable().optional(),
             cuentaDestinoId: z.string().uuid().nullable().optional(),
+            categoriaId: z.string().uuid().optional(),
             fechaComputo: z.string().datetime().optional(),
           })
           .refine(
@@ -913,6 +914,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               d.observacion !== undefined ||
               d.cuentaOrigenId !== undefined ||
               d.cuentaDestinoId !== undefined ||
+              d.categoriaId !== undefined ||
               d.fechaComputo !== undefined,
             { message: 'Hay que enviar al menos un campo' },
           ),
@@ -925,13 +927,55 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         observacion?: string | null;
         cuentaOrigenId?: string | null;
         cuentaDestinoId?: string | null;
+        categoriaId?: string;
         fechaComputo?: string;
       };
 
-      const mov = await prisma.movimiento.findUnique({ where: { id: params.id } });
+      const mov = await prisma.movimiento.findUnique({
+        where: { id: params.id },
+        include: { categoria: true },
+      });
       if (!mov) return reply.code(404).send({ error: 'Movimiento no encontrado' });
       if (mov.estado === EstadoMovimiento.ANULADO) {
         return reply.code(400).send({ error: 'No se puede editar un movimiento anulado' });
+      }
+
+      // Si cambia la categoría, validamos que sea compatible. Bloquear los
+      // saltos entre categorías que tienen datos extra requeridos (Sueldos
+      // necesita empleado + conceptos; Insumos necesita proveedor) porque
+      // eso dejaría el movimiento inconsistente. Para reclasificar entre
+      // esas categorías, hay que anular + recrear.
+      if (body.categoriaId && body.categoriaId !== mov.categoriaId) {
+        const nuevaCat = await prisma.categoriaMovimiento.findUnique({
+          where: { id: body.categoriaId },
+        });
+        if (!nuevaCat) {
+          return reply.code(400).send({ error: 'Categoría nueva no encontrada' });
+        }
+        const requiereDataExtra = (nombre: string) =>
+          /sueldo|adelanto a empleado|insumos.*proveedor/i.test(nombre);
+        const viejaTieneExtra = requiereDataExtra(mov.categoria.nombre);
+        const nuevaTieneExtra = requiereDataExtra(nuevaCat.nombre);
+        if (viejaTieneExtra || nuevaTieneExtra) {
+          // Aceptamos el cambio solo si vieja y nueva pertenecen al mismo grupo
+          // funcional (Sueldos ↔ Adelanto a empleado, ambas con empleadoId).
+          const mismoGrupoSueldo =
+            /sueldo|adelanto a empleado/i.test(mov.categoria.nombre) &&
+            /sueldo|adelanto a empleado/i.test(nuevaCat.nombre);
+          if (!mismoGrupoSueldo) {
+            return reply.code(400).send({
+              error:
+                'No se puede cambiar entre categorías con datos especiales (Sueldos/Insumos). Anulá el movimiento y creá uno nuevo con la categoría correcta.',
+            });
+          }
+        }
+        // Validar que el tipo de la nueva categoría coincida con el tipo del
+        // movimiento (no se puede mover un EGRESO a una categoría de INGRESO).
+        if (nuevaCat.tipo !== 'AMBOS' && nuevaCat.tipo !== mov.tipo) {
+          return reply.code(400).send({
+            error: `La categoría "${nuevaCat.nombre}" es para tipo ${nuevaCat.tipo}, no aplica a ${mov.tipo}`,
+          });
+        }
       }
 
       const montoAnterior = Number(mov.monto);
@@ -969,6 +1013,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             ...(body.cuentaDestinoId !== undefined && {
               cuentaDestinoId: body.cuentaDestinoId,
             }),
+            ...(body.categoriaId && { categoriaId: body.categoriaId }),
             ...(body.fechaComputo && { fechaComputo: new Date(body.fechaComputo) }),
           },
         });
@@ -998,6 +1043,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           observacion: mov.observacion,
           cuentaOrigenId: mov.cuentaOrigenId,
           cuentaDestinoId: mov.cuentaDestinoId,
+          categoriaId: mov.categoriaId,
           fechaComputo: mov.fechaComputo.toISOString(),
         },
         valorNuevo: {
@@ -1005,6 +1051,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           observacion: updated.observacion,
           cuentaOrigenId: updated.cuentaOrigenId,
           cuentaDestinoId: updated.cuentaDestinoId,
+          categoriaId: updated.categoriaId,
           fechaComputo: updated.fechaComputo.toISOString(),
         },
       });

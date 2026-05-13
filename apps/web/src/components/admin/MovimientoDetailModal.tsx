@@ -22,6 +22,9 @@ interface MovimientoDetalle {
   fechaComputo: string;
   estado: string;
   observacion: string | null;
+  cuentaOrigenId: string | null;
+  cuentaDestinoId: string | null;
+  categoriaId: string;
   cuentaOrigen?: { nombre: string } | null;
   cuentaDestino?: { nombre: string } | null;
   categoria: { nombre: string };
@@ -37,6 +40,28 @@ interface Cuenta {
   tipo: string;
 }
 
+interface CategoriaShort {
+  id: string;
+  nombre: string;
+  tipo: 'INGRESO' | 'EGRESO' | 'TRANSFERENCIA' | 'AMBOS';
+}
+
+/** Categorías "simples" (sin datos extra requeridos) son intercambiables.
+ *  Sueldos y Adelanto a empleado son intercambiables entre sí (ambas usan
+ *  empleadoId). Insumos no se puede cambiar a otra ni viceversa. */
+function categoriaCompatible(actualNombre: string, candidata: CategoriaShort): boolean {
+  const requiereExtra = (n: string) =>
+    /sueldo|adelanto a empleado|insumos.*proveedor/i.test(n);
+  const aExtra = requiereExtra(actualNombre);
+  const bExtra = requiereExtra(candidata.nombre);
+  if (!aExtra && !bExtra) return true;
+  // Sueldos ↔ Adelanto a empleado intercambiables
+  return (
+    /sueldo|adelanto a empleado/i.test(actualNombre) &&
+    /sueldo|adelanto a empleado/i.test(candidata.nombre)
+  );
+}
+
 /**
  * Modal de detalle/edición de un movimiento.
  *
@@ -47,7 +72,7 @@ interface Cuenta {
  */
 export function MovimientoDetailModal({
   movimientoId,
-  cuentas: _cuentas,
+  cuentas,
   onClose,
   onUpdated,
 }: {
@@ -57,20 +82,38 @@ export function MovimientoDetailModal({
   onUpdated: () => void;
 }) {
   const [det, setDet] = useState<MovimientoDetalle | null>(null);
+  const [categorias, setCategorias] = useState<CategoriaShort[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [editando, setEditando] = useState(false);
   const [montoEdit, setMontoEdit] = useState('');
   const [obsEdit, setObsEdit] = useState('');
+  const [cuentaOrigenEdit, setCuentaOrigenEdit] = useState<string>('');
+  const [cuentaDestinoEdit, setCuentaDestinoEdit] = useState<string>('');
+  const [categoriaEdit, setCategoriaEdit] = useState<string>('');
+  const [fechaEdit, setFechaEdit] = useState<string>('');
   const [confirmAnular, setConfirmAnular] = useState(false);
   const [motivoAnular, setMotivoAnular] = useState('');
   const [enviando, setEnviando] = useState(false);
 
   async function load() {
     try {
-      const r = await api.get<MovimientoDetalle>(`/admin/movimientos/${movimientoId}`);
+      const [r, cats] = await Promise.all([
+        api.get<MovimientoDetalle>(`/admin/movimientos/${movimientoId}`),
+        categorias.length === 0
+          ? api.get<{ categorias: CategoriaShort[] }>('/admin/categorias-movimiento')
+          : Promise.resolve({ categorias }),
+      ]);
       setDet(r);
       setMontoEdit(r.monto);
       setObsEdit(r.observacion ?? '');
+      setCuentaOrigenEdit(r.cuentaOrigenId ?? '');
+      setCuentaDestinoEdit(r.cuentaDestinoId ?? '');
+      setCategoriaEdit(r.categoriaId);
+      // datetime-local quiere "YYYY-MM-DDTHH:MM" sin segundos ni zona
+      setFechaEdit(new Date(r.fechaComputo).toISOString().slice(0, 16));
+      if ('categorias' in cats && cats.categorias.length > 0) {
+        setCategorias(cats.categorias);
+      }
     } catch (e) {
       if (e instanceof ApiError) setError(e.message);
       else setError('Error cargando detalle');
@@ -83,13 +126,29 @@ export function MovimientoDetailModal({
   }, [movimientoId]);
 
   async function guardarEdicion() {
+    if (!det) return;
     setEnviando(true);
     setError(null);
     try {
-      await api.patch(`/admin/movimientos/${movimientoId}`, {
-        monto: montoEdit,
-        observacion: obsEdit.trim() || null,
-      });
+      // Solo mandamos los campos que cambiaron — el backend audit-loggea
+      // todos así que enviar valores no cambiados infla el log sin razón.
+      const patch: Record<string, unknown> = {};
+      if (montoEdit !== det.monto) patch.monto = montoEdit;
+      if (obsEdit !== (det.observacion ?? '')) patch.observacion = obsEdit.trim() || null;
+      if (cuentaOrigenEdit !== (det.cuentaOrigenId ?? '')) {
+        patch.cuentaOrigenId = cuentaOrigenEdit || null;
+      }
+      if (cuentaDestinoEdit !== (det.cuentaDestinoId ?? '')) {
+        patch.cuentaDestinoId = cuentaDestinoEdit || null;
+      }
+      if (categoriaEdit !== det.categoriaId) patch.categoriaId = categoriaEdit;
+      const fechaIso = new Date(fechaEdit).toISOString();
+      if (fechaIso !== det.fechaComputo) patch.fechaComputo = fechaIso;
+      if (Object.keys(patch).length === 0) {
+        setEditando(false);
+        return;
+      }
+      await api.patch(`/admin/movimientos/${movimientoId}`, patch);
       setEditando(false);
       onUpdated();
       await load();
@@ -169,27 +228,93 @@ export function MovimientoDetailModal({
                 </div>
                 <div>
                   <div className="text-2xs uppercase tracking-wider text-ink-500">Categoría</div>
-                  <div className="font-medium text-ink-900">{det.categoria.nombre}</div>
+                  {editando ? (
+                    <select
+                      value={categoriaEdit}
+                      onChange={(e) => setCategoriaEdit(e.target.value)}
+                      className="input text-sm py-1"
+                    >
+                      {categorias
+                        .filter(
+                          (c) =>
+                            (c.tipo === det.tipo || c.tipo === 'AMBOS') &&
+                            categoriaCompatible(det.categoria.nombre, c),
+                        )
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.nombre}
+                          </option>
+                        ))}
+                    </select>
+                  ) : (
+                    <div className="font-medium text-ink-900">{det.categoria.nombre}</div>
+                  )}
                 </div>
                 <div>
                   <div className="text-2xs uppercase tracking-wider text-ink-500">Fecha</div>
-                  <div className="font-mono text-ink-700 text-xs">
-                    {new Date(det.fechaComputo).toLocaleString('es-AR', {
-                      timeZone: 'America/Argentina/Buenos_Aires',
-                    })}
-                  </div>
+                  {editando ? (
+                    <input
+                      type="datetime-local"
+                      value={fechaEdit}
+                      onChange={(e) => setFechaEdit(e.target.value)}
+                      className="input text-sm py-1 font-mono"
+                    />
+                  ) : (
+                    <div className="font-mono text-ink-700 text-xs">
+                      {new Date(det.fechaComputo).toLocaleString('es-AR', {
+                        timeZone: 'America/Argentina/Buenos_Aires',
+                      })}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <div className="text-2xs uppercase tracking-wider text-ink-500">Cargado por</div>
                   <div className="text-ink-700">{det.usuario.nombre}</div>
                 </div>
                 <div>
-                  <div className="text-2xs uppercase tracking-wider text-ink-500">Cuenta</div>
-                  <div className="text-ink-700 text-sm">
-                    {det.tipo === 'TRANSFERENCIA_INTERNA'
-                      ? `${det.cuentaOrigen?.nombre ?? '—'} → ${det.cuentaDestino?.nombre ?? '—'}`
-                      : (det.cuentaOrigen?.nombre ?? det.cuentaDestino?.nombre ?? '—')}
+                  <div className="text-2xs uppercase tracking-wider text-ink-500">
+                    {det.tipo === 'TRANSFERENCIA_INTERNA' ? 'Origen → Destino' : 'Cuenta'}
                   </div>
+                  {editando ? (
+                    <div className="space-y-1">
+                      {(det.tipo === 'EGRESO' || det.tipo === 'TRANSFERENCIA_INTERNA') && (
+                        <select
+                          value={cuentaOrigenEdit}
+                          onChange={(e) => setCuentaOrigenEdit(e.target.value)}
+                          className="input text-sm py-1 w-full"
+                        >
+                          <option value="">— sin cuenta —</option>
+                          {cuentas.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {det.tipo === 'TRANSFERENCIA_INTERNA' ? 'Origen: ' : ''}
+                              {c.nombre}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      {(det.tipo === 'INGRESO' || det.tipo === 'TRANSFERENCIA_INTERNA') && (
+                        <select
+                          value={cuentaDestinoEdit}
+                          onChange={(e) => setCuentaDestinoEdit(e.target.value)}
+                          className="input text-sm py-1 w-full"
+                        >
+                          <option value="">— sin cuenta —</option>
+                          {cuentas.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {det.tipo === 'TRANSFERENCIA_INTERNA' ? 'Destino: ' : ''}
+                              {c.nombre}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-ink-700 text-sm">
+                      {det.tipo === 'TRANSFERENCIA_INTERNA'
+                        ? `${det.cuentaOrigen?.nombre ?? '—'} → ${det.cuentaDestino?.nombre ?? '—'}`
+                        : (det.cuentaOrigen?.nombre ?? det.cuentaDestino?.nombre ?? '—')}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <div className="text-2xs uppercase tracking-wider text-ink-500">Monto</div>
