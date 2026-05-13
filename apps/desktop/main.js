@@ -845,6 +845,7 @@ function createMainWindow() {
                 <li>Sin conexión a internet</li>
                 <li>Vercel está caído (chequeá <a href="https://www.vercel-status.com/" style="color:#1f4d3c">status</a>)</li>
                 <li>Firewall corporativo bloqueando vercel.app</li>
+                <li>Si webRemoteUrl apunta a localhost: el dev server (pnpm dev) no está corriendo</li>
               </ul>
               <p><button onclick="location.reload()" style="padding:10px 20px;background:#1f4d3c;color:white;border:0;border-radius:4px;cursor:pointer">Reintentar</button></p>
               <p style="color:#888;font-size:12px;margin-top:40px">
@@ -855,6 +856,11 @@ function createMainWindow() {
             </body></html>
           `),
       );
+      // Forzar mostrar la ventana + cerrar splash. `ready-to-show` no se
+      // dispara para URLs data: (eso dejaba al usuario viendo splash eterno
+      // sin ver el mensaje de error). Mostramos directo.
+      mainWindow.show();
+      if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
     }
   });
 
@@ -862,6 +868,17 @@ function createMainWindow() {
     mainWindow.show();
     if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
   });
+
+  // Safety net: si después de 30s el splash sigue abierto (ready-to-show
+  // nunca se disparó por una razón rara), forzamos mostrar la ventana
+  // principal igual. Mejor mostrar pantalla blanca que splash eterno.
+  setTimeout(() => {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      log('[safety] Splash timeout 30s — forzando show mainWindow');
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
+      splashWindow.close();
+    }
+  }, 30_000);
 
   // Atajos
   mainWindow.webContents.on('before-input-event', (event, input) => {
