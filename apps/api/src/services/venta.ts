@@ -113,12 +113,71 @@ export async function crearVenta(args: {
   const esDelivery = data.modalidad !== ('TAKE_AWAY' as ModalidadVenta);
 
   return prisma.$transaction(async (tx) => {
+    // Auto-crear/linkear cliente: si no vino clienteId pero el cajero
+    // tipeó nombre/teléfono (pedido por wsp/tel/web), buscamos por
+    // teléfono y reutilizamos si existe; sino creamos un cliente nuevo +
+    // dirección. Esto evita que la encargada tenga que ir a "Clientes" a
+    // crear cada uno a mano — cualquier pedido genera la ficha.
+    let clienteIdResuelto = data.clienteId ?? null;
+    if (
+      !clienteIdResuelto &&
+      esDelivery &&
+      data.clienteNombre &&
+      data.clienteTelefono
+    ) {
+      const tel = data.clienteTelefono.replace(/[\s-]/g, '');
+      const existente = tel
+        ? await tx.cliente.findFirst({
+            where: { telefono: { contains: tel } },
+          })
+        : null;
+      if (existente) {
+        clienteIdResuelto = existente.id;
+      } else {
+        const partes = data.clienteNombre.trim().split(/\s+/);
+        const nombre = partes[0] ?? data.clienteNombre.trim();
+        const apellido = partes.length > 1 ? partes.slice(1).join(' ') : null;
+        const nuevo = await tx.cliente.create({
+          data: {
+            tipo: 'REGISTRADO',
+            nombre,
+            apellido,
+            telefono: data.clienteTelefono.trim(),
+          },
+        });
+        clienteIdResuelto = nuevo.id;
+        // Si vino dirección, guardar como dirección del cliente. La marcamos
+        // default — el primer pedido le da casa por defecto.
+        if (data.direccionEntrega) {
+          await tx.direccion.create({
+            data: {
+              clienteId: nuevo.id,
+              etiqueta: 'Casa',
+              calle: data.direccionEntrega,
+              numero: '—',
+              indicaciones: data.indicacionesEntrega ?? null,
+              esDefault: true,
+            },
+          });
+        }
+        await recordAudit({
+          tabla: 'clientes',
+          registroId: nuevo.id,
+          accion: 'INSERT',
+          usuarioId,
+          pcOrigen: data.pcOrigen,
+          contexto: { autoCreadoDesdePedido: true, canal: data.canal },
+          tx,
+        });
+      }
+    }
+
     const venta = await tx.venta.create({
       data: {
         canal: data.canal as CanalVenta,
         modalidad: data.modalidad as ModalidadVenta,
         pcOrigen: data.pcOrigen,
-        clienteId: data.clienteId ?? null,
+        clienteId: clienteIdResuelto,
         idExternoCanal: data.idExternoCanal ?? null,
         listaPreciosId: lista.id,
         sesionCajaId: sesion.id,

@@ -252,12 +252,15 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
           etiqueta: z.string().min(1).max(40).default('Casa'),
           calle: z.string().min(1).max(120),
           numero: z.string().min(1).max(20),
-          piso: z.string().max(10).optional(),
-          depto: z.string().max(10).optional(),
-          entreCalles: z.string().max(160).optional(),
+          // Frontend a veces envía null para campos vacíos (en vez de
+          // omitirlos). Aceptamos null + undefined + string vacío para
+          // ser tolerantes; los normalizamos a null antes de insertar.
+          piso: z.string().max(10).nullable().optional(),
+          depto: z.string().max(10).nullable().optional(),
+          entreCalles: z.string().max(160).nullable().optional(),
           localidad: z.string().max(80).default('La Plata'),
-          codigoPostal: z.string().max(20).optional(),
-          indicaciones: z.string().max(500).optional(),
+          codigoPostal: z.string().max(20).nullable().optional(),
+          indicaciones: z.string().max(500).nullable().optional(),
           esDefault: z.boolean().default(false),
         }),
       },
@@ -268,12 +271,12 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
         etiqueta: string;
         calle: string;
         numero: string;
-        piso?: string;
-        depto?: string;
-        entreCalles?: string;
+        piso?: string | null;
+        depto?: string | null;
+        entreCalles?: string | null;
         localidad: string;
-        codigoPostal?: string;
-        indicaciones?: string;
+        codigoPostal?: string | null;
+        indicaciones?: string | null;
         esDefault: boolean;
       };
 
