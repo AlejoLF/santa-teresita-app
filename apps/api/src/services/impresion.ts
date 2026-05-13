@@ -112,6 +112,15 @@ export async function buildComandaPayload(
   let delivery: Record<string, unknown> | undefined;
   if (venta.modalidad !== 'TAKE_AWAY' && venta.deliveryInfo?.direccionSnapshot) {
     const snap = venta.deliveryInfo.direccionSnapshot as Record<string, unknown>;
+    // Repartidor: empleado interno (snap._empleadoNombre) o empresa externa
+    // (deliveryInfo.empresaExterna o snap._empresaExterna). Si la encargada
+    // no eligió todavía, queda undefined y no se imprime esa línea.
+    const empleadoNombre =
+      typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
+    const empresaExterna =
+      venta.deliveryInfo.empresaExterna ??
+      (typeof snap._empresaExterna === 'string' ? snap._empresaExterna : undefined);
+    const repartidor = empleadoNombre ?? empresaExterna ?? undefined;
     delivery = {
       clienteNombre: snap.clienteNombre ?? null,
       clienteTelefono: snap.clienteTelefono ?? null,
@@ -120,6 +129,7 @@ export async function buildComandaPayload(
       horaPrometida: venta.deliveryInfo.horaPrometida
         ? venta.deliveryInfo.horaPrometida.toISOString()
         : null,
+      repartidor,
     };
   }
 
@@ -381,10 +391,24 @@ export async function encolarTicketClienteParaVenta(
       cliente: true,
       usuarioCierre: true,
       usuarioApertura: true,
+      deliveryInfo: true,
     },
   });
   if (!venta) return false;
   if (venta.canal !== 'MOSTRADOR') return false;
+
+  // Repartidor (en caso de mostrador + modalidad delivery, raro pero posible).
+  // Empleado interno o empresa externa. Se imprime en la misma sección que
+  // el método de pago para que la encargada vea quién va a entregar.
+  let repartidor: string | undefined;
+  if (venta.deliveryInfo) {
+    const snap = (venta.deliveryInfo.direccionSnapshot ?? {}) as Record<string, unknown>;
+    const emp = typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
+    const ext =
+      venta.deliveryInfo.empresaExterna ??
+      (typeof snap._empresaExterna === 'string' ? snap._empresaExterna : undefined);
+    repartidor = emp ?? ext ?? undefined;
+  }
 
   const pagosConfirmados = venta.pagos.filter((p) => p.estado === 'CONFIRMADO');
   let pagoInfo: { metodo: string; recibido?: string; cambio?: string };
@@ -432,6 +456,7 @@ export async function encolarTicketClienteParaVenta(
     descuento,
     total: Number(venta.total).toFixed(2),
     pago: pagoInfo,
+    ...(repartidor && { repartidor }),
     // ISO — el renderer del local-agent lo formatea como DD/MM/YYYY HH:MM:SS AR
     fecha: fechaIso,
   };
@@ -444,6 +469,70 @@ export async function encolarTicketClienteParaVenta(
     tx,
   });
   return true;
+}
+
+/**
+ * Re-encola los tickets/comandas de una venta ya existente. Marca el tipo
+ * como REIMPRESION para que el renderer muestre el header "*** REIMPRESIÓN ***"
+ * y la cocinera/encargada sepa que es duplicado (no procesar la cocina de
+ * nuevo).
+ *
+ * Acepta una lista opcional de destinos. Si no se pasa, re-imprime en todos
+ * los destinos donde originalmente se imprimió (COCINA si tenía items
+ * cocinables + DELIVERY si era delivery propio + MOSTRADOR si era mostrador).
+ */
+export async function reimprimirVenta(
+  ventaId: string,
+  destinos?: DestinoImpresion[],
+): Promise<DestinoImpresion[]> {
+  const venta = await prisma.venta.findUnique({
+    where: { id: ventaId },
+    select: { canal: true, tieneCocina: true },
+  });
+  if (!venta) throw new Error('Venta no encontrada');
+
+  const originales = determinarDestinos(venta.canal, venta.tieneCocina);
+  const incluirMostrador = venta.canal === 'MOSTRADOR';
+  const todosDisponibles = [
+    ...originales,
+    ...(incluirMostrador ? (['MOSTRADOR'] as DestinoImpresion[]) : []),
+  ];
+  const targets = destinos
+    ? destinos.filter((d) => todosDisponibles.includes(d))
+    : todosDisponibles;
+
+  const resultados: DestinoImpresion[] = [];
+  for (const destino of targets) {
+    if (destino === 'COCINA') {
+      const payload = await buildComandaPayload(ventaId);
+      await encolarTrabajo({
+        tipo: TipoTrabajoImpresion.COMANDA_REIMPRESION,
+        destino,
+        payload,
+        ventaId,
+      });
+      resultados.push(destino);
+    } else if (destino === 'DELIVERY') {
+      const payload = await buildTicketDeliveryPayload(ventaId);
+      if (payload) {
+        await encolarTrabajo({
+          tipo: TipoTrabajoImpresion.TICKET_DELIVERY,
+          destino,
+          payload,
+          ventaId,
+        });
+        resultados.push(destino);
+      }
+    } else if (destino === 'MOSTRADOR') {
+      // Solo aplica si la venta es de mostrador (canal=MOSTRADOR).
+      // Usamos una mini transacción para reusar encolarTicketClienteParaVenta.
+      await prisma.$transaction(async (tx) => {
+        await encolarTicketClienteParaVenta(ventaId, tx);
+      });
+      resultados.push(destino);
+    }
+  }
+  return resultados;
 }
 
 /**

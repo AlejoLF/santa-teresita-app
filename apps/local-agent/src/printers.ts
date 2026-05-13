@@ -91,6 +91,8 @@ export interface ComandaPayload {
     direccion?: string;
     indicaciones?: string;
     horaPrometida?: string;
+    /** Quién entrega el pedido: "Damián", "DELIVERATE", "PEDIDOS YA", etc. */
+    repartidor?: string;
   };
 }
 
@@ -196,6 +198,11 @@ export async function imprimirComanda(
     if (d.horaPrometida) {
       printer.println(`Hora prometida: ${d.horaPrometida}`);
     }
+    if (d.repartidor) {
+      printer.bold(true);
+      printer.println(`Repartidor: ${d.repartidor}`);
+      printer.bold(false);
+    }
     printer.newLine();
   }
 
@@ -220,6 +227,9 @@ export interface TicketClientePayload {
   descuento?: { pct: number; monto: string } | null;
   total: string;
   pago: { metodo: string; recibido?: string; cambio?: string };
+  /** Quién va a entregar el pedido (si es delivery). "Damián", "DELIVERATE",
+   *  "PEDIDOS YA", etc. Sale en la misma sección que el método de pago. */
+  repartidor?: string;
   /** ISO date string. El renderer lo formatea como DD/MM/YYYY HH:MM:SS en TZ AR. */
   fecha: string;
 }
@@ -333,7 +343,9 @@ export async function imprimirTicketCliente(payload: TicketClientePayload): Prom
   printer.bold(false);
   printer.newLine();
 
-  // ── Método de pago (siempre, no solo efectivo) ──
+  // ── Método de pago + repartidor (delivery) ──
+  // Repartidor sale en la misma sección que la forma de pago para que la
+  // encargada los vea juntos al despachar el pedido.
   printer.alignLeft();
   printer.println(`Forma de pago: ${payload.pago.metodo}`);
   if (payload.pago.recibido) {
@@ -341,6 +353,11 @@ export async function imprimirTicketCliente(payload: TicketClientePayload): Prom
   }
   if (payload.pago.cambio && Number(payload.pago.cambio) > 0) {
     printer.println(`Cambio: $${formatARS(payload.pago.cambio)}`);
+  }
+  if (payload.repartidor) {
+    printer.bold(true);
+    printer.println(`Repartidor: ${payload.repartidor}`);
+    printer.bold(false);
   }
   printer.newLine();
 

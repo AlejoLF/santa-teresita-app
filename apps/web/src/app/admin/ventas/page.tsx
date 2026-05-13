@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { KpiCard } from '@/components/admin/KpiCard';
+import { ReimprimirModal } from '@/components/admin/ReimprimirModal';
 import { cn } from '@/lib/cn';
 
 type Periodo = 'hoy' | 'ayer' | 'semana' | 'mes' | 'trimestre' | 'anio' | 'custom';
@@ -129,6 +130,7 @@ export default function VentasPage() {
   const [error, setError] = useState<string | null>(null);
   // Modal de anulación
   const [anularTarget, setAnularTarget] = useState<AnalisisVentas['ventas'][number] | null>(null);
+  const [reimprimirId, setReimprimirId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -467,6 +469,13 @@ export default function VentasPage() {
         />
       )}
 
+      {reimprimirId && (
+        <ReimprimirModal
+          ventaId={reimprimirId}
+          onClose={() => setReimprimirId(null)}
+        />
+      )}
+
       {/* Listado de ventas */}
       <section className="card overflow-hidden">
         <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken flex items-center justify-between">
@@ -542,6 +551,13 @@ export default function VentasPage() {
                       >
                         ver
                       </Link>
+                      <button
+                        onClick={() => setReimprimirId(v.id)}
+                        className="text-2xs text-ocean-600 hover:underline mr-2"
+                        title="Re-imprimir tickets / comandas"
+                      >
+                        🖨 reimprimir
+                      </button>
                       <button
                         onClick={() => setAnularTarget(v)}
                         className="text-2xs text-pomodoro-600 hover:underline"

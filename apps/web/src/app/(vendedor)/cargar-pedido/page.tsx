@@ -146,6 +146,9 @@ export default function CargarPedidoPage() {
     nombrePasta: string;
   } | null>(null);
   const [usuario, setUsuario] = useState<{ nombre: string; rol: string } | null>(null);
+  // Panel "Datos del cliente": null = auto (expand si faltan datos / collapse
+  // si están completos), true/false = override manual del usuario.
+  const [panelDatosExpandido, setPanelDatosExpandido] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState({ abiertos: 0, cerrados: 0 });
   const [enviando, setEnviando] = useState(false);
@@ -1121,7 +1124,10 @@ export default function CargarPedidoPage() {
               )}
             </div>
 
-            {/* Panel contextual según el canal */}
+            {/* Panel contextual según el canal — colapsable.
+                Antes ocupaba mucho espacio fijo del cart, ahora se muestra
+                como un summary clickeable cuando hay datos completos, y se
+                expande solo cuando faltan datos o la cajera lo abre. */}
             {cart.canal !== 'MOSTRADOR' && (() => {
               const esPlataforma =
                 cart.canal === 'RAPPI' ||
@@ -1139,66 +1145,100 @@ export default function CargarPedidoPage() {
                         ? 'DELIVERATE'
                         : 'Local';
 
+              const datosCompletos = esPlataforma
+                ? cart.idExternoCanal.trim().length > 0
+                : cart.clienteNombre.trim().length > 0 &&
+                  cart.direccionEntrega.trim().length > 0;
+              const expanded = panelDatosExpandido ?? !datosCompletos;
+              const summaryDelivery =
+                cart.clienteNombre.trim() ||
+                cart.clienteTelefono.trim() ||
+                cart.direccionEntrega.trim()
+                  ? `${cart.clienteNombre.trim() || 'sin nombre'}${cart.clienteTelefono.trim() ? ` · ${cart.clienteTelefono.trim()}` : ''}${cart.direccionEntrega.trim() ? ` · ${cart.direccionEntrega.trim()}` : ''}`
+                  : 'Sin datos de cliente cargados';
+              const summaryPlataforma = cart.idExternoCanal.trim() || 'Sin Nº de orden';
+
               return (
                 <div
                   className={cn(
-                    'border-t border-cream-300 px-3 py-2 space-y-1.5',
+                    'border-t border-cream-300',
                     esPlataforma ? 'bg-pomodoro-100/40' : 'bg-saffron-100/40',
                   )}
                 >
-                  <div className="flex items-baseline justify-between">
-                    <span
-                      className={cn(
-                        'text-2xs uppercase tracking-wider font-medium',
-                        esPlataforma ? 'text-pomodoro-600' : 'text-saffron-600',
+                  {/* Header clickeable: toggle del panel */}
+                  <button
+                    type="button"
+                    onClick={() => setPanelDatosExpandido(!expanded)}
+                    className="w-full px-3 py-2 flex items-center justify-between text-left hover:bg-cream-100/50"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-2">
+                        <span
+                          className={cn(
+                            'text-2xs uppercase tracking-wider font-medium',
+                            esPlataforma ? 'text-pomodoro-600' : 'text-saffron-600',
+                          )}
+                        >
+                          {esPlataforma
+                            ? `📱 ${cart.canal.replace('_', ' ')}`
+                            : '🛵 Datos del cliente'}
+                        </span>
+                        <span className="text-2xs text-ink-500">· Lista: {listaPrecios}</span>
+                      </div>
+                      {!expanded && (
+                        <div className="text-xs text-ink-700 truncate mt-0.5">
+                          {esPlataforma ? summaryPlataforma : summaryDelivery}
+                          {!datosCompletos && (
+                            <span className="ml-2 text-2xs text-pomodoro-600 font-medium">
+                              ⚠ Completar
+                            </span>
+                          )}
+                        </div>
                       )}
-                    >
-                      {esPlataforma
-                        ? `📱 Pedido de ${cart.canal.replace('_', ' ')}`
-                        : '🛵 Datos del cliente (sale en la comanda)'}
+                    </div>
+                    <span className="text-ink-500 text-sm ml-2 flex-shrink-0">
+                      {expanded ? '▲' : '▼'}
                     </span>
-                    <span className="text-2xs text-ink-500 font-medium">
-                      Lista: {listaPrecios}
-                    </span>
-                  </div>
+                  </button>
 
-                  {/* PLATAFORMA: solo Nº de orden + datos opcionales (la plataforma maneja la dirección) */}
-                  {esPlataforma ? (
-                    <>
-                      <input
-                        type="text"
-                        value={cart.idExternoCanal}
-                        onChange={(e) => cart.setIdExternoCanal(e.target.value)}
-                        placeholder={
-                          cart.canal === 'RAPPI'
-                            ? 'Nº de orden RAPPI (ej. RAP-12345)'
-                            : cart.canal === 'PEDIDOS_YA'
-                              ? 'Nº de orden Pedidos YA'
-                              : cart.canal === 'MERCADO_LIBRE'
-                                ? 'Nº de orden MELI'
-                                : 'Nº de orden DELIVERATE'
-                        }
-                        maxLength={120}
-                        className="input text-sm py-1 px-2 w-full font-mono"
-                      />
-                      <p className="text-2xs text-ink-500 italic">
-                        Cargá los items tal como vienen en la app de la plataforma. El
-                        sistema aplica precios de la lista <strong>{listaPrecios}</strong>.
-                      </p>
-                    </>
-                  ) : (
-                    /* DELIVERY PROPIO (TELEFONO / WHATSAPP): nombre + tel + dirección
-                       con autocomplete por teléfono y búsqueda por nombre. */
-                    <ClienteDeliveryFields
-                      nombre={cart.clienteNombre}
-                      telefono={cart.clienteTelefono}
-                      direccion={cart.direccionEntrega}
-                      indicaciones={cart.indicacionesEntrega}
-                      onNombre={cart.setClienteNombre}
-                      onTelefono={cart.setClienteTelefono}
-                      onDireccion={cart.setDireccionEntrega}
-                      onIndicaciones={cart.setIndicacionesEntrega}
-                    />
+                  {expanded && (
+                    <div className="px-3 pb-2 space-y-1.5">
+                      {esPlataforma ? (
+                        <>
+                          <input
+                            type="text"
+                            value={cart.idExternoCanal}
+                            onChange={(e) => cart.setIdExternoCanal(e.target.value)}
+                            placeholder={
+                              cart.canal === 'RAPPI'
+                                ? 'Nº de orden RAPPI (ej. RAP-12345)'
+                                : cart.canal === 'PEDIDOS_YA'
+                                  ? 'Nº de orden Pedidos YA'
+                                  : cart.canal === 'MERCADO_LIBRE'
+                                    ? 'Nº de orden MELI'
+                                    : 'Nº de orden DELIVERATE'
+                            }
+                            maxLength={120}
+                            className="input text-sm py-1 px-2 w-full font-mono"
+                          />
+                          <p className="text-2xs text-ink-500 italic">
+                            Cargá los items tal como vienen en la app de la plataforma. El
+                            sistema aplica precios de la lista <strong>{listaPrecios}</strong>.
+                          </p>
+                        </>
+                      ) : (
+                        <ClienteDeliveryFields
+                          nombre={cart.clienteNombre}
+                          telefono={cart.clienteTelefono}
+                          direccion={cart.direccionEntrega}
+                          indicaciones={cart.indicacionesEntrega}
+                          onNombre={cart.setClienteNombre}
+                          onTelefono={cart.setClienteTelefono}
+                          onDireccion={cart.setDireccionEntrega}
+                          onIndicaciones={cart.setIndicacionesEntrega}
+                        />
+                      )}
+                    </div>
                   )}
                 </div>
               );

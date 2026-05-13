@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '@sta/db/client';
 import { EstadoTrabajoImpresion, RolUsuario } from '@sta/db';
 import { recordAudit } from '../services/audit.js';
-import { encolarTrabajoTest, getConfigImpresion } from '../services/impresion.js';
+import { encolarTrabajoTest, getConfigImpresion, reimprimirVenta } from '../services/impresion.js';
 
 /**
  * Endpoints de la cola de impresión.
@@ -155,6 +155,42 @@ export default async function impresionRoutes(fastify: FastifyInstance) {
         jobs,
         counts: Object.fromEntries(counts.map((c) => [c.estado, c._count._all])),
       };
+    },
+  );
+
+  // POST /admin/ventas/:id/reimprimir — re-encola tickets/comandas de una
+  // venta ya existente. La encargada usa esto desde el panel de ventas
+  // cuando el papel se rompe / la impresora falla / quiere otra copia.
+  fastify.post(
+    '/admin/ventas/:id/reimprimir',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          destinos: z.array(z.enum(['MOSTRADOR', 'DELIVERY', 'COCINA'])).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const body = req.body as {
+        destinos?: Array<'MOSTRADOR' | 'DELIVERY' | 'COCINA'>;
+      };
+      try {
+        const enviadosA = await reimprimirVenta(params.id, body.destinos);
+        await recordAudit({
+          tabla: 'ventas',
+          registroId: params.id,
+          accion: 'REIMPRESION',
+          usuarioId: req.usuario!.id,
+          valorNuevo: { destinos: enviadosA },
+        });
+        return reply.send({ ok: true, destinos: enviadosA });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Error';
+        return reply.code(400).send({ error: msg });
+      }
     },
   );
 
