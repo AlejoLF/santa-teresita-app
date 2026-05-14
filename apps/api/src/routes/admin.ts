@@ -687,11 +687,43 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         }
       }
 
+      // Resolver "sub-objeto" para mostrar en la columna Categoría:
+      // "Sueldos (Edgardo Pérez)", "Insumos (Ave Fenix)". El movimiento
+      // tiene entidadId (UUID) pero polimórfico — puede ser empleado o
+      // proveedor según la categoría. Hacemos batch lookups de ambos en
+      // una sola query por tabla.
+      const entidadIds = movimientos
+        .map((m) => m.entidadId)
+        .filter((x): x is string => typeof x === 'string');
+      const empleados = entidadIds.length
+        ? await prisma.empleado.findMany({
+            where: { id: { in: entidadIds } },
+            select: { id: true, nombre: true, apellido: true, puesto: true },
+          })
+        : [];
+      const proveedores = entidadIds.length
+        ? await prisma.proveedor.findMany({
+            where: { id: { in: entidadIds } },
+            select: { id: true, nombre: true },
+          })
+        : [];
+      const empleadoMap = new Map(
+        empleados.map((e) => [
+          e.id,
+          `${e.puesto.toLowerCase()} ${e.nombre}${e.apellido ? ' ' + e.apellido : ''}`.trim(),
+        ]),
+      );
+      const proveedorMap = new Map(proveedores.map((p) => [p.id, p.nombre]));
+
       return {
         movimientos: movimientos.map((m) => ({
           ...m,
           modificado: modificadoMap.has(m.id),
           modificadoAt: modificadoMap.get(m.id) ?? null,
+          entidadNombre:
+            (m.entidadId &&
+              (empleadoMap.get(m.entidadId) ?? proveedorMap.get(m.entidadId))) ??
+            null,
         })),
         total,
         page: q.page,

@@ -98,6 +98,74 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // PATCH /ventas/:id — editar canal/modalidad de una venta PROCESADA.
+  // Cambiar de MOSTRADOR a DELIVERY_PROPIO requiere completar la info de
+  // delivery después (en otra request a PUT /ventas/:id/delivery).
+  fastify.patch(
+    '/ventas/:id',
+    {
+      preHandler: fastify.requireAuth(),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          canal: z
+            .enum([
+              'MOSTRADOR',
+              'TELEFONO',
+              'WHATSAPP',
+              'WEB',
+              'RAPPI',
+              'PEDIDOS_YA',
+              'MERCADO_LIBRE',
+              'DELIVERATE',
+            ])
+            .optional(),
+          modalidad: z
+            .enum([
+              'TAKE_AWAY',
+              'DELIVERY_PROPIO',
+              'DELIVERY_PLATAFORMA',
+              'DELIVERY_DELIVERATE',
+            ])
+            .optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const body = req.body as {
+        canal?: string;
+        modalidad?: string;
+      };
+      const venta = await prisma.venta.findUnique({ where: { id: params.id } });
+      if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (venta.estado !== EstadoVenta.PROCESADA) {
+        return reply
+          .code(400)
+          .send({ error: 'Solo se puede editar el tipo de ventas PROCESADAS' });
+      }
+
+      const updated = await prisma.venta.update({
+        where: { id: venta.id },
+        data: {
+          ...(body.canal && { canal: body.canal as never }),
+          ...(body.modalidad && { modalidad: body.modalidad as never }),
+        },
+      });
+
+      await recordAudit({
+        tabla: 'ventas',
+        registroId: venta.id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { canal: venta.canal, modalidad: venta.modalidad },
+        valorNuevo: { canal: updated.canal, modalidad: updated.modalidad },
+      });
+
+      return reply.send(await getVentaCompleta(venta.id));
+    },
+  );
+
   // PUT /ventas/:id/delivery — establecer/actualizar info de delivery (repartidor, dirección)
   fastify.put(
     '/ventas/:id/delivery',
@@ -151,12 +219,25 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           break;
       }
 
-      const direccion = body.direccionSnapshot ?? {};
+      // Merge con el snapshot existente — no sobreescribimos clienteNombre/
+      // clienteTelefono/direccion/indicaciones si el caller solo manda
+      // info del repartidor. Antes el snapshot se reemplazaba entero y se
+      // perdían los datos del cliente.
+      const existing = await prisma.deliveryInfo.findUnique({
+        where: { ventaId: params.id },
+      });
+      const existingSnap = (existing?.direccionSnapshot as Record<string, unknown> | null) ?? {};
+      const incomingSnap = body.direccionSnapshot ?? {};
       const datosDeliveryRepartidor = {
-        ...direccion,
-        _repartidor: body.repartidor ?? null,
-        _empresaExterna: empresaExternaFinal,
-        _empleadoNombre: empleadoNombreFinal,
+        ...existingSnap,
+        ...incomingSnap,
+        // Si el caller mandó body.repartidor, sobreescribimos los markers.
+        // Si no, dejamos los que ya estaban en el snapshot.
+        ...(body.repartidor !== undefined && {
+          _repartidor: body.repartidor ?? null,
+          _empresaExterna: empresaExternaFinal,
+          _empleadoNombre: empleadoNombreFinal,
+        }),
       };
 
       const updated = await prisma.deliveryInfo.upsert({
@@ -169,10 +250,15 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           observaciones: body.observaciones ?? null,
         },
         update: {
-          empresaExterna: empresaExternaFinal,
+          // Solo updateamos empresaExterna si vino body.repartidor.
+          ...(body.repartidor !== undefined && { empresaExterna: empresaExternaFinal }),
           direccionSnapshot: datosDeliveryRepartidor as never,
-          horaPrometida: body.horaPrometida ? new Date(body.horaPrometida) : null,
-          observaciones: body.observaciones ?? null,
+          ...(body.horaPrometida !== undefined && {
+            horaPrometida: body.horaPrometida ? new Date(body.horaPrometida) : null,
+          }),
+          ...(body.observaciones !== undefined && {
+            observaciones: body.observaciones ?? null,
+          }),
         },
       });
 

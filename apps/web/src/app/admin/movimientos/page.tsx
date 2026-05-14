@@ -32,6 +32,8 @@ interface Movimiento {
   usuario: { nombre: string };
   modificado?: boolean;
   modificadoAt?: string | null;
+  /** Nombre del empleado/proveedor cuando aplica (Sueldos / Insumos). */
+  entidadNombre?: string | null;
 }
 
 interface Listado {
@@ -276,7 +278,12 @@ export default function AdminMovimientosPage() {
                       {m.tipo.toLowerCase().replace('_', ' ')}
                     </span>
                   </td>
-                  <td className="px-4 py-2 text-ink-700">{m.categoria.nombre}</td>
+                  <td className="px-4 py-2 text-ink-700">
+                    {m.categoria.nombre}
+                    {m.entidadNombre && (
+                      <span className="text-ink-500"> ({m.entidadNombre})</span>
+                    )}
+                  </td>
                   <td className="px-4 py-2 text-ink-700 text-xs">{cuenta}</td>
                   <td className="px-4 py-2 text-right">
                     <MoneyAmount

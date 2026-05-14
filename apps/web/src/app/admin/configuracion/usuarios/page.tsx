@@ -170,6 +170,8 @@ export default function ConfigUsuariosPage() {
         </table>
       </section>
 
+      <CierreEmailsSection />
+
       {showCambiarPin && (
         <ModalCambiarMiPin
           onClose={() => setShowCambiarPin(false)}
@@ -199,6 +201,133 @@ export default function ConfigUsuariosPage() {
         />
       )}
     </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Email destinatarios de cierres de caja
+//   Vive en /admin/configuracion/usuarios porque conceptualmente es
+//   "permisos / acceso" del admin a la información del local.
+// ────────────────────────────────────────────────────────────────────────
+
+function CierreEmailsSection() {
+  const [emails, setEmails] = useState<string[]>([]);
+  const [nuevo, setNuevo] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  useEffect(() => {
+    api
+      .get<{ emails: string[] }>('/admin/configuracion/cierre-emails')
+      .then((r) => setEmails(r.emails))
+      .catch(() => setError('No se pudieron cargar los emails'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function guardar(lista: string[]) {
+    setError(null);
+    try {
+      await api.put('/admin/configuracion/cierre-emails', { emails: lista });
+      setEmails(lista);
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al guardar');
+    }
+  }
+
+  function agregar() {
+    const e = nuevo.trim().toLowerCase();
+    if (!e) return;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) {
+      setError('Email inválido');
+      return;
+    }
+    if (emails.includes(e)) {
+      setError('Ya está en la lista');
+      return;
+    }
+    if (emails.length >= 10) {
+      setError('Máximo 10 emails');
+      return;
+    }
+    setNuevo('');
+    void guardar([...emails, e]);
+  }
+
+  function quitar(e: string) {
+    void guardar(emails.filter((x) => x !== e));
+  }
+
+  return (
+    <section className="card p-4">
+      <header className="mb-3">
+        <h2 className="font-display text-md text-ink-900">
+          📧 Emails para cierres de caja
+        </h2>
+        <p className="text-sm text-ink-500">
+          Estos emails reciben automáticamente el resumen del cierre cuando la
+          encargada lo envía. Podés agregar hasta 10 destinatarios.
+        </p>
+      </header>
+
+      {error && (
+        <div className="bg-pomodoro-100 text-pomodoro-600 px-3 py-2 rounded text-sm mb-2">
+          {error}
+        </div>
+      )}
+      {savedFlash && (
+        <div className="bg-basil-100 text-basil-600 px-3 py-2 rounded text-sm mb-2">
+          ✓ Guardado
+        </div>
+      )}
+
+      {loading ? (
+        <p className="text-ink-500 text-sm">Cargando...</p>
+      ) : (
+        <>
+          <ul className="space-y-1 mb-3">
+            {emails.length === 0 && (
+              <li className="text-ink-500 text-sm italic">
+                Sin emails configurados — los cierres no se envían a nadie hasta
+                que agregues al menos uno.
+              </li>
+            )}
+            {emails.map((e) => (
+              <li
+                key={e}
+                className="flex items-center justify-between px-3 py-1.5 bg-surface-sunken rounded text-sm"
+              >
+                <span className="font-mono text-ink-900">{e}</span>
+                <button
+                  onClick={() => quitar(e)}
+                  className="text-pomodoro-600 hover:text-pomodoro-700 text-2xs"
+                  title="Quitar"
+                >
+                  ✕ quitar
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          <div className="flex gap-2">
+            <input
+              type="email"
+              value={nuevo}
+              onChange={(e) => setNuevo(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && agregar()}
+              placeholder="ej. dueño@ejemplo.com"
+              className="input text-sm flex-1"
+              maxLength={120}
+            />
+            <Button onClick={agregar} size="sm">
+              + Agregar
+            </Button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 

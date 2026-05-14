@@ -543,4 +543,70 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
       return updated;
     },
   );
+
+  // ────────────────────────────────────────────────────────────────────
+  //   EMAILS DESTINATARIOS DE CIERRES DE CAJA
+  // ────────────────────────────────────────────────────────────────────
+  // La encargada configura desde /admin/configuracion/usuarios qué emails
+  // reciben los cierres. Antes solo se podía vía env var ADMIN_EMAIL_
+  // RECIPIENTS — requería rebuildear el .exe para cambiar.
+
+  fastify.get(
+    '/admin/configuracion/cierre-emails',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const row = await prisma.configuracionSistema.findUnique({
+        where: { clave: 'cierre_email_recipients' },
+      });
+      const emails = row?.valor
+        ? row.valor.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+      return { emails };
+    },
+  );
+
+  fastify.put(
+    '/admin/configuracion/cierre-emails',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z.object({
+          emails: z.array(z.string().email()).max(10),
+        }),
+      },
+    },
+    async (req) => {
+      const body = req.body as { emails: string[] };
+      const valor = body.emails.join(',');
+      const before = await prisma.configuracionSistema.findUnique({
+        where: { clave: 'cierre_email_recipients' },
+      });
+      const row = await prisma.configuracionSistema.upsert({
+        where: { clave: 'cierre_email_recipients' },
+        create: {
+          clave: 'cierre_email_recipients',
+          valor,
+          tipo: 'string',
+          categoria: 'email',
+          descripcion: 'Emails que reciben los cierres de caja (separados por coma)',
+          editable: true,
+          actualizadoPor: req.usuario?.nombre ?? null,
+        },
+        update: {
+          valor,
+          actualizadoPor: req.usuario?.nombre ?? null,
+        },
+      });
+      await recordAudit({
+        tabla: 'configuracion_sistema',
+        registroId: row.id,
+        accion: before ? 'UPDATE' : 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorAnterior: before ? { valor: before.valor } : null,
+        valorNuevo: { valor },
+        contexto: { clave: 'cierre_email_recipients' },
+      });
+      return { ok: true, emails: body.emails };
+    },
+  );
 }

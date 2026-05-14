@@ -39,11 +39,22 @@ async function buildTransporter(): Promise<{
   config: MailerConfig;
 }> {
   const host = process.env.SMTP_HOST;
-  const recipientsDefault =
-    (process.env.ADMIN_EMAIL_RECIPIENTS ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
+  // Destinatarios: primero buscamos en ConfiguracionSistema (panel UI),
+  // sino fallback al ENV. La encargada configura desde /admin/configuracion/
+  // usuarios — no hace falta editar .env y rebuildear.
+  const { prisma } = await import('@sta/db/client');
+  const dbConfig = await prisma.configuracionSistema
+    .findUnique({ where: { clave: 'cierre_email_recipients' } })
+    .catch(() => null);
+  const fromDb = dbConfig?.valor
+    ? dbConfig.valor.split(',').map((s) => s.trim()).filter(Boolean)
+    : [];
+  const recipientsDefault = fromDb.length > 0
+    ? fromDb
+    : (process.env.ADMIN_EMAIL_RECIPIENTS ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
 
   if (host) {
     // Limpiamos el password de espacios (Gmail App Password se muestra con

@@ -211,7 +211,11 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
         setProcesando(false);
         return;
       }
-      const aplicaDescuento = metodo === 'EFECTIVO' && habilitaDescuentoEfectivo;
+      // Solo aplicamos descuento si el % es > 0. Si la cajera deseleccionó
+      // los chips (descuentoPctSimple===0) o tipeó 0 en el custom, se finaliza
+      // sin descuento aunque sea EFECTIVO.
+      const aplicaDescuento =
+        metodo === 'EFECTIVO' && habilitaDescuentoEfectivo && descuentoPctSimple > 0;
       // SIEMPRE formatear con toFixed(2) — el backend rechaza con "Bad Request"
       // si el monto no matchea regex /^\d+(\.\d{1,2})?$/. Cuando un item tiene
       // modificadores (ej. porciones calientes con salsa), el venta.total que
@@ -335,15 +339,24 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-6 px-6 py-6 max-w-6xl mx-auto w-full">
         {/* Items */}
         <section>
-          <div className="flex justify-between items-baseline mb-3">
+          <div className="flex justify-between items-baseline mb-3 gap-2 flex-wrap">
             <h2 className="text-md font-medium text-ink-700">Items del pedido</h2>
-            <span className="text-xs text-ink-500">
-              {venta.canal.replace('_', ' ')} ·{' '}
-              {new Date(venta.fechaApertura).toLocaleTimeString('es-AR', {
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            </span>
+            <div className="flex items-baseline gap-2 text-xs">
+              <TipoPedidoEditor
+                ventaId={venta.id}
+                canalActual={venta.canal}
+                modalidadActual={venta.modalidad}
+                editable={editable}
+                onUpdated={refetch}
+              />
+              <span className="text-ink-500">
+                ·{' '}
+                {new Date(venta.fechaApertura).toLocaleTimeString('es-AR', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </span>
+            </div>
           </div>
 
           <div className="card divide-y divide-cream-200">
@@ -541,12 +554,35 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
                     Descuento al efectivo
                   </div>
                   <div className="flex flex-wrap gap-1.5">
+                    {/* Chip "Sin descuento": click → descuento 0%, queda
+                        seleccionado mientras pct=0. Para casos en que el
+                        cliente paga efectivo pero no aplica el 10% (precio
+                        promocional, pedido especial, etc.). */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDescuentoPctSimple(0);
+                        setDescuentoPctSimpleInput('');
+                      }}
+                      className={cn(
+                        'px-2.5 py-1 rounded text-xs font-medium border transition-colors',
+                        descuentoPctSimple === 0 && !descuentoPctSimpleInput
+                          ? 'bg-ink-700 text-white border-ink-700'
+                          : 'bg-white text-ink-700 border-ink-300 hover:bg-cream-100',
+                      )}
+                    >
+                      Sin desc.
+                    </button>
                     {[10, 15, 20, 25, 30].map((pct) => (
                       <button
                         key={pct}
                         type="button"
                         onClick={() => {
-                          setDescuentoPctSimple(pct);
+                          // Click sobre el chip activo lo deselecciona (0%).
+                          // Click sobre uno distinto lo activa.
+                          const yaActivo =
+                            descuentoPctSimple === pct && !descuentoPctSimpleInput;
+                          setDescuentoPctSimple(yaActivo ? 0 : pct);
                           setDescuentoPctSimpleInput('');
                         }}
                         className={cn(
@@ -788,13 +824,37 @@ function DeliveryPanel({
   const repartidorActual = (snap._repartidor as RepartidorOpcion | undefined) ?? null;
   const empleadoActual = (snap._empleadoNombre as string | null | undefined) ?? null;
   const empresaActual = venta.deliveryInfo?.empresaExterna ?? null;
+  const clienteNombreActual =
+    typeof snap.clienteNombre === 'string' ? snap.clienteNombre : '';
+  const clienteTelefonoActual =
+    typeof snap.clienteTelefono === 'string' ? snap.clienteTelefono : '';
+  const direccionActual = typeof snap.direccion === 'string' ? snap.direccion : '';
+  const indicacionesActual =
+    typeof snap.indicaciones === 'string' ? snap.indicaciones : '';
 
   const [editando, setEditando] = useState(false);
   const [repartidor, setRepartidor] = useState<RepartidorOpcion | null>(repartidorActual);
   const [empleadoNombre, setEmpleadoNombre] = useState(empleadoActual ?? '');
   const [observaciones, setObservaciones] = useState(venta.deliveryInfo?.observaciones ?? '');
+  const [clienteNombre, setClienteNombre] = useState(clienteNombreActual);
+  const [clienteTelefono, setClienteTelefono] = useState(clienteTelefonoActual);
+  const [direccion, setDireccion] = useState(direccionActual);
+  const [indicaciones, setIndicaciones] = useState(indicacionesActual);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Re-sincronizar campos cuando la venta se refresca (después de un PATCH
+  // de canal/modalidad por ejemplo).
+  useEffect(() => {
+    setRepartidor(repartidorActual);
+    setEmpleadoNombre(empleadoActual ?? '');
+    setObservaciones(venta.deliveryInfo?.observaciones ?? '');
+    setClienteNombre(clienteNombreActual);
+    setClienteTelefono(clienteTelefonoActual);
+    setDireccion(direccionActual);
+    setIndicaciones(indicacionesActual);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venta.id, venta.deliveryInfo?.observaciones]);
 
   // Si el canal viene de plataforma, sugerimos PLATAFORMA por default
   useEffect(() => {
@@ -817,12 +877,22 @@ function DeliveryPanel({
     setGuardando(true);
     setError(null);
     try {
+      // Construimos el snapshot fresh con los datos del cliente + markers
+      // del repartidor. El backend hace MERGE con el existente para que no
+      // se pisen datos que el caller no envía.
+      const nuevoSnap: Record<string, unknown> = {
+        ...snap,
+        clienteNombre: clienteNombre.trim() || null,
+        clienteTelefono: clienteTelefono.trim() || null,
+        direccion: direccion.trim() || null,
+        indicaciones: indicaciones.trim() || null,
+      };
       await api.put(`/ventas/${venta.id}/delivery`, {
         repartidor,
         empleadoNombre: empleadoNombre || undefined,
         empresaExterna: repartidor === 'PLATAFORMA' ? venta.canal : undefined,
         observaciones: observaciones || undefined,
-        direccionSnapshot: snap,
+        direccionSnapshot: nuevoSnap,
       });
       setEditando(false);
       await onUpdated();
@@ -865,8 +935,68 @@ function DeliveryPanel({
         </p>
       )}
 
+      {!editando && (clienteNombreActual || direccionActual) && (
+        <div className="mt-2 space-y-0.5 text-sm text-ink-700">
+          {clienteNombreActual && (
+            <div>
+              <span className="text-2xs uppercase text-ink-500 mr-1">cliente:</span>
+              {clienteNombreActual}
+              {clienteTelefonoActual && (
+                <span className="text-ink-500"> · {clienteTelefonoActual}</span>
+              )}
+            </div>
+          )}
+          {direccionActual && (
+            <div>
+              <span className="text-2xs uppercase text-ink-500 mr-1">dirección:</span>
+              {direccionActual}
+            </div>
+          )}
+          {indicacionesActual && (
+            <div className="text-xs text-saffron-600">⚠ {indicacionesActual}</div>
+          )}
+        </div>
+      )}
+
       {editando && (
         <div className="space-y-3 mt-2">
+          {/* Datos del cliente — editables */}
+          <div className="bg-cream-100 rounded p-3 space-y-2">
+            <div className="text-2xs uppercase tracking-wider text-ink-700 font-semibold">
+              Datos del cliente
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="text"
+                value={clienteNombre}
+                onChange={(e) => setClienteNombre(e.target.value)}
+                placeholder="Nombre"
+                className="input text-sm py-1"
+              />
+              <input
+                type="tel"
+                value={clienteTelefono}
+                onChange={(e) => setClienteTelefono(e.target.value)}
+                placeholder="Teléfono"
+                className="input text-sm py-1"
+              />
+            </div>
+            <input
+              type="text"
+              value={direccion}
+              onChange={(e) => setDireccion(e.target.value)}
+              placeholder="Dirección (calle, número, piso/dpto)"
+              className="input text-sm py-1 w-full"
+            />
+            <input
+              type="text"
+              value={indicaciones}
+              onChange={(e) => setIndicaciones(e.target.value)}
+              placeholder="Indicaciones (entre calles, timbre, etc.)"
+              className="input text-2xs py-1 w-full"
+            />
+          </div>
+
           <div>
             <label className="block text-2xs font-medium text-ink-700 mb-1">
               ¿Quién entrega?
@@ -943,6 +1073,129 @@ function DeliveryPanel({
         </div>
       )}
     </section>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Editor de tipo de pedido (canal + modalidad)
+// ────────────────────────────────────────────────────────────────────────
+
+const CANALES = [
+  'MOSTRADOR',
+  'TELEFONO',
+  'WHATSAPP',
+  'WEB',
+  'RAPPI',
+  'PEDIDOS_YA',
+  'MERCADO_LIBRE',
+  'DELIVERATE',
+] as const;
+const MODALIDADES = [
+  'TAKE_AWAY',
+  'DELIVERY_PROPIO',
+  'DELIVERY_PLATAFORMA',
+  'DELIVERY_DELIVERATE',
+] as const;
+
+function TipoPedidoEditor({
+  ventaId,
+  canalActual,
+  modalidadActual,
+  editable,
+  onUpdated,
+}: {
+  ventaId: string;
+  canalActual: string;
+  modalidadActual: string;
+  editable: boolean;
+  onUpdated: () => Promise<void> | void;
+}) {
+  const [editando, setEditando] = useState(false);
+  const [canal, setCanal] = useState(canalActual);
+  const [modalidad, setModalidad] = useState(modalidadActual);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCanal(canalActual);
+    setModalidad(modalidadActual);
+  }, [canalActual, modalidadActual]);
+
+  async function guardar() {
+    setGuardando(true);
+    setError(null);
+    try {
+      await api.patch(`/ventas/${ventaId}`, { canal, modalidad });
+      setEditando(false);
+      await onUpdated();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Error al guardar');
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  if (!editando) {
+    return (
+      <span className="flex items-baseline gap-1">
+        <span className="text-ink-700">
+          {canalActual.replace('_', ' ')}
+          {modalidadActual !== 'TAKE_AWAY' && (
+            <span className="text-ink-500"> · {modalidadActual.replace(/_/g, ' ')}</span>
+          )}
+        </span>
+        {editable && (
+          <button
+            onClick={() => setEditando(true)}
+            className="text-2xs text-teresita-700 hover:underline"
+            title="Cambiar tipo de pedido"
+          >
+            ✏️
+          </button>
+        )}
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1 bg-cream-100 px-2 py-1 rounded">
+      <select
+        value={canal}
+        onChange={(e) => setCanal(e.target.value)}
+        className="text-2xs border border-cream-300 rounded px-1 py-0.5"
+      >
+        {CANALES.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </select>
+      <select
+        value={modalidad}
+        onChange={(e) => setModalidad(e.target.value)}
+        className="text-2xs border border-cream-300 rounded px-1 py-0.5"
+      >
+        {MODALIDADES.map((m) => (
+          <option key={m} value={m}>
+            {m.replace(/_/g, ' ')}
+          </option>
+        ))}
+      </select>
+      <button
+        onClick={guardar}
+        disabled={guardando}
+        className="text-2xs text-basil-600 hover:underline disabled:opacity-50"
+      >
+        {guardando ? '...' : '✓'}
+      </button>
+      <button
+        onClick={() => setEditando(false)}
+        className="text-2xs text-ink-500 hover:text-pomodoro-600"
+      >
+        ✕
+      </button>
+      {error && <span className="text-2xs text-pomodoro-600 ml-1">{error}</span>}
+    </span>
   );
 }
 
