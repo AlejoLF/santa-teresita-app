@@ -153,11 +153,11 @@ export function resolverSlotActivo(
       ? feriado.horarios
       : config.horarios.filter((s) => s.diasSemana.includes(dow));
 
+  // Primera pasada: priorizar slots ACTIVOS (un slot activo siempre gana
+  // sobre el grace de otro turno que se superponga).
   for (const slot of slotsCandidatos) {
     const inicio = parseHHMM(slot.horaInicio);
     const fin = parseHHMM(slot.horaFin);
-    const finGrace = fin + slot.ventanaCierreMin;
-
     if (minutosAhora >= inicio && minutosAhora < fin) {
       return {
         tipo: 'EN_HORARIO',
@@ -170,6 +170,11 @@ export function resolverSlotActivo(
         },
       };
     }
+  }
+  // Segunda pasada: slots en ventana de cierre (grace).
+  for (const slot of slotsCandidatos) {
+    const fin = parseHHMM(slot.horaFin);
+    const finGrace = fin + slot.ventanaCierreMin;
     if (minutosAhora >= fin && minutosAhora < finGrace) {
       return {
         tipo: 'EN_HORARIO',
