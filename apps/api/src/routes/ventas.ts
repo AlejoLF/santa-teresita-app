@@ -491,23 +491,24 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       }
 
       const finalizada = await prisma.$transaction(async (tx) => {
-        // Crear pagos
-        for (const p of body.pagos) {
-          await tx.pago.create({
-            data: {
-              ventaId: venta.id,
-              metodo: p.metodo,
-              cuentaId: p.cuentaId,
-              cuentaACobrarId: p.cuentaACobrarId ?? null,
-              monto: p.monto,
-              cambioDado: p.cambioDado ?? '0',
-              numeroReferencia: p.numeroReferencia ?? null,
-              tarjetaUltimos4: p.tarjetaUltimos4 ?? null,
-              posnetId: p.posnetId ?? null,
-              estado: EstadoPago.CONFIRMADO,
-            },
-          });
-        }
+        // Crear pagos en batch — un solo INSERT con múltiples VALUES rows.
+        // Antes era 1 INSERT por pago (3 en pagos split: efectivo + tarjeta + MP);
+        // ahora es 1 INSERT total. Con RTT ~200ms a Supabase, esto ahorra
+        // ~400ms en cobros con pago dividido.
+        await tx.pago.createMany({
+          data: body.pagos.map((p) => ({
+            ventaId: venta.id,
+            metodo: p.metodo,
+            cuentaId: p.cuentaId,
+            cuentaACobrarId: p.cuentaACobrarId ?? null,
+            monto: p.monto,
+            cambioDado: p.cambioDado ?? '0',
+            numeroReferencia: p.numeroReferencia ?? null,
+            tarjetaUltimos4: p.tarjetaUltimos4 ?? null,
+            posnetId: p.posnetId ?? null,
+            estado: EstadoPago.CONFIRMADO,
+          })),
+        });
 
         const updated = await tx.venta.update({
           where: { id: venta.id },

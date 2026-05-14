@@ -1,5 +1,6 @@
 import { prisma } from '@sta/db/client';
 import { TurnoCaja } from '@sta/db';
+import { getCached, invalidate as invalidateCache } from '../lib/cache.js';
 
 /**
  * Configuración de horarios de atención — modelado como JSON dentro de
@@ -66,27 +67,37 @@ export const DEFAULT_CONFIG: ConfigHorarios = {
   feriados: [],
 };
 
+const HORARIOS_CACHE_KEY = 'config:horarios';
+const HORARIOS_TTL_MS = 5 * 60_000; // 5 min. Cambia raramente (admin la edita).
+
 /** Lee la config persistida; devuelve DEFAULT_CONFIG si no existe o si está corrupta. */
 export async function getConfigHorarios(): Promise<ConfigHorarios> {
-  const row = await prisma.configuracionSistema
-    .findUnique({ where: { clave: 'sesiones_horarios' } })
-    .catch(() => null);
+  return getCached(HORARIOS_CACHE_KEY, HORARIOS_TTL_MS, async () => {
+    const row = await prisma.configuracionSistema
+      .findUnique({ where: { clave: 'sesiones_horarios' } })
+      .catch(() => null);
 
-  if (!row?.valor) return DEFAULT_CONFIG;
+    if (!row?.valor) return DEFAULT_CONFIG;
 
-  try {
-    const parsed = JSON.parse(row.valor) as ConfigHorarios;
-    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.horarios)) {
+    try {
+      const parsed = JSON.parse(row.valor) as ConfigHorarios;
+      if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.horarios)) {
+        return DEFAULT_CONFIG;
+      }
+      return {
+        version: parsed.version ?? 1,
+        horarios: parsed.horarios,
+        feriados: parsed.feriados ?? [],
+      };
+    } catch {
       return DEFAULT_CONFIG;
     }
-    return {
-      version: parsed.version ?? 1,
-      horarios: parsed.horarios,
-      feriados: parsed.feriados ?? [],
-    };
-  } catch {
-    return DEFAULT_CONFIG;
-  }
+  });
+}
+
+/** Borrar el cache cuando se actualiza la config (PUT /admin/configuracion/horarios). */
+export function invalidateHorariosCache(): void {
+  invalidateCache(HORARIOS_CACHE_KEY);
 }
 
 function parseHHMM(hhmm: string): number {

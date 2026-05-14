@@ -84,7 +84,9 @@ export default function SesionActualPage() {
 
   useEffect(() => {
     void fetchData();
-    const id = setInterval(fetchData, 15_000);
+    // 30s — el turno solo cambia en el cierre, 15s no aportaba info nueva
+    // entre ticks. Reduce a la mitad la carga del endpoint.
+    const id = setInterval(fetchData, 30_000);
     return () => clearInterval(id);
   }, [fetchData]);
 

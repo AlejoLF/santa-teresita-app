@@ -21,6 +21,30 @@ import { getSesionActualReadOnly } from '../services/sesion-caja.js';
  * Todas las queries usan agregaciones de Postgres (no fetch + sum en app) para que escale.
  */
 export default async function adminRoutes(fastify: FastifyInstance) {
+  // GET /admin/pendientes — endpoint liviano para el badge de notificaciones
+  // del layout admin. El polling del layout llamaba /admin/dashboard (5-10KB,
+  // 15 queries) solo para leer 3 contadores; ahora ese poll usa este endpoint
+  // dedicado (~100 bytes, 3 counts en paralelo).
+  fastify.get(
+    '/admin/pendientes',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const [facturasSinValidar, cambiosExcelPendientes, sesionesSinAprobar] =
+        await Promise.all([
+          prisma.facturaRecibida.count({ where: { estado: 'PENDIENTE_VALIDACION' } }),
+          prisma.aprobacionExcel.count({ where: { estado: 'PENDIENTE' } }),
+          prisma.sesionCaja.count({ where: { estado: 'CERRADA' } }),
+        ]);
+      return {
+        pendientes: {
+          facturasSinValidar,
+          cambiosExcelPendientes,
+          sesionesSinAprobar,
+        },
+      };
+    },
+  );
+
   // GET /admin/dashboard — KPIs principales (Wireframe 06).
   fastify.get(
     '/admin/dashboard',
@@ -34,47 +58,112 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const en20Dias = new Date(inicioHoy);
       en20Dias.setDate(en20Dias.getDate() + 20);
 
-      // Ventas hoy (finalizadas)
-      const ventasHoy = await prisma.venta.aggregate({
-        _sum: { total: true },
-        _count: { _all: true },
-        where: {
-          estado: EstadoVenta.FINALIZADA,
-          fechaFinalizacion: { gte: inicioHoy },
-        },
-      });
-
-      // Ventas ayer (para comparativo)
-      const ventasAyer = await prisma.venta.aggregate({
-        _sum: { total: true },
-        _count: { _all: true },
-        where: {
-          estado: EstadoVenta.FINALIZADA,
-          fechaFinalizacion: { gte: inicioAyer, lt: finAyer },
-        },
-      });
-
-      // Pedidos abiertos ahora (no cobrados aún)
-      const pedidosAbiertos = await prisma.venta.count({
-        where: { estado: EstadoVenta.PROCESADA },
-      });
-
-      // Pagos de hoy desglosados por método y canal — para calcular efectivo y
-      // tarjeta con la categorización correcta (sin DELIVERATE en el efectivo).
-      const pagosHoy = await prisma.pago.findMany({
-        where: {
-          estado: 'CONFIRMADO',
-          venta: {
+      // BATCH 1 — todas las queries independientes corren en paralelo.
+      // Pasamos de ~15 round-trips secuenciales a Supabase a 2 batches paralelos.
+      // Con ~200ms RTT cada uno, esto reduce el endpoint de ~3000ms a ~600ms.
+      const [
+        ventasHoy,
+        ventasAyer,
+        pedidosAbiertos,
+        pagosHoy,
+        aportesPorCategoria,
+        egresosPorCategoria,
+        ventasPorCanal,
+        proximosDepositos,
+        cuentasACobrar,
+        facturasSinValidar,
+        facturasVencenPronto,
+        cambiosExcelPendientes,
+        sesionesSinAprobar,
+        saldosCuentas,
+      ] = await Promise.all([
+        prisma.venta.aggregate({
+          _sum: { total: true },
+          _count: { _all: true },
+          where: {
             estado: EstadoVenta.FINALIZADA,
             fechaFinalizacion: { gte: inicioHoy },
           },
-        },
-        select: {
-          metodo: true,
-          monto: true,
-          venta: { select: { canal: true, modalidad: true } },
-        },
-      });
+        }),
+        prisma.venta.aggregate({
+          _sum: { total: true },
+          _count: { _all: true },
+          where: {
+            estado: EstadoVenta.FINALIZADA,
+            fechaFinalizacion: { gte: inicioAyer, lt: finAyer },
+          },
+        }),
+        prisma.venta.count({ where: { estado: EstadoVenta.PROCESADA } }),
+        prisma.pago.findMany({
+          where: {
+            estado: 'CONFIRMADO',
+            venta: {
+              estado: EstadoVenta.FINALIZADA,
+              fechaFinalizacion: { gte: inicioHoy },
+            },
+          },
+          select: {
+            metodo: true,
+            monto: true,
+            venta: { select: { canal: true, modalidad: true } },
+          },
+        }),
+        prisma.movimiento.groupBy({
+          by: ['categoriaId'],
+          _sum: { monto: true },
+          _count: { _all: true },
+          where: {
+            tipo: 'INGRESO',
+            estado: EstadoMovimiento.CONFIRMADO,
+            fechaComputo: { gte: inicioHoy },
+          },
+        }),
+        prisma.movimiento.groupBy({
+          by: ['categoriaId'],
+          _sum: { monto: true },
+          _count: { _all: true },
+          where: {
+            tipo: 'EGRESO',
+            estado: EstadoMovimiento.CONFIRMADO,
+            fechaComputo: { gte: inicioHoy },
+          },
+        }),
+        prisma.venta.groupBy({
+          by: ['canal'],
+          _sum: { total: true },
+          _count: { _all: true },
+          where: {
+            estado: EstadoVenta.FINALIZADA,
+            fechaFinalizacion: { gte: inicioHoy },
+          },
+        }),
+        prisma.liquidacionPendiente.groupBy({
+          by: ['cuentaACobrarId', 'fechaAcreditacionEsperada'],
+          _sum: { montoNetoEsperado: true },
+          _count: { _all: true },
+          where: {
+            estado: EstadoLiquidacion.PENDIENTE,
+            fechaAcreditacionEsperada: { gte: inicioHoy, lte: en20Dias },
+          },
+          orderBy: { fechaAcreditacionEsperada: 'asc' },
+        }),
+        prisma.cuentaACobrar.findMany({
+          select: { id: true, nombre: true, cuentaDestino: { select: { nombre: true } } },
+        }),
+        prisma.facturaRecibida.count({ where: { estado: 'PENDIENTE_VALIDACION' } }),
+        prisma.facturaRecibida.count({
+          where: {
+            estado: { in: ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'] },
+            fechaVencimiento: { gte: inicioHoy, lte: en20Dias },
+          },
+        }),
+        prisma.aprobacionExcel.count({ where: { estado: 'PENDIENTE' } }),
+        prisma.sesionCaja.count({ where: { estado: 'CERRADA' } }),
+        prisma.cuenta.findMany({
+          where: { activa: true },
+          select: { id: true, nombre: true, tipo: true, saldoActual: true },
+        }),
+      ]);
 
       // Cobrado en efectivo del día = mostrador + Damián (excluye DELIVERATE).
       // Cobrado con tarjeta = todo lo no efectivo, también excluye DELIVERATE.
@@ -161,30 +250,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         tjDesglose.transferencia.monto +
         tjDesglose.otro.monto;
 
-      // Aportes hoy = ingresos manuales del día (efectivo entrante, transferencias, etc.)
-      // Agrupado por categoría para el drill-down.
-      const aportesPorCategoria = await prisma.movimiento.groupBy({
-        by: ['categoriaId'],
-        _sum: { monto: true },
-        _count: { _all: true },
-        where: {
-          tipo: 'INGRESO',
-          estado: EstadoMovimiento.CONFIRMADO,
-          fechaComputo: { gte: inicioHoy },
-        },
-      });
-      // Egresos hoy con desglose por categoría
-      const egresosPorCategoria = await prisma.movimiento.groupBy({
-        by: ['categoriaId'],
-        _sum: { monto: true },
-        _count: { _all: true },
-        where: {
-          tipo: 'EGRESO',
-          estado: EstadoMovimiento.CONFIRMADO,
-          fechaComputo: { gte: inicioHoy },
-        },
-      });
-      // Resolver nombres de categorías
+      // BATCH 2 — resolver nombres de categorías (depende de batch 1).
       const categoriasIds = Array.from(
         new Set([
           ...aportesPorCategoria.map((a) => a.categoriaId),
@@ -215,57 +281,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const cantAportes = aportesDetalle.reduce((acc, a) => acc + a.cantidad, 0);
       const cantEgresos = egresosDetalle.reduce((acc, e) => acc + e.cantidad, 0);
 
-      // Ventas por canal (para el drill-down de "Ventas hoy")
-      const ventasPorCanal = await prisma.venta.groupBy({
-        by: ['canal'],
-        _sum: { total: true },
-        _count: { _all: true },
-        where: {
-          estado: EstadoVenta.FINALIZADA,
-          fechaFinalizacion: { gte: inicioHoy },
-        },
-      });
-
-      // Próximos depósitos en los siguientes 20 días, agrupados por cuenta a cobrar
-      const proximosDepositos = await prisma.liquidacionPendiente.groupBy({
-        by: ['cuentaACobrarId', 'fechaAcreditacionEsperada'],
-        _sum: { montoNetoEsperado: true },
-        _count: { _all: true },
-        where: {
-          estado: EstadoLiquidacion.PENDIENTE,
-          fechaAcreditacionEsperada: { gte: inicioHoy, lte: en20Dias },
-        },
-        orderBy: { fechaAcreditacionEsperada: 'asc' },
-      });
-
-      // Para cada cuenta a cobrar, traemos su nombre
-      const cuentasACobrar = await prisma.cuentaACobrar.findMany({
-        select: { id: true, nombre: true, cuentaDestino: { select: { nombre: true } } },
-      });
       const cuentaPorId = new Map(cuentasACobrar.map((c) => [c.id, c]));
-
-      // Pendientes accionables para el banner del dashboard
-      const facturasSinValidar = await prisma.facturaRecibida.count({
-        where: { estado: 'PENDIENTE_VALIDACION' },
-      });
-      const facturasVencenPronto = await prisma.facturaRecibida.count({
-        where: {
-          estado: { in: ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'] },
-          fechaVencimiento: { gte: inicioHoy, lte: en20Dias },
-        },
-      });
-      const cambiosExcelPendientes = await prisma.aprobacionExcel.count({
-        where: { estado: 'PENDIENTE' },
-      });
-      const sesionesSinAprobar = await prisma.sesionCaja.count({
-        where: { estado: 'CERRADA' },
-      });
-
-      // Saldos actuales de cuentas (las 5 reales)
-      const saldosCuentas = await prisma.cuenta.findMany({
-        where: { activa: true },
-        select: { id: true, nombre: true, tipo: true, saldoActual: true },
-      });
 
       const totalVentasHoy = Number(ventasHoy._sum.total ?? 0);
       const totalVentasAyer = Number(ventasAyer._sum.total ?? 0);

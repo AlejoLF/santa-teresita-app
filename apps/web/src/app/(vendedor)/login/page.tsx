@@ -71,7 +71,10 @@ export default function VendedorLoginPage() {
       prefetch('/catalogo/categorias', 5 * 60_000);
       prefetch('/catalogo/cuentas', 5 * 60_000);
       prefetch('/catalogo/listas-precios', 5 * 60_000);
-      prefetch('/catalogo/productos?limit=1000', 60_000);
+      // Mismo URL que la pantalla cargar-pedido va a pedir (sino el prefetch
+      // cae en miss). TTL 5min porque el catálogo cambia raramente y los 2000
+      // productos pesan ~200KB JSON — vale la pena no re-bajarlo en cada mount.
+      prefetch('/catalogo/productos?limit=2000', 5 * 60_000);
       prefetch('/catalogo/salsa/SIMPLE', 10 * 60_000);
       prefetch('/catalogo/salsa/ESPECIAL', 10 * 60_000);
       if (res.usuario.rol === 'VENDEDOR') {

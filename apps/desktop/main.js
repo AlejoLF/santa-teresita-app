@@ -19,25 +19,17 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { autoUpdater } = require('electron-updater');
-// embedded-postgres es ESM puro → import dinámico al usar
-let EmbeddedPostgres = null;
-async function loadEmbeddedPostgres() {
-  if (EmbeddedPostgres) return EmbeddedPostgres;
-  const mod = await import('embedded-postgres');
-  EmbeddedPostgres = mod.default ?? mod;
-  return EmbeddedPostgres;
-}
-const { Client } = require('pg');
 
 // ═══ Configuración ═══════════════════════════════════════════════════════
+//
+// Cloud-first desde la v2.x: la app NO corre Postgres local. La API se
+// conecta directo a Supabase con la URL del cloud-config.json. Todo el
+// código de embedded-postgres + pg.Client fue removido en alpha.18
+// (ahorra ~107MB del bundle y elimina ~270 líneas de código muerto).
 
 const APP_NAME = 'SantaTeresita';
-const PG_PORT = 54320;
 const API_PORT = 3001;
 const WEB_PORT = 3000;
-const PG_USER = 'teresita';
-const PG_PASSWORD = 'teresita-local-only';
-const PG_DB = 'teresita';
 
 // Directorio de recursos: en dev → ./resources, packageado → process.resourcesPath/app/resources
 function isDev() {
@@ -52,10 +44,6 @@ function resourcesDir() {
 // Directorio de datos persistente: %APPDATA%/SantaTeresita
 function dataDir() {
   return path.join(app.getPath('userData'), 'data');
-}
-
-function dbDir() {
-  return path.join(dataDir(), 'pgdata');
 }
 
 function logsDir() {
@@ -118,7 +106,6 @@ function log(msg) {
 
 let mainWindow = null;
 let splashWindow = null;
-let pgInstance = null;
 let apiProcess = null;
 let webProcess = null;
 let agentProcess = null;
@@ -149,252 +136,14 @@ function setSplashStatus(text) {
   }
 }
 
-// ═══ Postgres ═════════════════════════════════════════════════════════════
+// ═══ Postgres local ═════════════════════════════════════════════════════
+//
+// Removido en alpha.18: la app es cloud-first contra Supabase. El bloque
+// anterior (startPostgres, applySchema, runSeed, upgradeSchema, etc.) era
+// código muerto que arrastraba @embedded-postgres (107 MB en el bundle).
+// Si en algún momento se reactiva el modo local-only, ver el commit que
+// hizo la limpieza.
 
-/**
- * Verifica si un puerto local está ocupado intentando un connect rápido.
- * Si conecta en menos de 500ms, hay alguien escuchando.
- */
-async function puertoOcupado(port) {
-  return new Promise((resolve) => {
-    const net = require('net');
-    const socket = new net.Socket();
-    let resolved = false;
-    const done = (ocupado) => {
-      if (resolved) return;
-      resolved = true;
-      try { socket.destroy(); } catch {}
-      resolve(ocupado);
-    };
-    socket.setTimeout(500);
-    socket.on('connect', () => done(true));
-    socket.on('timeout', () => done(false));
-    socket.on('error', () => done(false));
-    socket.connect(port, '127.0.0.1');
-  });
-}
-
-/**
- * Pre-cleanup antes de arrancar Postgres:
- *   1. Si el puerto está libre PERO existe `postmaster.pid` → es stale,
- *      lo borramos para que initdb no se queje.
- *   2. Si el puerto está OCUPADO → tiramos error amigable explicando
- *      que probablemente hay otra instancia corriendo, en vez de dejar
- *      que embedded-postgres falle con "undefined".
- *
- * No matamos procesos huérfanos automáticamente porque podría ser otra app
- * legítima del usuario usando ese puerto. Solo informamos.
- */
-async function precheckPostgres() {
-  const ocupado = await puertoOcupado(PG_PORT);
-  if (ocupado) {
-    throw new Error(
-      `El puerto ${PG_PORT} ya está en uso. Probablemente hay otra instancia ` +
-        `de Santa Teresita corriendo. Cerrá la app desde la bandeja del sistema ` +
-        `(o desde el Administrador de Tareas → "Santa Teresita" + "postgres") ` +
-        `e intentá de nuevo.`,
-    );
-  }
-  // Puerto libre + postmaster.pid presente → stale, hay que limpiarlo o
-  // initdb tira "another server might be running".
-  const pidFile = path.join(dbDir(), 'postmaster.pid');
-  if (fs.existsSync(pidFile)) {
-    try {
-      fs.unlinkSync(pidFile);
-      log('Limpieza: postmaster.pid stale removido');
-    } catch (e) {
-      log('No se pudo borrar postmaster.pid stale: ' + (e?.message ?? e));
-    }
-  }
-}
-
-async function startPostgres() {
-  setSplashStatus('Iniciando base de datos...');
-  log('Iniciando Postgres embebido en ' + dbDir());
-
-  // Sanity check antes de spawnear pg — si el puerto está tomado por una
-  // instancia previa, fallamos con un mensaje accionable en vez de el
-  // críptico "FATAL: undefined" que daba embedded-postgres antes.
-  await precheckPostgres();
-
-  const isFirstRun = !fs.existsSync(path.join(dbDir(), 'PG_VERSION'));
-  const EP = await loadEmbeddedPostgres();
-
-  pgInstance = new EP({
-    databaseDir: dbDir(),
-    user: PG_USER,
-    password: PG_PASSWORD,
-    port: PG_PORT,
-    persistent: true,
-  });
-
-  // En el primer arranque, intentamos copiar el cluster pre-baked (template
-  // generado en CI con initdb + schema + seed ya aplicados). Eso ahorra
-  // ~10 min de wall-clock de cara al usuario en la primera instalación.
-  // Si por algún motivo el template no existe (build viejo, dev mode, etc.)
-  // caemos al flow tradicional con `initialise()`.
-  let templateAplicado = false;
-  if (isFirstRun) {
-    const templatePath = path.join(resourcesDir(), 'pgdata-template');
-    if (fs.existsSync(path.join(templatePath, 'PG_VERSION'))) {
-      log('Primer arranque: copiando cluster pre-baked desde ' + templatePath);
-      setSplashStatus('Inicializando base de datos (template pre-baked)...');
-      fs.mkdirSync(path.dirname(dbDir()), { recursive: true });
-      copiarDirectorio(templatePath, dbDir());
-      log('Cluster pre-baked copiado');
-      templateAplicado = true;
-    } else {
-      log('Primer arranque: template no encontrado, fallback a initdb tradicional');
-      setSplashStatus('Inicializando base de datos (solo primera vez)...');
-      fs.mkdirSync(path.dirname(dbDir()), { recursive: true });
-      await pgInstance.initialise();
-    }
-  }
-
-  await pgInstance.start();
-  log('Postgres arriba en puerto ' + PG_PORT);
-
-  // Crear DB con encoding UTF8 (Windows usa WIN1252 por default y el seed tiene emojis 🍝)
-  // Nos conectamos a "postgres" (que existe siempre) y creamos teresita con template0+UTF8.
-  const adminClient = new Client({
-    host: '127.0.0.1',
-    port: PG_PORT,
-    user: PG_USER,
-    password: PG_PASSWORD,
-    database: 'postgres',
-  });
-  await adminClient.connect();
-  try {
-    const exists = await adminClient.query('SELECT 1 FROM pg_database WHERE datname = $1', [PG_DB]);
-    if (exists.rows.length === 0) {
-      await adminClient.query(`CREATE DATABASE ${PG_DB} WITH ENCODING 'UTF8' TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C'`);
-      log('Base "' + PG_DB + '" creada (UTF8)');
-    } else {
-      log('Base "' + PG_DB + '" ya existe');
-    }
-  } finally {
-    await adminClient.end();
-  }
-
-  if (isFirstRun) {
-    // Tanto con template como sin: schema + seed los aplicamos en la PC del
-    // user. El template solo nos ahorró el initdb (los CI runners no pueden
-    // pre-bakear schema/seed porque Postgres rehúsa arrancar como admin).
-    setSplashStatus('Aplicando esquema...');
-    await applySchema();
-    setSplashStatus('Cargando datos iniciales (productos, sabores, etc.)...');
-    await runSeed();
-    log('Seed completo');
-  } else {
-    // Upgrade-path: aplicar migraciones idempotentes para columnas/tablas nuevas
-    // que se agregaron entre versiones. Cada bloque debe ser seguro de re-ejecutar.
-    setSplashStatus('Verificando actualizaciones de base...');
-    await upgradeSchema();
-  }
-}
-
-/**
- * Copia un directorio recursivamente. Usamos fs.cpSync (Node 16.7+) que es
- * la API nativa de Node. Si más adelante hace falta progreso o resumibilidad,
- * cambiar por una lib (ej. fs-extra) — por ahora KISS.
- */
-function copiarDirectorio(src, dest) {
-  fs.mkdirSync(dest, { recursive: true });
-  fs.cpSync(src, dest, { recursive: true });
-}
-
-/**
- * Migraciones idempotentes para versiones que se instalan sobre instalaciones
- * previas. Cada `ALTER TABLE ... IF NOT EXISTS` y `CREATE INDEX ... IF NOT EXISTS`
- * es seguro re-ejecutar en cada arranque.
- */
-async function upgradeSchema() {
-  const client = new Client({
-    host: '127.0.0.1',
-    port: PG_PORT,
-    user: PG_USER,
-    password: PG_PASSWORD,
-    database: PG_DB,
-  });
-  await client.connect();
-  try {
-    // v1.15 — sub-categorías reales (filtra los TipoProducto que se muestran en cajero)
-    await client.query(`
-      ALTER TABLE "tipos_producto"
-      ADD COLUMN IF NOT EXISTS "es_subcategoria" boolean NOT NULL DEFAULT false
-    `);
-    // v1.18 — contador atómico de numeroOrdenTurno por sesión (race condition fix)
-    await client.query(`
-      ALTER TABLE "sesiones_caja"
-      ADD COLUMN IF NOT EXISTS "ultimo_numero_orden" integer NOT NULL DEFAULT 0
-    `);
-    // Sincronizar el contador con el MAX existente para no pisar números ya asignados
-    await client.query(`
-      UPDATE "sesiones_caja" s
-      SET "ultimo_numero_orden" = COALESCE(
-        (SELECT MAX(v."numero_orden_turno") FROM "ventas" v WHERE v."sesion_caja_id" = s."id"),
-        0
-      )
-      WHERE "ultimo_numero_orden" = 0
-    `);
-    // v1.19 — indexes faltantes para queries de cashflow + KPIs
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS "movimientos_cuenta_origen_id_idx"
-      ON "movimientos" ("cuenta_origen_id")
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS "movimientos_cuenta_destino_id_idx"
-      ON "movimientos" ("cuenta_destino_id")
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS "pagos_cuenta_id_idx"
-      ON "pagos" ("cuenta_id")
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS "ventas_estado_fecha_finalizacion_idx"
-      ON "ventas" ("estado", "fecha_finalizacion")
-    `);
-    // v1.22 — rename destinos de impresión: KITCHEN→COCINA, COUNTER→MOSTRADOR
-    // (DELIVERY se mantiene). Actualiza tanto los jobs históricos como las
-    // claves de configuración_sistema. Idempotente: si ya están renombrados,
-    // los UPDATE no afectan filas.
-    await client.query(`
-      UPDATE "trabajos_impresion" SET "destino" = 'COCINA' WHERE "destino" = 'KITCHEN'
-    `);
-    await client.query(`
-      UPDATE "trabajos_impresion" SET "destino" = 'MOSTRADOR' WHERE "destino" = 'COUNTER'
-    `);
-    await client.query(`
-      UPDATE "configuracion_sistema" SET "clave" = 'impresora_cocina' WHERE "clave" = 'impresora_kitchen'
-    `);
-    await client.query(`
-      UPDATE "configuracion_sistema" SET "clave" = 'impresora_mostrador' WHERE "clave" = 'impresora_counter'
-    `);
-    log('upgradeSchema OK');
-  } catch (e) {
-    log('upgradeSchema error (no fatal): ' + (e?.message || e));
-  } finally {
-    await client.end();
-  }
-}
-
-async function applySchema() {
-  const schemaSql = fs.readFileSync(path.join(resourcesDir(), 'schema.sql'), 'utf8');
-  log('Aplicando schema (' + schemaSql.length + ' chars)');
-  const client = new Client({
-    host: '127.0.0.1',
-    port: PG_PORT,
-    user: PG_USER,
-    password: PG_PASSWORD,
-    database: PG_DB,
-  });
-  await client.connect();
-  try {
-    await client.query(schemaSql);
-  } finally {
-    await client.end();
-  }
-}
 
 /**
  * Lee la URL de la cloud DB en orden de precedencia:
@@ -629,11 +378,20 @@ function setupAutoUpdater() {
     debug: () => {},
   };
 
-  autoUpdater.autoDownload = true; // descarga sola si hay update
-  autoUpdater.autoInstallOnAppQuit = true; // instala al cerrar si descargó
+  // Silent install: aplicamos el update automáticamente sin pedir confirmación.
+  // El dialog viejo aparecía detrás del splash/mainWindow (race condition:
+  // showMessageBox sobre mainWindow no-visible quedaba tapado). El patrón
+  // moderno (VS Code, Chrome, Slack) es: descarga en background → reinicio
+  // automático con un aviso en el splash. Los datos viven en Supabase, así
+  // que un reinicio no pierde nada del estado del cajero.
+  autoUpdater.autoDownload = false; // disparamos manual en update-available
+  autoUpdater.autoInstallOnAppQuit = true; // fallback si no podemos reiniciar ahora
 
   autoUpdater.on('update-available', (info) => {
-    log(`[autoUpdater] update-available: ${info.version}`);
+    log(`[autoUpdater] update-available: ${info.version} — descargando en background`);
+    autoUpdater.downloadUpdate().catch((e) => {
+      log('[autoUpdater] downloadUpdate error: ' + (e?.message ?? e));
+    });
   });
   autoUpdater.on('update-not-available', () => {
     log('[autoUpdater] sin updates pendientes');
@@ -645,39 +403,52 @@ function setupAutoUpdater() {
     log(`[autoUpdater] descargando: ${p.percent.toFixed(0)}% (${(p.bytesPerSecond / 1024).toFixed(0)} KB/s)`);
   });
   autoUpdater.on('update-downloaded', (info) => {
-    log(`[autoUpdater] update-downloaded: ${info.version}`);
-    // Mostramos diálogo modal para que Nancy decida cuándo reiniciar.
-    // Si elige "Después", se aplica al próximo cierre (autoInstallOnAppQuit).
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      void dialog
-        .showMessageBox(mainWindow, {
-          type: 'info',
-          buttons: ['Reiniciar ahora', 'Más tarde'],
-          defaultId: 0,
-          cancelId: 1,
-          title: 'Actualización lista',
-          message: `Versión ${info.version} disponible`,
-          detail:
-            'Se descargó una nueva versión de Santa Teresita. ' +
-            'Para aplicarla hay que reiniciar la app. ' +
-            '¿Reiniciás ahora? (los datos no se pierden — viven aparte en %APPDATA%/Santa Teresita)',
-        })
-        .then(({ response }) => {
-          if (response === 0) {
-            log('[autoUpdater] instalando ahora por elección del usuario');
-            autoUpdater.quitAndInstall();
-          } else {
-            log('[autoUpdater] postpuesto — se aplica al próximo cierre');
-          }
-        })
-        .catch((e) => log('[autoUpdater] dialog error: ' + (e?.message ?? e)));
+    log(`[autoUpdater] update-downloaded: ${info.version} — reinicio automático en 3s`);
+    // Si el splash sigue visible, mostramos el aviso ahí (alwaysOnTop garantiza
+    // que se vea). Si ya está la mainWindow, mostramos un toast nativo no-modal
+    // así no compite con la UI.
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.webContents
+        .executeJavaScript(
+          `(function(){
+            var el = document.getElementById('status');
+            if (el) el.textContent = 'Aplicando actualización ${info.version}...';
+          })();`,
+        )
+        .catch(() => {});
+    } else if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents
+        .executeJavaScript(
+          `(function(){
+            try {
+              if (typeof Notification !== 'undefined') {
+                new Notification('Actualización ${info.version} lista', {
+                  body: 'Reiniciando en 3 segundos...',
+                });
+              }
+            } catch (e) {}
+          })();`,
+        )
+        .catch(() => {});
     }
+    // 3s para que el usuario vea el cartel antes del relaunch silencioso.
+    setTimeout(() => {
+      try {
+        autoUpdater.quitAndInstall(true, true); // isSilent=true, forceRunAfter=true
+      } catch (e) {
+        log('[autoUpdater] quitAndInstall error: ' + (e?.message ?? e));
+      }
+    }, 3000);
   });
 
-  // Trigger inicial — chequea al arrancar
-  autoUpdater.checkForUpdates().catch((e) => {
-    log('[autoUpdater] checkForUpdates error inicial: ' + (e?.message ?? e));
-  });
+  // Trigger inicial — chequea al arrancar, pero esperamos 5s para no competir
+  // con el boot (loadURL, splash, etc.). Si el update-downloaded llega antes
+  // de que mainWindow esté visible, igual cae en el flow silent.
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((e) => {
+      log('[autoUpdater] checkForUpdates error inicial: ' + (e?.message ?? e));
+    });
+  }, 5000);
 
   // Re-chequear cada 4 horas mientras la app está abierta
   setInterval(
@@ -1047,7 +818,6 @@ async function gracefulShutdown(reason) {
   try { if (agentProcess) agentProcess.kill(); } catch {}
   try { if (apiProcess) apiProcess.kill(); } catch {}
   try { if (webProcess) webProcess.kill(); } catch {}
-  try { if (pgInstance) await pgInstance.stop(); } catch (e) { log('pg stop err: ' + e); }
   app.quit();
 }
 

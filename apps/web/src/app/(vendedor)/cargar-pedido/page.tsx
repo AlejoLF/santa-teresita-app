@@ -487,14 +487,20 @@ export default function CargarPedidoPage() {
   useEffect(() => {
     (async () => {
       try {
-        // Paralelo: /auth/me + /catalogo/categorias en lugar de secuencial.
-        // En Portugal (~150ms RTT) eso achica el TTFI a la mitad.
-        const [me, cats] = await Promise.all([
+        // Paralelo total: auth/me + categorías + productos en el mismo
+        // Promise.all. Antes los productos se cargaban después de categorías
+        // (secuencial); ahora todo va junto. Si el prefetch post-login hizo
+        // su trabajo, productos sale del cache (TTL 5min). Sino, sale en
+        // paralelo con los otros 2 calls.
+        const [me, cats, prods] = await Promise.all([
           api.getCached<{ usuario: { nombre: string; rol: string } }>('/auth/me', 5 * 60_000),
           api.getCached<{ categorias: Categoria[] }>('/catalogo/categorias', 5 * 60_000),
+          api.getCached<{ productos: Producto[] }>(
+            '/catalogo/productos?limit=2000',
+            5 * 60_000,
+          ),
         ]);
         setUsuario(me.usuario);
-        // Categorías ordenadas alfabéticamente (la encargada lo pidió así)
         const ordenadas = [...cats.categorias].sort((a, b) =>
           a.nombre.localeCompare(b.nombre, 'es'),
         );
@@ -502,7 +508,6 @@ export default function CargarPedidoPage() {
         if (ordenadas[0]) {
           setCategoriaActiva(ordenadas[0].id);
         }
-        const prods = await api.get<{ productos: Producto[] }>('/catalogo/productos?limit=2000');
         setProductos(prods.productos);
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) {
@@ -558,7 +563,10 @@ export default function CargarPedidoPage() {
       }
     };
     void fetchStats();
-    const id = setInterval(fetchStats, 8000);
+    // Polling cada 30s — la info del footer (pedidos abiertos/cerrados + ventana
+    // de horario) no cambia con frecuencia. Antes era 8s, que en conexión
+    // lenta provocaba requests solapados con PedidosAbiertosList (15s).
+    const id = setInterval(fetchStats, 30_000);
     return () => {
       cancelled = true;
       clearInterval(id);

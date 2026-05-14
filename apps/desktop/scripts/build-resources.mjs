@@ -37,6 +37,89 @@ function copyDir(src, dest) {
   }
 }
 
+/**
+ * Recursivamente borra archivos que son solo dev artifacts dentro de un
+ * directorio node_modules: source maps, TypeScript definitions, READMEs,
+ * CHANGELOGs, tests, examples, etc. El .exe en runtime NO los lee.
+ *
+ * Filosofía: si te equivocás y borrás algo que SÍ se necesita, en runtime
+ * vas a ver un error de require. Los patrones de abajo son conservadores
+ * (.map y .d.ts son los que más pesan y son 100% safe).
+ */
+function pruneDevArtifacts(root) {
+  if (!fs.existsSync(root)) return;
+  let deleted = 0;
+  let savedBytes = 0;
+  const dropExt = new Set(['.map', '.ts']); // .d.ts cae acá; .ts puro no debería existir en node_modules
+  const dropName = new Set([
+    'README.md',
+    'README',
+    'README.markdown',
+    'CHANGELOG.md',
+    'CHANGELOG',
+    'HISTORY.md',
+    'LICENSE.md',
+    '.npmignore',
+    '.eslintrc',
+    '.eslintrc.json',
+    '.editorconfig',
+    'tsconfig.json',
+    'tsconfig.build.json',
+  ]);
+  const dropDir = new Set([
+    '__tests__',
+    'test',
+    'tests',
+    'example',
+    'examples',
+    'docs',
+    '.github',
+    'man',
+  ]);
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (dropDir.has(entry.name)) {
+          try {
+            const size = dirSize(p);
+            fs.rmSync(p, { recursive: true, force: true });
+            savedBytes += size;
+          } catch {}
+        } else {
+          walk(p);
+        }
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (dropExt.has(ext) || dropName.has(entry.name)) {
+          try {
+            const sz = fs.statSync(p).size;
+            fs.unlinkSync(p);
+            deleted++;
+            savedBytes += sz;
+          } catch {}
+        }
+      }
+    }
+  };
+  walk(root);
+  console.log(`  Pruned ${deleted} files, ${(savedBytes / 1024 / 1024).toFixed(1)} MB ahorrados`);
+}
+
+function dirSize(dir) {
+  let total = 0;
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) total += dirSize(p);
+      else if (entry.isFile()) {
+        try { total += fs.statSync(p).size; } catch {}
+      }
+    }
+  } catch {}
+  return total;
+}
+
 function reset() {
   step('Limpiando resources/');
   fs.rmSync(RESOURCES, { recursive: true, force: true });
@@ -116,6 +199,8 @@ function buildApi() {
   // Si @sta/db expone @prisma/client desde packages/db, agarramos también los archivos generados
   fs.writeFileSync(path.join(dest, 'package.json'), JSON.stringify(pkgPlano, null, 2));
   run('npm install --omit=dev --no-package-lock --no-fund --no-audit', dest);
+  step('Limpiando archivos dev de resources/api/node_modules');
+  pruneDevArtifacts(path.join(dest, 'node_modules'));
 
   step('Copiando cliente Prisma generado (con engine binario)');
   // pnpm guarda el .prisma/client real en .pnpm/<hash>/node_modules/.prisma/client
@@ -232,6 +317,12 @@ function buildWeb() {
   );
   run('npm install --omit=dev --no-package-lock --no-fund --no-audit', dest);
 
+  // Limpieza post-install: borra archivos que SOLO sirven para dev / debug
+  // y que en runtime el .exe NO lee. En medición previa esto ahorra ~80-150
+  // MB del bundle final (source maps + TypeScript defs + READMEs + tests).
+  step('Limpiando archivos dev de resources/web/node_modules');
+  pruneDevArtifacts(path.join(dest, 'node_modules'));
+
   // Copiar @sta/shared (workspace dep) que la app necesita en runtime
   step('Copiando @sta/shared a node_modules/@sta/shared');
   const sharedSrc = path.join(REPO_ROOT, 'packages', 'shared');
@@ -292,6 +383,8 @@ function buildAgent() {
   };
   fs.writeFileSync(path.join(agentDir, 'package.json'), JSON.stringify(pkgPlano, null, 2));
   run('npm install --omit=dev --no-package-lock --no-fund --no-audit', agentDir);
+  step('Limpiando archivos dev de resources/agent/node_modules');
+  pruneDevArtifacts(path.join(agentDir, 'node_modules'));
 }
 
 function copyCloudConfig() {

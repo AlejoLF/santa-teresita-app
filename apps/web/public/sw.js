@@ -20,13 +20,24 @@
  * debería hacer falta nunca).
  */
 
-const CACHE_VERSION = 'v1';
+// Bumpeamos a v2 cuando la rama de optimizaciones (alpha.18) cambió SHELL_URLS
+// y agregó rutas admin frecuentes. El activate event borra las caches v1
+// automáticamente.
+const CACHE_VERSION = 'v2';
 const SHELL_CACHE = `sta-shell-${CACHE_VERSION}`;
 const STATIC_CACHE = `sta-static-${CACHE_VERSION}`;
 
 // El shell mínimo: la URL raíz y rutas críticas. Las precacheamos al
 // instalar para que el primer offline arranque "instantáneo".
-const SHELL_URLS = ['/', '/login', '/cargar-pedido', '/admin'];
+const SHELL_URLS = [
+  '/',
+  '/login',
+  '/cargar-pedido',
+  '/admin',
+  '/admin/ventas',
+  '/admin/movimientos',
+  '/admin/cuentas',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

@@ -10,20 +10,32 @@
 ;    Si NO está, ejecutamos el `vc_redist.x64.exe` que viene bundleado en
 ;    el installer en modo silencioso (sin diálogos, sin reinicio).
 ;
-;    El embedded-postgres que usamos requiere vcruntime140.dll y msvcp140.dll
-;    de ese redistributable para que postgres.exe / initdb.exe arranquen.
-;    Sin esto, la app crashea al primer arranque con error 0xC0000135
-;    (STATUS_DLL_NOT_FOUND) o 0xC0000005 (access violation).
+;  Histórico: era requerido para embedded-postgres (postgres.exe). Desde
+;  alpha.18 la app es cloud-first y NO usa Postgres local, pero conservamos
+;  el check porque better-sqlite3 (outbox local) y prebuilt nativos de
+;  Node/Electron también dependen de las DLLs vcruntime140 / msvcp140.
+;
+;  Optimización alpha.18: en instalaciones donde VC++ ya está, antes el
+;  installer leía el registro (lento en PCs sin SSD, ~5-10s). Ahora primero
+;  chequeamos si vcruntime140.dll está en System32 — fast path que evita
+;  el registro. Solo si la DLL falta caemos al chequeo de registro.
 ; ─────────────────────────────────────────────────────────────────────────
 
 !macro customInstall
+  DetailPrint "Extrayendo Santa Teresita... (puede tardar ~60s, no se colgó)"
   DetailPrint "Verificando Microsoft Visual C++ Redistributable..."
 
-  ; Detección robusta: buscamos la clave de registro que escribe el installer
-  ; oficial de Microsoft cuando se instala VC++ 2015-2022 x64. Cubre las
-  ; versiones 14.0 (VS2015), 14.1x (VS2017), 14.2x (VS2019), 14.3x (VS2022).
-  ; Todas comparten el mismo runtime y se sobreescriben (no coexisten).
-  ReadRegDword $0 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64" "Installed"
+  ; Fast path: si las DLLs claves ya están en System32, asumimos VC++ instalado.
+  ; Esto evita el ReadRegDword (~5-10s en PCs sin SSD).
+  StrCpy $0 "0"
+  ${If} ${FileExists} "$SYSDIR\vcruntime140.dll"
+  ${AndIf} ${FileExists} "$SYSDIR\msvcp140.dll"
+    StrCpy $0 "1"
+    DetailPrint "VC++ DLLs presentes en System32, saltando."
+  ${Else}
+    ; Fallback: chequear registro (versiones 14.0/14.1x/14.2x/14.3x comparten clave)
+    ReadRegDword $0 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64" "Installed"
+  ${EndIf}
 
   ${If} $0 == "1"
     DetailPrint "VC++ Redist ya está instalado, saltando."

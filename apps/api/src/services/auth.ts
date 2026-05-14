@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { randomBytes } from 'node:crypto';
 import { prisma } from '@sta/db/client';
 import { TipoLoginAudit, RolUsuario, type Usuario } from '@sta/db';
-import { hashToken } from '../plugins/auth.js';
+import { hashToken, invalidateAuthCache } from '../plugins/auth.js';
 import { config } from '../config.js';
 import { recordAudit } from './audit.js';
 
@@ -113,6 +113,11 @@ export async function login(pin: string, ctx: LoginContext): Promise<LoginResult
 }
 
 export async function logout(sessionId: string, usuarioId: string): Promise<void> {
+  // Buscar el tokenHash antes del update para poder borrar del cache.
+  const session = await prisma.authSession.findUnique({
+    where: { id: sessionId },
+    select: { tokenHash: true },
+  });
   await prisma.$transaction(async (tx) => {
     await tx.authSession.update({
       where: { id: sessionId },
@@ -125,6 +130,7 @@ export async function logout(sessionId: string, usuarioId: string): Promise<void
       },
     });
   });
+  if (session) invalidateAuthCache(session.tokenHash);
 }
 
 /**

@@ -5,9 +5,12 @@ import { prisma } from '@sta/db/client';
 import { RolUsuario, TipoCuenta } from '@sta/db';
 import { PinSchema, pinEsDebil } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
+import { invalidateAuthCacheByUsuario } from '../plugins/auth.js';
+import { invalidate as invalidateCache } from '../lib/cache.js';
 import {
   DEFAULT_CONFIG,
   getConfigHorarios,
+  invalidateHorariosCache,
   validarConfig,
   type ConfigHorarios,
 } from '../services/horarios.js';
@@ -207,6 +210,8 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         where: { usuarioId: target.id, revocadaAt: null },
         data: { revocadaAt: new Date(), motivoRevocacion: 'pin_reset' },
       });
+      // Limpiar cache de auth del usuario (sus sesiones cacheadas dejan de servir).
+      invalidateAuthCacheByUsuario(target.id);
 
       return { ok: true };
     },
@@ -712,6 +717,9 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         valorNuevo: { valor },
         contexto: { clave: 'sesiones_horarios' },
       });
+      // El cache de horarios queda invalidado para que el próximo
+      // resolverSlotActivo lea la config nueva.
+      invalidateHorariosCache();
 
       return { ok: true, config: body };
     },

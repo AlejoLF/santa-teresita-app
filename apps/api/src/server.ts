@@ -5,6 +5,7 @@ import helmet from '@fastify/helmet';
 import sensible from '@fastify/sensible';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
+import compress from '@fastify/compress';
 import { ZodError } from 'zod';
 import {
   hasZodFastifySchemaValidationErrors,
@@ -48,6 +49,15 @@ export async function buildServer() {
   app.setSerializerCompiler(serializerCompiler);
 
   await app.register(helmet, { contentSecurityPolicy: false });
+  // Gzip/deflate de respuestas: con cajeros en conexión común argentina y
+  // payloads grandes (catálogo de 2000 productos = ~200KB JSON), comprimir
+  // ahorra 50-70% del transfer. threshold de 1024 evita comprimir respuestas
+  // chicas donde la compresión cuesta más que el ahorro.
+  await app.register(compress, {
+    global: true,
+    threshold: 1024,
+    encodings: ['gzip', 'deflate'],
+  });
   // CORS: lista explícita + wildcard `*.vercel.app` para que cualquier
   // preview deploy de Vercel pueda hablarle al API local. La cookie
   // viaja con `credentials: true`, pero en cross-origin el web usa
@@ -71,6 +81,11 @@ export async function buildServer() {
       cb(new Error(`Origin no permitido: ${origin}`), false);
     },
     credentials: true,
+    // Cachear el preflight CORS 24h. Sin esto, cada request cross-origin
+    // dispara un OPTIONS adicional. Con maxAge, una vez aceptado el preflight
+    // el browser reusa el resultado para todos los requests del mismo origen
+    // durante 24h.
+    maxAge: 86400,
   });
   await app.register(cookie, { secret: config.AUTH_SECRET });
   await app.register(sensible);

@@ -87,14 +87,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   useEffect(() => {
     const fetchPendientes = async () => {
       try {
+        // Endpoint dedicado y liviano: 3 counts en paralelo (~100 bytes)
+        // en lugar del dashboard completo (~5-10KB y 15 queries) que se
+        // usaba antes solo para leer estos 3 contadores.
         const d = await api.get<{
           pendientes: {
             facturasSinValidar: number;
-            facturasVencenPronto: number;
             cambiosExcelPendientes: number;
             sesionesSinAprobar: number;
           };
-        }>('/admin/dashboard');
+        }>('/admin/pendientes');
         const total =
           d.pendientes.facturasSinValidar +
           d.pendientes.cambiosExcelPendientes +
@@ -105,7 +107,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       }
     };
     void fetchPendientes();
-    const id = setInterval(fetchPendientes, 30_000);
+    // 60s en lugar de 30s: el badge de notificaciones no es urgente al segundo.
+    // En layout admin esto evita doblar requests al dashboard cuando se
+    // navega entre tabs.
+    const id = setInterval(fetchPendientes, 60_000);
     return () => clearInterval(id);
   }, []);
 
