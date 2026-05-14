@@ -13,7 +13,7 @@ import {
   quitarItemDeVenta,
   editarItemDeVenta,
 } from '../services/venta.js';
-import { getOrCreateSesionActual } from '../services/sesion-caja.js';
+import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
 import { recordAudit } from '../services/audit.js';
 import { aprobarConPinAdmin } from '../services/auth.js';
 import {
@@ -33,8 +33,19 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
     },
     async (req, reply) => {
       const data = VentaNuevaSchema.parse(req.body);
-      const venta = await crearVenta({ data, usuarioId: req.usuario!.id });
-      return reply.code(201).send(await getVentaCompleta(venta.id));
+      try {
+        const venta = await crearVenta({ data, usuarioId: req.usuario!.id });
+        return reply.code(201).send(await getVentaCompleta(venta.id));
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error: 'Fuera del horario de atención configurado',
+            codigo: 'FUERA_DE_HORARIO',
+            resolucion: e.resolucion,
+          });
+        }
+        throw e;
+      }
     },
   );
 
@@ -58,7 +69,15 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
     '/ventas/abiertas',
     { preHandler: fastify.requireAuth() },
     async (req) => {
-      const sesion = await getOrCreateSesionActual(req.usuario!.id);
+      let sesion;
+      try {
+        sesion = await getOrCreateSesionActual(req.usuario!.id);
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return { ventas: [], fueraDeHorario: true, resolucion: e.resolucion };
+        }
+        throw e;
+      }
       const ventas = await prisma.venta.findMany({
         where: { sesionCajaId: sesion.id, estado: EstadoVenta.PROCESADA },
         orderBy: { fechaApertura: 'desc' },
@@ -87,7 +106,22 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
     '/ventas/historial-sesion',
     { preHandler: fastify.requireAuth() },
     async (req) => {
-      const sesion = await getOrCreateSesionActual(req.usuario!.id);
+      let sesion;
+      try {
+        sesion = await getOrCreateSesionActual(req.usuario!.id);
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return {
+            sesion: null,
+            abiertas: [],
+            cerradas: [],
+            anuladas: [],
+            fueraDeHorario: true,
+            resolucion: e.resolucion,
+          };
+        }
+        throw e;
+      }
       const ventas = await listarVentasDeSesionActual(sesion.id);
       return {
         sesion: { id: sesion.id, fecha: sesion.fecha, turno: sesion.turno },

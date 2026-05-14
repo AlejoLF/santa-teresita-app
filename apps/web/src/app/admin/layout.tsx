@@ -32,6 +32,7 @@ const NAV: NavItem[] = [
   { group: 'Administración', label: 'Empleados', href: '/admin/empleados', icon: '👥' },
   { group: 'Administración', label: 'Clientes', href: '/admin/clientes', icon: '🤝' },
   { group: 'Administración', label: 'Insumos y proveedores', href: '/admin/insumos', icon: '📦' },
+  { group: 'Administración', label: 'Horarios', href: '/admin/horarios', icon: '🕐' },
   { group: 'Administración', label: 'Analytics', href: '/admin/analytics', icon: '📈' },
   { group: 'Administración', label: 'Configuración', href: '/admin/configuracion', icon: '⚙️' },
   { group: 'Caja', label: 'Sesión actual', href: '/admin/sesion-actual', icon: '📅' },

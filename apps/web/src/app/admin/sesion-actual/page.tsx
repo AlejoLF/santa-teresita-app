@@ -28,6 +28,30 @@ interface SesionData {
   totalEfectivo: string;
   totalEgresos: string;
   recaudacionEsperadaEfectivo: string;
+  resolucion?: ResolucionHorario;
+}
+
+type SlotInfo = {
+  slot: { id: string; turno: string; horaInicio: string; horaFin: string; ventanaCierreMin: number };
+  estado: 'ACTIVO' | 'GRACE';
+  minutosRestantes: number;
+};
+
+type ResolucionHorario =
+  | { tipo: 'EN_HORARIO'; slot: SlotInfo }
+  | {
+      tipo: 'CERRADO';
+      razon: 'FERIADO' | 'FUERA_DE_HORARIO';
+      proximaApertura?: { horaInicio: string; turno: string; minutosEspera: number; fechaSesion: string };
+    };
+
+function formatearEspera(min: number): string {
+  if (min < 60) return `en ${min} min`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h < 24) return `en ${h}h ${m > 0 ? m + 'min' : ''}`.trim();
+  const d = Math.floor(h / 24);
+  return `en ${d} día${d > 1 ? 's' : ''}`;
 }
 
 const METODO_LABEL: Record<string, string> = {
@@ -68,12 +92,24 @@ export default function SesionActualPage() {
   if (!data) return <div className="text-ink-500">Cargando...</div>;
 
   if (!data.sesion) {
+    const r = data.resolucion;
+    const cerrado = r?.tipo === 'CERRADO';
     return (
       <div className="card p-8 text-center max-w-md mx-auto">
-        <div className="text-3xl mb-3">🌅</div>
-        <h2 className="font-display text-md text-ink-900 mb-2">Sin sesión abierta</h2>
+        <div className="text-3xl mb-3">{cerrado ? '🔒' : '🌅'}</div>
+        <h2 className="font-display text-md text-ink-900 mb-2">
+          {cerrado
+            ? r?.razon === 'FERIADO'
+              ? 'Hoy es feriado'
+              : 'Fuera del horario de atención'
+            : 'Sin sesión abierta'}
+        </h2>
         <p className="text-sm text-ink-500">
-          La sesión se abre automáticamente cuando se carga la primera venta del turno.
+          {cerrado
+            ? r?.proximaApertura
+              ? `Próxima apertura ${formatearEspera(r.proximaApertura.minutosEspera)} (${r.proximaApertura.horaInicio})`
+              : 'Revisá la configuración de horarios.'
+            : 'La sesión se abre automáticamente cuando se carga la primera venta del turno.'}
         </p>
       </div>
     );
@@ -94,8 +130,24 @@ export default function SesionActualPage() {
     }
   }
 
+  const r = data.resolucion;
+  const enGrace = r?.tipo === 'EN_HORARIO' && r.slot.estado === 'GRACE';
+  const fueraDeHorario = r?.tipo === 'CERRADO';
+
   return (
     <div className="max-w-4xl mx-auto space-y-4">
+      {enGrace && r.tipo === 'EN_HORARIO' && (
+        <div className="card p-3 bg-saffron-100 text-saffron-600 text-sm flex items-center gap-2">
+          ⏳ Ventana de cierre — quedan {r.slot.minutosRestantes} min para cargar ventas tardías
+          de este turno.
+        </div>
+      )}
+      {fueraDeHorario && abierta && (
+        <div className="card p-3 bg-pomodoro-100 text-pomodoro-600 text-sm flex items-center gap-2">
+          🔒 Esta sesión está fuera del horario configurado. No se pueden cargar más ventas;
+          contá la caja y cerrala.
+        </div>
+      )}
       <header>
         <h1 className="font-display text-xl text-ink-900">
           Sesión {s.turno === 'MANANA' ? 'Mañana' : 'Tarde'} ·{' '}

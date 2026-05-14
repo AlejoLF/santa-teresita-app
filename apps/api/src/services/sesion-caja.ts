@@ -1,30 +1,56 @@
 import { prisma } from '@sta/db/client';
-import { TurnoCaja, EstadoSesionCaja, type SesionCaja } from '@sta/db';
+import { EstadoSesionCaja, type SesionCaja } from '@sta/db';
+import {
+  getConfigHorarios,
+  resolverSlotActivo,
+  type ResolucionHorario,
+} from './horarios.js';
 
 /**
- * Devuelve la SesionCaja activa para el momento actual (turno mañana o tarde).
- * Si no hay ninguna abierta, crea una sesión nueva con `existencia_inicial = 0`
- * y la devuelve. Esto evita que el cajero tenga que abrir la caja manualmente
- * para empezar a vender — pero la encargada después debe ajustar la existencia
- * inicial correcta cuando llegue a apertura formal.
+ * Error tipado que el caller puede inspeccionar para devolver un 400/409
+ * con un mensaje claro al cajero ("estamos fuera de horario").
+ */
+export class FueraDeHorarioError extends Error {
+  resolucion: ResolucionHorario;
+  constructor(resolucion: ResolucionHorario) {
+    super('Fuera del horario de atención configurado');
+    this.name = 'FueraDeHorarioError';
+    this.resolucion = resolucion;
+  }
+}
+
+/**
+ * Resuelve la sesión activa al momento `ahora`, consultando la config de
+ * horarios. Si estamos en horario (ACTIVO o GRACE) y no existe sesión,
+ * la crea con `existencia_inicial = 0` para que el cajero pueda vender
+ * sin abrir caja manualmente.
  *
- * Nota operativa: el corte mañana/tarde se hace a las 14:30. Productos que se
- * cargan a las 14:29 entran en la sesión MAÑANA, los de 14:30 en TARDE.
+ * Auto-lock lazy: si llega una venta y la última sesión abierta corresponde
+ * a un turno cuyo grace ya pasó, NO la cerramos (eso requiere conteo físico),
+ * pero tampoco la reusamos: creamos la del nuevo slot. La vieja queda ABIERTA
+ * y aparece en /admin/sesion-actual para que la encargada la cierre.
+ *
+ * Si estamos fuera de horario, lanza FueraDeHorarioError.
  */
 export async function getOrCreateSesionActual(usuarioId: string): Promise<SesionCaja> {
   const ahora = new Date();
-  const fecha = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate());
-  const hora = ahora.getHours() + ahora.getMinutes() / 60;
-  const turno = hora < 14.5 ? TurnoCaja.MANANA : TurnoCaja.TARDE;
+  const config = await getConfigHorarios();
+  const resolucion = resolverSlotActivo(config, ahora);
+
+  if (resolucion.tipo === 'CERRADO') {
+    throw new FueraDeHorarioError(resolucion);
+  }
+
+  const { fechaSesion, turno } = resolucion.slot;
 
   const existing = await prisma.sesionCaja.findFirst({
-    where: { fecha, turno, estado: { in: [EstadoSesionCaja.ABIERTA] } },
+    where: { fecha: fechaSesion, turno, estado: EstadoSesionCaja.ABIERTA },
   });
   if (existing) return existing;
 
   return prisma.sesionCaja.create({
     data: {
-      fecha,
+      fecha: fechaSesion,
       turno,
       horarioApertura: ahora,
       existenciaInicial: '0',
@@ -50,4 +76,34 @@ export async function siguienteNumeroOrdenTurno(sesionId: string): Promise<numbe
     select: { ultimoNumeroOrden: true },
   });
   return updated.ultimoNumeroOrden;
+}
+
+/**
+ * Versión "read-only" usada por endpoints admin que quieren saber qué sesión
+ * está activa AHORA sin crear ninguna. Si no hay sesión ABIERTA en el slot
+ * vigente, devuelve la más reciente del slot actual (puede no existir aún).
+ */
+export async function getSesionActualReadOnly(): Promise<{
+  sesion: SesionCaja | null;
+  resolucion: ResolucionHorario;
+}> {
+  const ahora = new Date();
+  const config = await getConfigHorarios();
+  const resolucion = resolverSlotActivo(config, ahora);
+
+  if (resolucion.tipo === 'CERRADO') {
+    // Devolver la última sesión abierta (de cualquier slot) para que el admin
+    // pueda cerrarla aunque el grace haya pasado.
+    const sesion = await prisma.sesionCaja.findFirst({
+      where: { estado: EstadoSesionCaja.ABIERTA },
+      orderBy: { horarioApertura: 'desc' },
+    });
+    return { sesion, resolucion };
+  }
+
+  const { fechaSesion, turno } = resolucion.slot;
+  const sesion = await prisma.sesionCaja.findFirst({
+    where: { fecha: fechaSesion, turno },
+  });
+  return { sesion, resolucion };
 }

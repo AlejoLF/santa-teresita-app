@@ -14,6 +14,7 @@ import {
 import { cargarCierre, generarExcelCierre, generarHtmlCierre } from '../services/cierre-export.js';
 import { sendMail, sendTestEmail } from '../services/mailer.js';
 import { actualizarCashflow } from '../services/excel-writeback.js';
+import { getSesionActualReadOnly } from '../services/sesion-caja.js';
 
 /**
  * Endpoints exclusivos del rol Admin. Devuelven KPIs agregados para los dashboards.
@@ -1262,23 +1263,25 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/admin/caja/sesion-actual',
     { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
-    async (req) => {
-      const ahora = new Date();
-      const inicioHoy = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate());
-      const hora = ahora.getHours() + ahora.getMinutes() / 60;
-      const turno = hora < 14.5 ? 'MANANA' : 'TARDE';
+    async () => {
+      // Resolver el slot vigente según la config de horarios (ver
+      // services/horarios.ts). Si estamos fuera de horario, devuelve la
+      // última sesión ABIERTA (cualquier slot) para que la encargada la
+      // pueda cerrar incluso si el grace ya pasó.
+      const { sesion: sesionResolved, resolucion } = await getSesionActualReadOnly();
 
-      const sesion = await prisma.sesionCaja.findFirst({
-        where: { fecha: inicioHoy, turno: turno },
+      if (!sesionResolved) {
+        return { sesion: null, resolucion };
+      }
+
+      const sesion = await prisma.sesionCaja.findUnique({
+        where: { id: sesionResolved.id },
         include: {
           usuarioApertura: { select: { nombre: true } },
           usuarioCierre: { select: { nombre: true } },
         },
       });
-
-      if (!sesion) {
-        return { sesion: null };
-      }
+      if (!sesion) return { sesion: null, resolucion };
 
       // Sumar pagos de ventas finalizadas en esta sesión, por método
       const pagos = await prisma.pago.groupBy({
@@ -1348,6 +1351,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         totalEfectivo: totalEfectivo.toFixed(2),
         totalEgresos: totalEgresos.toFixed(2),
         recaudacionEsperadaEfectivo: recaudacionEsperadaEfectivo.toFixed(2),
+        resolucion,
       };
     },
   );
@@ -1367,13 +1371,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     async (req, reply) => {
       const body = req.body as { existenciaFinal: string; observaciones?: string };
       const ahora = new Date();
-      const inicioHoy = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate());
-      const hora = ahora.getHours() + ahora.getMinutes() / 60;
-      const turno = hora < 14.5 ? 'MANANA' : 'TARDE';
 
-      const sesion = await prisma.sesionCaja.findFirst({
-        where: { fecha: inicioHoy, turno: turno },
-      });
+      // La sesión "actual" se resuelve igual que GET /admin/caja/sesion-actual
+      // — primero el slot vigente, luego cualquier sesión ABIERTA si estamos
+      // fuera de horario y la encargada cierra tarde.
+      const { sesion: sesionResolved } = await getSesionActualReadOnly();
+      const sesion = sesionResolved
+        ? await prisma.sesionCaja.findUnique({ where: { id: sesionResolved.id } })
+        : null;
       if (!sesion) return reply.code(404).send({ error: 'Sesión no encontrada' });
       if (sesion.estado !== 'ABIERTA') {
         return reply.code(400).send({ error: `La sesión está ${sesion.estado}` });

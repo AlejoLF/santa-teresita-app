@@ -5,6 +5,12 @@ import { prisma } from '@sta/db/client';
 import { RolUsuario, TipoCuenta } from '@sta/db';
 import { PinSchema, pinEsDebil } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
+import {
+  DEFAULT_CONFIG,
+  getConfigHorarios,
+  validarConfig,
+  type ConfigHorarios,
+} from '../services/horarios.js';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -607,6 +613,107 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         contexto: { clave: 'cierre_email_recipients' },
       });
       return { ok: true, emails: body.emails };
+    },
+  );
+
+  // ────────────────────────────────────────────────────────────────────
+  //   HORARIOS DE ATENCION (sesiones configurables)
+  // ────────────────────────────────────────────────────────────────────
+  // Reemplaza el hardcode anterior de "mañana hasta 14:30, tarde después".
+  // Configurable por día de la semana + soporte de feriados + ventana de
+  // cierre (grace period). Ver services/horarios.ts.
+
+  fastify.get(
+    '/admin/configuracion/horarios',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const config = await getConfigHorarios();
+      return { config, defaultConfig: DEFAULT_CONFIG };
+    },
+  );
+
+  fastify.put(
+    '/admin/configuracion/horarios',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z.object({
+          version: z.number().int().min(1),
+          horarios: z.array(
+            z.object({
+              id: z.string().min(1).max(40),
+              diasSemana: z.array(z.number().int().min(0).max(6)).min(1),
+              turno: z.enum(['MANANA', 'TARDE']),
+              horaInicio: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+              horaFin: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+              ventanaCierreMin: z.number().int().min(0).max(180),
+            }),
+          ),
+          feriados: z
+            .array(
+              z.object({
+                fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+                label: z.string().min(1).max(80),
+                cerrado: z.boolean(),
+                horarios: z
+                  .array(
+                    z.object({
+                      id: z.string().min(1).max(40),
+                      diasSemana: z.array(z.number().int().min(0).max(6)),
+                      turno: z.enum(['MANANA', 'TARDE']),
+                      horaInicio: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+                      horaFin: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+                      ventanaCierreMin: z.number().int().min(0).max(180),
+                    }),
+                  )
+                  .optional(),
+              }),
+            )
+            .max(50)
+            .optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const body = req.body as ConfigHorarios;
+
+      try {
+        validarConfig(body);
+      } catch (e) {
+        return reply
+          .code(400)
+          .send({ error: e instanceof Error ? e.message : 'Configuración inválida' });
+      }
+
+      const valor = JSON.stringify(body);
+      const before = await prisma.configuracionSistema.findUnique({
+        where: { clave: 'sesiones_horarios' },
+      });
+      const row = await prisma.configuracionSistema.upsert({
+        where: { clave: 'sesiones_horarios' },
+        create: {
+          clave: 'sesiones_horarios',
+          valor,
+          tipo: 'json',
+          categoria: 'caja',
+          descripcion:
+            'Horarios de atención por día de semana + feriados + ventana de cierre. JSON.',
+          editable: true,
+          actualizadoPor: req.usuario?.nombre ?? null,
+        },
+        update: { valor, actualizadoPor: req.usuario?.nombre ?? null },
+      });
+      await recordAudit({
+        tabla: 'configuracion_sistema',
+        registroId: row.id,
+        accion: before ? 'UPDATE' : 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorAnterior: before ? { valor: before.valor } : null,
+        valorNuevo: { valor },
+        contexto: { clave: 'sesiones_horarios' },
+      });
+
+      return { ok: true, config: body };
     },
   );
 }

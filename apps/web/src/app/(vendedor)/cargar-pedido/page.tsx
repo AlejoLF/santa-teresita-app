@@ -151,6 +151,13 @@ export default function CargarPedidoPage() {
   const [panelDatosExpandido, setPanelDatosExpandido] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState({ abiertos: 0, cerrados: 0 });
+  // Estado del horario: null = en horario normal, info = fuera de horario o en grace.
+  const [horarioInfo, setHorarioInfo] = useState<{
+    fueraDeHorario: boolean;
+    grace: boolean;
+    minutosRestantes?: number;
+    proximaApertura?: string;
+  }>({ fueraDeHorario: false, grace: false });
   const [enviando, setEnviando] = useState(false);
   const [showPedidosDrawer, setShowPedidosDrawer] = useState(false);
   // Total previo de la venta abierta cuando estás agregando items
@@ -513,11 +520,39 @@ export default function CargarPedidoPage() {
     let cancelled = false;
     const fetchStats = async () => {
       try {
-        const res = await api.get<{ abiertas: unknown[]; cerradas: unknown[] }>(
-          '/ventas/historial-sesion',
-        );
+        const res = await api.get<{
+          abiertas: unknown[];
+          cerradas: unknown[];
+          fueraDeHorario?: boolean;
+          resolucion?:
+            | {
+                tipo: 'EN_HORARIO';
+                slot: { estado: 'ACTIVO' | 'GRACE'; minutosRestantes: number };
+              }
+            | {
+                tipo: 'CERRADO';
+                proximaApertura?: { horaInicio: string; minutosEspera: number };
+              };
+        }>('/ventas/historial-sesion');
         if (cancelled) return;
         setStats({ abiertos: res.abiertas.length, cerrados: res.cerradas.length });
+        const r = res.resolucion;
+        if (r?.tipo === 'CERRADO') {
+          const p = r.proximaApertura;
+          setHorarioInfo({
+            fueraDeHorario: true,
+            grace: false,
+            proximaApertura: p ? `${p.horaInicio} (en ${p.minutosEspera}min)` : undefined,
+          });
+        } else if (r?.tipo === 'EN_HORARIO' && r.slot.estado === 'GRACE') {
+          setHorarioInfo({
+            fueraDeHorario: false,
+            grace: true,
+            minutosRestantes: r.slot.minutosRestantes,
+          });
+        } else {
+          setHorarioInfo({ fueraDeHorario: false, grace: false });
+        }
       } catch {
         /* silencioso */
       }
@@ -1348,11 +1383,21 @@ export default function CargarPedidoPage() {
 
       {/* Footer */}
       <footer className="bg-surface-sunken border-t border-cream-300 px-6 flex items-center justify-between text-xs text-ink-500">
-        <div className="flex gap-6">
+        <div className="flex gap-6 items-center">
           <span className={stats.abiertos > 0 ? 'text-saffron-600 font-medium' : ''}>
             📋 Pedidos abiertos: {stats.abiertos}
           </span>
           <span>✓ Cerrados en este turno: {stats.cerrados}</span>
+          {horarioInfo.grace && (
+            <span className="text-saffron-600 font-medium">
+              ⏳ Ventana de cierre — {horarioInfo.minutosRestantes ?? 0} min
+            </span>
+          )}
+          {horarioInfo.fueraDeHorario && (
+            <span className="text-pomodoro-600 font-medium">
+              🔒 Fuera de horario · próx apertura {horarioInfo.proximaApertura ?? '—'}
+            </span>
+          )}
         </div>
         <div className="flex gap-4">
           <button onClick={() => router.push('/historial')} className="hover:text-ink-700">
