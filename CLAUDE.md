@@ -129,6 +129,43 @@ Ver SPEC §1.5. Punteo:
 - Bot WhatsApp es fase 2.
 - Aesthetic: "Trattoria refinada" — verde Teresita + cremoso + serif Fraunces.
 
+## Invariantes / gotchas (no romper sin entender por qué)
+
+- **Todo registro transaccional atado a un turno DEBE setear `sesionCajaId`
+  vía `getOrCreateSesionActual(usuarioId)`.** Aplica a ventas Y movimientos
+  (aportes/egresos/transferencias). Síntoma si se rompe: el registro queda
+  con `sesion_caja_id = NULL`, NO entra al cierre de caja (que filtra por
+  sesión) pero SÍ aparece en `/admin/movimientos` (filtra por fecha) — da
+  la falsa sensación de que "se mezcla con sesiones pasadas". Incidente real:
+  alpha.18 y anteriores, `POST /admin/movimientos` no seteaba el campo.
+  Fix en alpha.19. Si agregás un endpoint nuevo que crea algo que debería
+  contar para el cierre del turno, llamá `getOrCreateSesionActual` y manejá
+  el `FueraDeHorarioError` (devolver 423).
+
+- **Fechas de sesión: usar siempre TZ Argentina explícita.** El cálculo de
+  `fecha` de `SesionCaja` depende de la TZ del proceso. El .exe spawnea el
+  API con `TZ='America/Argentina/Buenos_Aires'` — si corrés el API en otro
+  contexto (Vercel, CI, dev sin TZ) las sesiones creadas en madrugada AR
+  quedan con la fecha del día anterior. El resolver de `horarios.ts` usa
+  `getFullYear/Month/Date` (TZ-local) — correcto solo si la TZ está bien.
+
+- **Pooler de Supabase: `aws-1-sa-east-1`, NO `aws-0`.** Supabase migró la
+  infra de Supavisor. La URL legacy `aws-0-*` devuelve "tenant not found".
+  El default está en `scripts/cloud/_url.mjs`. Si `cloud:migrate`/`status`
+  fallan con ese error, la conexión directa (`SUPABASE_DB_URL_DIRECT`,
+  puerto 5432) funciona como fallback para aplicar migraciones.
+
+- **`prisma generate` falla con EPERM si el .exe está abierto.** El proceso
+  `Santa Teresita.exe` mantiene `query_engine-windows.dll.node` lockeado.
+  Cerrar la app antes de regenerar. Verificar con:
+  `Get-Process | ? { $_.Modules.FileName -like '*query_engine-windows*' }`.
+
+- **Repartidor en tickets: se infiere del canal** (`repartidorPorCanal()` en
+  `services/impresion.ts`). RAPPI/PYA/MELI/DELIVERATE no requieren asignación
+  manual. Prioridad: empleado interno asignado > empresa explícita > inferido
+  del canal. Los 3 tickets (comanda cocina, ticket cliente, ticket delivery)
+  deben mostrarlo — si tocás uno, revisá los otros dos.
+
 ## Estado del bootstrap (2026-04-27)
 
 ✅ Schema Prisma con todas las entidades de SPEC §2-11
@@ -167,4 +204,5 @@ Ver SPEC §1.5. Punteo:
 
 ---
 
-*Última actualización: 2026-04-27. Primer bootstrap del repo.*
+*Última actualización: 2026-05-15 (alpha.19). Sección "Invariantes / gotchas"
+agregada tras el incidente de movimientos sin sesión reportado por la encargada.*
