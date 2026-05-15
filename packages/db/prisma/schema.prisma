@@ -800,6 +800,11 @@ model SesionCaja {
   aprobadaAdminId     String?          @map("aprobada_admin_id") @db.Uuid
   fechaAprobacion     DateTime?        @map("fecha_aprobacion")
   estado              EstadoSesionCaja @default(ABIERTA)
+  // Cuando se cierra anticipadamente (antes de horaFin del slot configurado),
+  // el resolverSlotActivo NO reabre este slot por el resto del día — la
+  // próxima venta queda fuera de horario hasta el siguiente turno. Default
+  // false para no afectar las sesiones cerradas en horario.
+  cerradaAnticipadamente Boolean       @default(false) @map("cerrada_anticipadamente")
   observaciones       String?
   emailEnviadoA       String?          @map("email_enviado_a")
   emailEnviadoAt      DateTime?        @map("email_enviado_at")

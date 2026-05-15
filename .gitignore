@@ -65,6 +65,9 @@ infra/docker/data/
 /*.xlsx
 /*.xls
 
+# Backups locales pre-wipe (datos reales del cliente) — NO subir.
+docs/backups/
+
 # Vercel local — contiene OIDC token y project linkage
 .vercel/
 

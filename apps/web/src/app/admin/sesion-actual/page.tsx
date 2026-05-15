@@ -69,7 +69,10 @@ const METODO_LABEL: Record<string, string> = {
 export default function SesionActualPage() {
   const [data, setData] = useState<SesionData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showCierre, setShowCierre] = useState(false);
+  // null = modal cerrado; 'normal' = cierre regular (fin de turno);
+  // 'anticipado' = cerrá antes del horario configurado y el slot no se
+  // reabre por el resto del día.
+  const [showCierre, setShowCierre] = useState<'normal' | 'anticipado' | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -299,9 +302,24 @@ export default function SesionActualPage() {
 
       {/* Acciones */}
       {abierta && data.ventasAbiertas === 0 && (
-        <Button onClick={() => setShowCierre(true)} fullWidth size="lg">
-          Cerrar sesión y contar caja
-        </Button>
+        <div className="space-y-2">
+          <Button onClick={() => setShowCierre('normal')} fullWidth size="lg">
+            Cerrar sesión y contar caja
+          </Button>
+          <Button
+            onClick={() => setShowCierre('anticipado')}
+            fullWidth
+            size="md"
+            variant="secondary"
+          >
+            ⏱ Cerrar anticipado (terminamos antes del horario)
+          </Button>
+          <p className="text-xs text-ink-500 px-1">
+            "Cerrar anticipado" cierra el turno y bloquea cargar más ventas en este slot por
+            el resto del día. La próxima venta/movimiento abrirá el siguiente turno cuando
+            llegue su horario.
+          </p>
+        </div>
       )}
       {abierta && data.ventasAbiertas > 0 && (
         <div className="card p-4 bg-saffron-100 text-saffron-600 text-sm">
@@ -323,9 +341,10 @@ export default function SesionActualPage() {
       {showCierre && data.sesion && (
         <ModalCerrarSesion
           esperada={data.recaudacionEsperadaEfectivo}
-          onClose={() => setShowCierre(false)}
+          modo={showCierre}
+          onClose={() => setShowCierre(null)}
           onCerrada={() => {
-            setShowCierre(false);
+            setShowCierre(null);
             void fetchData();
           }}
         />
@@ -336,10 +355,12 @@ export default function SesionActualPage() {
 
 function ModalCerrarSesion({
   esperada,
+  modo,
   onClose,
   onCerrada,
 }: {
   esperada: string;
+  modo: 'normal' | 'anticipado';
   onClose: () => void;
   onCerrada: () => void;
 }) {
@@ -349,6 +370,7 @@ function ModalCerrarSesion({
   const [error, setError] = useState<string | null>(null);
 
   const diferencia = contado ? Number(contado) - Number(esperada) : null;
+  const esAnticipado = modo === 'anticipado';
 
   async function submit() {
     if (!contado || Number(contado) < 0) return setError('Ingresá el monto contado');
@@ -357,6 +379,7 @@ function ModalCerrarSesion({
       await api.post('/admin/caja/sesion-actual/cerrar', {
         existenciaFinal: contado,
         observaciones: observaciones || undefined,
+        anticipado: esAnticipado,
       });
       onCerrada();
     } catch (e) {
@@ -369,7 +392,16 @@ function ModalCerrarSesion({
   return (
     <div className="fixed inset-0 bg-ink-900/50 flex items-center justify-center z-40 p-4">
       <div className="card w-full max-w-md p-5 shadow-modal">
-        <h2 className="font-display text-lg text-teresita-700 mb-3">Contar caja física</h2>
+        <h2 className="font-display text-lg text-teresita-700 mb-3">
+          {esAnticipado ? '⏱ Cierre anticipado de turno' : 'Contar caja física'}
+        </h2>
+        {esAnticipado && (
+          <div className="mb-3 p-3 rounded bg-saffron-100 text-saffron-600 text-xs">
+            Vas a cerrar el turno <strong>antes del horario configurado</strong>. Después de
+            esto no se pueden cargar más ventas ni movimientos en este turno por el resto
+            del día. La próxima venta abrirá el siguiente turno cuando llegue su horario.
+          </div>
+        )}
         <p className="text-sm text-ink-500 mb-4">
           El sistema espera <MoneyAmount value={esperada} className="font-medium text-ink-900" /> en
           efectivo. Contá lo que hay en la caja y cargalo abajo.
@@ -438,7 +470,11 @@ function ModalCerrarSesion({
             Cancelar
           </Button>
           <Button onClick={() => void submit()} disabled={guardando}>
-            {guardando ? 'Cerrando...' : 'Cerrar sesión'}
+            {guardando
+              ? 'Cerrando...'
+              : esAnticipado
+                ? 'Cerrar turno anticipado'
+                : 'Cerrar sesión'}
           </Button>
         </footer>
       </div>

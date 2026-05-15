@@ -47,7 +47,11 @@ export function pooledUrl() {
   const ref = supabaseRef();
   const pass = encodeURIComponent(required('SUPABASE_DB_PASSWORD'));
   const region = dbRegion();
-  return `postgresql://postgres.${ref}:${pass}@aws-0-${region}.pooler.supabase.com:6543/postgres`;
+  // aws-1 = nueva infra ELB-fronted de Supavisor. La aws-0 quedó como
+  // legacy: proyectos nuevos y migrados viven en aws-1. Si Supabase saca
+  // un aws-2 en el futuro, actualizar acá (y permitir override via
+  // SUPABASE_DB_POOLER_HOST si hace falta).
+  return `postgresql://postgres.${ref}:${pass}@aws-1-${region}.pooler.supabase.com:6543/postgres`;
 }
 
 /** Para mostrar en logs sin exponer credenciales. */

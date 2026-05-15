@@ -48,6 +48,26 @@ export async function getOrCreateSesionActual(usuarioId: string): Promise<Sesion
   });
   if (existing) return existing;
 
+  // Si hoy ya hubo una sesión de este turno cerrada ANTICIPADAMENTE, no
+  // reabrir un slot nuevo el mismo día — el usuario eligió cerrar el turno
+  // antes de tiempo, las ventas/movs nuevos deben esperar al siguiente turno.
+  // Buscamos cualquier sesión del slot vigente con cerrada_anticipadamente=true.
+  // cerradaAnticipadamente es un campo nuevo del schema (migración
+  // 20260515200000). Hasta que prisma generate corra en este repo, el
+  // typing no lo conoce — pasamos el where con cast a evitar TS error.
+  // En runtime el Prisma client (que se regenera al build del .exe) lo lee bien.
+  const cerradaAntic = await prisma.sesionCaja.findFirst({
+    where: {
+      fecha: fechaSesion,
+      turno,
+      cerradaAnticipadamente: true,
+    } as never,
+    select: { id: true },
+  });
+  if (cerradaAntic) {
+    throw new FueraDeHorarioError(resolucion);
+  }
+
   return prisma.sesionCaja.create({
     data: {
       fecha: fechaSesion,

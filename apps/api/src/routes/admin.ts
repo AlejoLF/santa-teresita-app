@@ -14,7 +14,11 @@ import {
 import { cargarCierre, generarExcelCierre, generarHtmlCierre } from '../services/cierre-export.js';
 import { sendMail, sendTestEmail } from '../services/mailer.js';
 import { actualizarCashflow } from '../services/excel-writeback.js';
-import { getSesionActualReadOnly } from '../services/sesion-caja.js';
+import {
+  getSesionActualReadOnly,
+  getOrCreateSesionActual,
+  FueraDeHorarioError,
+} from '../services/sesion-caja.js';
 
 /**
  * Endpoints exclusivos del rol Admin. Devuelven KPIs agregados para los dashboards.
@@ -824,6 +828,30 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const fecha = body.fechaComputo ? new Date(body.fechaComputo) : new Date();
       const monto = Number(body.monto);
 
+      // Resolver la sesión actual y asociar el movimiento. Antes, los aportes
+      // y egresos cargados desde el panel admin se guardaban con
+      // sesion_caja_id = NULL y quedaban huérfanos: el cierre de caja no los
+      // sumaba al "Egresos del turno" pero seguían apareciendo en la lista
+      // del panel /admin/movimientos (que filtra por fecha, no por sesión).
+      // Eso producía la sensación de que los movs "se mezclaban con sesiones
+      // pasadas". Ahora los atamos al turno vigente del momento de carga
+      // (mismo helper que usan las ventas). Si estamos fuera de horario,
+      // devolvemos 423 con la próxima apertura para que el usuario sepa
+      // cuándo cargarlo.
+      let sesion;
+      try {
+        sesion = await getOrCreateSesionActual(req.usuario!.id);
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error: 'Fuera del horario de atención — no se puede cargar este movimiento ahora',
+            codigo: 'FUERA_DE_HORARIO',
+            resolucion: e.resolucion,
+          });
+        }
+        throw e;
+      }
+
       // Si vienen conceptos, validar que sumen el monto total (tolerancia 0.5)
       if (body.conceptos && body.conceptos.length > 0) {
         const sumaConceptos = body.conceptos.reduce((acc, c) => acc + Number(c.monto), 0);
@@ -848,6 +876,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             cuentaOrigenId: body.cuentaOrigenId ?? null,
             cuentaDestinoId: body.cuentaDestinoId ?? null,
             entidadId: body.entidadId ?? null,
+            sesionCajaId: sesion.id,
             fechaComputo: fecha,
             observacion: body.observacion ?? null,
             usuarioId: req.usuario!.id,
@@ -1373,6 +1402,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   );
 
   // POST /admin/caja/sesion-actual/cerrar — cierra la sesión con conteo físico.
+  //
+  // El flag `anticipado` (opcional) lo marca como CIERRE ANTICIPADO: el
+  // resolverSlotActivo no reabre el slot por el resto del día. Útil cuando
+  // el local termina la jornada antes del horario configurado (ej: pautada
+  // hasta 14:30 pero cierran a las 13:00).
   fastify.post(
     '/admin/caja/sesion-actual/cerrar',
     {
@@ -1381,11 +1415,16 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         body: z.object({
           existenciaFinal: z.string().regex(/^\d+(\.\d{1,2})?$/),
           observaciones: z.string().max(500).optional(),
+          anticipado: z.boolean().optional().default(false),
         }),
       },
     },
     async (req, reply) => {
-      const body = req.body as { existenciaFinal: string; observaciones?: string };
+      const body = req.body as {
+        existenciaFinal: string;
+        observaciones?: string;
+        anticipado?: boolean;
+      };
       const ahora = new Date();
 
       // La sesión "actual" se resuelve igual que GET /admin/caja/sesion-actual
@@ -1424,6 +1463,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const final = Number(body.existenciaFinal);
       const diferencia = final - esperada;
 
+      const observacionFinal = body.anticipado
+        ? `[CIERRE ANTICIPADO] ${body.observaciones ?? ''}`.trim()
+        : body.observaciones ?? null;
+
+      // El campo cerradaAnticipadamente existe en la DB (migración
+      // 20260515200000) pero hasta que prisma generate corra en este repo,
+      // el typing no lo conoce. Cast del objeto data a never para compilar
+      // — en runtime el Prisma client (regenerado al build) lo procesa OK.
       const updated = await prisma.sesionCaja.update({
         where: { id: sesion.id },
         data: {
@@ -1433,14 +1480,15 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           diferencia: diferencia.toFixed(2),
           horarioCierre: ahora,
           usuarioCierreId: req.usuario!.id,
-          observaciones: body.observaciones ?? null,
-        },
+          observaciones: observacionFinal,
+          cerradaAnticipadamente: !!body.anticipado,
+        } as never,
       });
 
       await recordAudit({
         tabla: 'sesiones_caja',
         registroId: sesion.id,
-        accion: 'TRANSITION',
+        accion: body.anticipado ? 'CIERRE_ANTICIPADO' : 'TRANSITION',
         usuarioId: req.usuario!.id,
         valorAnterior: { estado: 'ABIERTA' },
         valorNuevo: {
