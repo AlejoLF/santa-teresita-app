@@ -35,6 +35,27 @@ type DbClient = Prisma.TransactionClient | typeof prisma;
 export type DestinoImpresion = 'MOSTRADOR' | 'DELIVERY' | 'COCINA';
 
 /**
+ * Devuelve el "repartidor" que se deriva automáticamente del canal cuando
+ * es una plataforma externa. Para los canales internos (MOSTRADOR/TELEFONO/
+ * WHATSAPP/WEB) devuelve null — en esos casos el repartidor lo asigna
+ * manualmente la cajera (Damián / otro empleado / DELIVERATE / etc.).
+ */
+function repartidorPorCanal(canal: string): string | undefined {
+  switch (canal) {
+    case 'RAPPI':
+      return 'RAPPI';
+    case 'PEDIDOS_YA':
+      return 'PEDIDOS YA';
+    case 'MERCADO_LIBRE':
+      return 'MERCADO LIBRE';
+    case 'DELIVERATE':
+      return 'DELIVERATE';
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Devuelve la lista de destinos físicos donde tiene que imprimirse la
  * comanda de una venta, según las reglas operativas del local.
  *
@@ -108,25 +129,30 @@ export async function buildComandaPayload(
   });
   if (!venta) throw new Error(`Venta ${ventaId} no encontrada`);
 
-  // Datos de delivery: solo si modalidad es delivery y hay deliveryInfo
+  // Datos de delivery: si modalidad NO es TAKE_AWAY, queremos imprimir el
+  // bloque DELIVERY en la comanda incluso si todavía no hay deliveryInfo
+  // (porque para RAPPI/PYA/MELI/DELIVERATE el "repartidor" se deriva del
+  // canal — no requiere asignación manual de la cajera).
   let delivery: Record<string, unknown> | undefined;
-  if (venta.modalidad !== 'TAKE_AWAY' && venta.deliveryInfo?.direccionSnapshot) {
-    const snap = venta.deliveryInfo.direccionSnapshot as Record<string, unknown>;
-    // Repartidor: empleado interno (snap._empleadoNombre) o empresa externa
-    // (deliveryInfo.empresaExterna o snap._empresaExterna). Si la encargada
-    // no eligió todavía, queda undefined y no se imprime esa línea.
+  if (venta.modalidad !== 'TAKE_AWAY') {
+    const snap =
+      (venta.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
+    // Repartidor: prioridad → empleado interno > empresa explícita
+    // > inferido del canal de plataforma externa. Así las comandas de
+    // RAPPI/PYA/MELI/DELIVERATE siempre muestran quién retira.
     const empleadoNombre =
       typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
-    const empresaExterna =
-      venta.deliveryInfo.empresaExterna ??
+    const empresaExplicita =
+      venta.deliveryInfo?.empresaExterna ??
       (typeof snap._empresaExterna === 'string' ? snap._empresaExterna : undefined);
-    const repartidor = empleadoNombre ?? empresaExterna ?? undefined;
+    const empresaInferida = repartidorPorCanal(venta.canal);
+    const repartidor = empleadoNombre ?? empresaExplicita ?? empresaInferida;
     delivery = {
       clienteNombre: snap.clienteNombre ?? null,
       clienteTelefono: snap.clienteTelefono ?? null,
       direccion: snap.direccion ?? null,
       indicaciones: snap.indicaciones ?? null,
-      horaPrometida: venta.deliveryInfo.horaPrometida
+      horaPrometida: venta.deliveryInfo?.horaPrometida
         ? venta.deliveryInfo.horaPrometida.toISOString()
         : null,
       repartidor,
@@ -275,11 +301,15 @@ async function buildTicketDeliveryPayload(
     venta.deliveryInfo?.observaciones ||
     undefined;
 
+  // Repartidor: empleado explícito > empresa explícita > inferido del canal.
+  // El renderer del ticket delivery elige empleadoNombre o empresaExterna,
+  // así que populamos AL MENOS uno cuando aplica.
   const empleadoNombre =
     typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
-  const empresaExterna =
+  const empresaExplicita =
     venta.deliveryInfo?.empresaExterna ??
     (typeof snap._empresaExterna === 'string' ? snap._empresaExterna : undefined);
+  const empresaExterna = empresaExplicita ?? repartidorPorCanal(venta.canal);
 
   // Pago: si hay pagos confirmados → PAGADO. Sino A_COBRAR (motoquero cobra).
   const pagosConfirmados = venta.pagos.filter((p) => p.estado === 'CONFIRMADO');
@@ -397,18 +427,17 @@ export async function encolarTicketClienteParaVenta(
   if (!venta) return false;
   if (venta.canal !== 'MOSTRADOR') return false;
 
-  // Repartidor (en caso de mostrador + modalidad delivery, raro pero posible).
-  // Empleado interno o empresa externa. Se imprime en la misma sección que
-  // el método de pago para que la encargada vea quién va a entregar.
+  // Repartidor: empleado interno > empresa explícita > inferido del canal.
+  // Se imprime en la misma sección que el método de pago para que la
+  // encargada vea quién va a entregar al despachar.
   let repartidor: string | undefined;
-  if (venta.deliveryInfo) {
-    const snap = (venta.deliveryInfo.direccionSnapshot ?? {}) as Record<string, unknown>;
-    const emp = typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
-    const ext =
-      venta.deliveryInfo.empresaExterna ??
-      (typeof snap._empresaExterna === 'string' ? snap._empresaExterna : undefined);
-    repartidor = emp ?? ext ?? undefined;
-  }
+  const snap =
+    (venta.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
+  const emp = typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
+  const ext =
+    venta.deliveryInfo?.empresaExterna ??
+    (typeof snap._empresaExterna === 'string' ? snap._empresaExterna : undefined);
+  repartidor = emp ?? ext ?? repartidorPorCanal(venta.canal) ?? undefined;
 
   const pagosConfirmados = venta.pagos.filter((p) => p.estado === 'CONFIRMADO');
   let pagoInfo: { metodo: string; recibido?: string; cambio?: string };

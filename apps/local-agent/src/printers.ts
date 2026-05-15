@@ -127,9 +127,19 @@ export async function imprimirComanda(
     printer.newLine();
   }
 
-  printer.setTextSize(2, 2);
-  printer.println(payload.esReimpresion ? '*** REIMPRESIÓN ***' : 'COMANDA');
+  // Header con el número de orden grande. Antes mostraba "COMANDA" como
+  // título y debajo el número; ahora dejamos solo el número en doble tamaño
+  // para que la cocinera/encargada lo vea de un golpe. La etiqueta de
+  // reimpresión sí queda (chica) por encima cuando aplica.
+  if (payload.esReimpresion) {
+    printer.bold(true);
+    printer.println('*** REIMPRESIÓN ***');
+    printer.bold(false);
+  }
+  printer.setTextSize(3, 3);
+  printer.bold(true);
   printer.println(`# ${String(payload.numeroOrden).padStart(3, '0')}`);
+  printer.bold(false);
   printer.setTextNormal();
   printer.newLine();
 

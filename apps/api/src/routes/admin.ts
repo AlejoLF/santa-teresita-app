@@ -1467,10 +1467,6 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         ? `[CIERRE ANTICIPADO] ${body.observaciones ?? ''}`.trim()
         : body.observaciones ?? null;
 
-      // El campo cerradaAnticipadamente existe en la DB (migración
-      // 20260515200000) pero hasta que prisma generate corra en este repo,
-      // el typing no lo conoce. Cast del objeto data a never para compilar
-      // — en runtime el Prisma client (regenerado al build) lo procesa OK.
       const updated = await prisma.sesionCaja.update({
         where: { id: sesion.id },
         data: {
@@ -1482,7 +1478,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           usuarioCierreId: req.usuario!.id,
           observaciones: observacionFinal,
           cerradaAnticipadamente: !!body.anticipado,
-        } as never,
+        },
       });
 
       await recordAudit({
