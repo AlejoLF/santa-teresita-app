@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@sta/db/client';
 import { RolUsuario, EstadoMovimiento } from '@sta/db';
+import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 
 /**
@@ -17,7 +18,7 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
       preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
       schema: {
         querystring: z.object({
-          incluirInactivos: z.coerce.boolean().default(false),
+          incluirInactivos: queryBool(false),
           q: z.string().optional(),
         }),
       },

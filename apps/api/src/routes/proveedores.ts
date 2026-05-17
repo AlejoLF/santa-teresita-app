@@ -7,6 +7,7 @@ import {
   EstadoMovimiento,
   EstadoPago,
 } from '@sta/db';
+import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { calcSaldoFactura } from '../services/facturas.js';
 
@@ -27,7 +28,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       schema: {
         querystring: z.object({
           q: z.string().optional(),
-          incluirInactivos: z.coerce.boolean().default(false),
+          incluirInactivos: queryBool(false),
         }),
       },
     },

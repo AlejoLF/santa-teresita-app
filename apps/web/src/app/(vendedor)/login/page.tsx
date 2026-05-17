@@ -19,10 +19,14 @@ export default function VendedorLoginPage() {
   const [estado, setEstado] = useState<Estado>('IDLE');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [intentos, setIntentos] = useState(0);
-  const [pcOrigen] = useState(() => {
-    if (typeof window === 'undefined') return 'PC?';
-    return localStorage.getItem('sta_pc_origen') ?? 'PC1';
-  });
+  // Valor estable para SSR y primer render del cliente — sino el server
+  // renderiza 'PC?' y el cliente 'PC1' (localStorage no existe en SSR) y
+  // dispara un hydration mismatch. Leemos localStorage recién post-mount.
+  const [pcOrigen, setPcOrigen] = useState('PC1');
+  useEffect(() => {
+    const v = localStorage.getItem('sta_pc_origen');
+    if (v) setPcOrigen(v);
+  }, []);
   const [now, setNow] = useState<string>('');
   const [, startTransition] = useTransition();
 

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@sta/db/client';
 import { RolUsuario, EstadoVenta } from '@sta/db';
+import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 
 /**
@@ -19,7 +20,7 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
         querystring: z.object({
           q: z.string().optional(),
           tipo: z.enum(['CASUAL', 'REGISTRADO', 'CORPORATIVO', 'PLATAFORMA']).optional(),
-          incluirInactivos: z.coerce.boolean().default(false),
+          incluirInactivos: queryBool(false),
           page: z.coerce.number().int().min(1).default(1),
           pageSize: z.coerce.number().int().min(1).max(100).default(50),
         }),

@@ -2,7 +2,17 @@
 
 import { useAnalytics, Card, Cargando, ErrorBanner, fmtPesos, fmtPct, fmtNum, type TabProps } from './_shared';
 import { InfoTooltip } from './InfoTooltip';
-import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from 'recharts';
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+} from 'recharts';
 
 interface ResumenData {
   kpis: {
@@ -17,6 +27,7 @@ interface ResumenData {
     resultadoNeto: string;
   };
   sparklines: Array<{ fecha: string; ventas: string; egresos: string }>;
+  porHora: Array<{ hora: number; monto: number; cantidad: number }>;
   proyeccion: {
     diasTranscurridos: number;
     diasTotales: number;
@@ -37,6 +48,9 @@ export function TabResumen(props: TabProps) {
   const sparkVentas = data.sparklines.map((s) => ({ fecha: s.fecha.slice(5), v: Number(s.ventas) }));
   const sparkEgresos = data.sparklines.map((s) => ({ fecha: s.fecha.slice(5), v: Number(s.egresos) }));
   const proy = data.proyeccion;
+  // Defensivo: si el API en uso es una versión anterior (o sirve una respuesta
+  // cacheada) sin `porHora`, no crasheamos — mostramos la sección vacía.
+  const porHora = data.porHora ?? [];
 
   return (
     <>
@@ -121,6 +135,51 @@ export function TabResumen(props: TabProps) {
           </div>
         </Card>
       )}
+
+      {/* Ventas por hora del día — agregado del período seleccionado */}
+      <Card
+        titulo="Ventas por hora"
+        tooltip={
+          <InfoTooltip>
+            Suma de las ventas finalizadas por <strong>hora del día</strong> a lo largo de
+            todo el período seleccionado (en horario de La Plata). Sirve para ver las
+            franjas de mayor demanda. Se ajusta al período elegido arriba.
+          </InfoTooltip>
+        }
+      >
+        {porHora.length === 0 ? (
+          <p className="text-sm text-ink-500 py-8 text-center">
+            Sin ventas en el período seleccionado.
+          </p>
+        ) : (
+          <div className="h-64">
+            <ResponsiveContainer>
+              <BarChart
+                data={porHora.map((h) => ({
+                  hora: `${String(h.hora).padStart(2, '0')}:00`,
+                  monto: h.monto,
+                  cantidad: h.cantidad,
+                }))}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis dataKey="hora" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => fmtPesos(v)} />
+                <Tooltip
+                  formatter={(v, name) =>
+                    name === 'monto' ? fmtPesos(Number(v)) : `${fmtNum(Number(v))} ventas`
+                  }
+                  contentStyle={{
+                    background: '#fff',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 6,
+                  }}
+                />
+                <Bar dataKey="monto" fill="#1f4d3c" radius={[3, 3, 0, 0]} name="monto" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
 
       {/* Series de ventas + egresos */}
       <Card titulo="Evolución diaria">

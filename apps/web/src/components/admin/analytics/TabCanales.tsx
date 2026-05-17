@@ -10,7 +10,11 @@ interface CanalesData {
     monto: string;
     ticket_promedio: string;
     anuladas_cantidad: number;
-    anuladas_pct: number;
+    // El API nuevo manda `anuladas_pct`; el bundleado viejo (en el .exe)
+    // mandaba `anuladasPct`. Aceptamos ambos para no crashear con version
+    // skew (web hot-deploya por Vercel, el API viaja en el .exe).
+    anuladas_pct?: number;
+    anuladasPct?: number;
     comisionPct: number;
     comisionMonto: string;
     montoNeto: string;
@@ -104,23 +108,26 @@ export function TabCanales(props: TabProps) {
             { key: 'anuladas', label: 'Anul. %', align: 'right' },
             { key: 'dso', label: 'DSO (días)', align: 'right' },
           ]}
-          filas={data.canales.map((c) => ({
+          filas={data.canales.map((c) => {
+            const anulPct = Number(c.anuladas_pct ?? c.anuladasPct ?? 0);
+            return {
             canal: CANAL_LABEL[c.canal] ?? c.canal,
             cantidad: fmtNum(c.cantidad),
             ticket: fmtPesos(c.ticket_promedio),
             bruto: fmtPesos(c.monto),
             comision: c.comisionPct > 0 ? `${c.comisionPct}%` : '—',
             neto: <span className="font-semibold">{fmtPesos(c.montoNeto)}</span>,
-            anuladas: c.anuladas_pct > 5 ? (
-              <span className="text-pomodoro-600">{c.anuladas_pct.toFixed(1)}%</span>
+            anuladas: anulPct > 5 ? (
+              <span className="text-pomodoro-600">{anulPct.toFixed(1)}%</span>
             ) : (
-              `${c.anuladas_pct.toFixed(1)}%`
+              `${anulPct.toFixed(1)}%`
             ),
             dso: (() => {
               const v = dsoMap.get(c.canal);
               return v == null ? '—' : v.toFixed(1);
             })(),
-          }))}
+            };
+          })}
         />
       </Card>
 

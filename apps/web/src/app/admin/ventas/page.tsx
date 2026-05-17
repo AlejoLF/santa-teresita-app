@@ -428,35 +428,9 @@ export default function VentasPage() {
         </section>
       </div>
 
-      {/* Gráfico por hora (rangos cortos) o por día (rangos largos) */}
-      {data.porHora.length > 0 && (
-        <section className="card p-5">
-          <h2 className="font-display text-md text-ink-900 mb-3">Ventas por hora</h2>
-          <BarChart
-            data={data.porHora.map((h) => ({
-              label: `${String(h.hora).padStart(2, '0')}:00`,
-              monto: h.monto,
-              cantidad: h.cantidad,
-            }))}
-          />
-        </section>
-      )}
-
-      {data.porDia.length > 0 && (
-        <section className="card p-5">
-          <h2 className="font-display text-md text-ink-900 mb-3">Ventas por día</h2>
-          <BarChart
-            data={data.porDia.map((d) => ({
-              label: new Date(d.fecha).toLocaleDateString('es-AR', {
-                day: '2-digit',
-                month: '2-digit',
-              }),
-              monto: d.monto,
-              cantidad: d.cantidad,
-            }))}
-          />
-        </section>
-      )}
+      {/* Las estadísticas de ventas por hora / día se movieron a Analytics
+          → pestaña Resumen. Acá la pestaña Ventas muestra solo el listado
+          completo del período (debajo). */}
 
       {anularTarget && (
         <AnularVentaModal
@@ -743,36 +717,6 @@ function CategoriaBlock({
         />
       </footer>
     </section>
-  );
-}
-
-function BarChart({
-  data,
-}: {
-  data: Array<{ label: string; monto: number; cantidad: number }>;
-}) {
-  const max = Math.max(1, ...data.map((d) => d.monto));
-  return (
-    <div className="space-y-1">
-      {data.map((d, i) => {
-        const pct = (d.monto / max) * 100;
-        return (
-          <div key={`${d.label}-${i}`} className="flex items-center gap-2 text-xs">
-            <span className="font-mono w-14 text-ink-500">{d.label}</span>
-            <div className="flex-1 bg-cream-200 rounded h-5 overflow-hidden">
-              <div
-                className="bg-teresita-500 h-full transition-all duration-base"
-                style={{ width: `${pct}%` }}
-              />
-            </div>
-            <span className="font-mono w-28 text-right text-ink-700">
-              <MoneyAmount value={d.monto.toFixed(2)} />
-            </span>
-            <span className="font-mono w-10 text-right text-ink-500">{d.cantidad}</span>
-          </div>
-        );
-      })}
-    </div>
   );
 }
 

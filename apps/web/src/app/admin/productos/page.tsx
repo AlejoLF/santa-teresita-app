@@ -146,6 +146,33 @@ function ProductosTab() {
     void fetchProductos();
   }, [fetchProductos]);
 
+  const eliminarProducto = useCallback(
+    async (p: Producto) => {
+      const msg =
+        `¿Eliminar "${p.nombre}"?\n\n` +
+        'Si el producto tiene ventas históricas, se va a DESACTIVAR ' +
+        '(no se borra para no romper reportes). Si no, se elimina del todo.';
+      if (!confirm(msg)) return;
+      try {
+        const res = await api.delete<{
+          deleted?: boolean;
+          deactivated?: boolean;
+          mensaje?: string;
+        }>(`/admin/productos/${p.id}`);
+        if (res.deactivated) {
+          alert(
+            res.mensaje ??
+              'El producto se desactivó (tenía ventas asociadas). Ya no aparece en el catálogo del cajero.',
+          );
+        }
+        await fetchProductos();
+      } catch (e) {
+        alert(e instanceof Error ? e.message : 'No se pudo eliminar el producto');
+      }
+    },
+    [fetchProductos],
+  );
+
   useEffect(() => {
     (async () => {
       try {
@@ -364,7 +391,32 @@ function ProductosTab() {
                     {p.activo ? 'activo' : 'inactivo'}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-ink-300">→</td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2 justify-end">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditing(p);
+                      }}
+                      className="text-ink-500 hover:text-teresita-700 text-xs"
+                      title="Editar producto"
+                    >
+                      ✏️ Editar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void eliminarProducto(p);
+                      }}
+                      className="text-pomodoro-600 hover:text-pomodoro-700 text-xs"
+                      title="Eliminar producto"
+                    >
+                      🗑 Eliminar
+                    </button>
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>

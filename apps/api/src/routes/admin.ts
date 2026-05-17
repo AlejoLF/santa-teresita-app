@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta, EstadoLiquidacion, EstadoMovimiento, RolUsuario } from '@sta/db';
+import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { clasificarCanalBucket } from '../services/clasificar-pago.js';
 import {
@@ -459,7 +460,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           q: z.string().optional(),
           categoriaId: z.string().uuid().optional(),
           tipoProductoId: z.string().uuid().optional(),
-          incluirInactivos: z.coerce.boolean().default(false),
+          incluirInactivos: queryBool(false),
           page: z.coerce.number().int().min(1).default(1),
           pageSize: z.coerce.number().int().min(1).max(200).default(50),
         }),
@@ -612,6 +613,67 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       });
 
       return updated;
+    },
+  );
+
+  // DELETE /admin/productos/:id — eliminar producto.
+  //
+  // Intenta hard-delete. Si el producto está referenciado por ventas
+  // históricas (items_venta), precios por lista, modificadores aplicables,
+  // etc., la FK lo impide → caemos a soft-delete (activo=false) para no
+  // romper el histórico. Mismo patrón que /admin/sabores/:opcionId.
+  fastify.delete(
+    '/admin/productos/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const before = await prisma.producto.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Producto no encontrado' });
+
+      try {
+        // Limpiar dependencias "seguras" (precios, historial) en una tx y
+        // luego borrar el producto. Si hay items_venta que lo referencian,
+        // el delete del producto falla por FK y caemos al catch.
+        await prisma.$transaction(async (tx) => {
+          await tx.precioPorLista.deleteMany({ where: { productoId: params.id } });
+          await tx.historialPrecio.deleteMany({ where: { productoId: params.id } });
+          await tx.producto.delete({ where: { id: params.id } });
+        });
+        await recordAudit({
+          tabla: 'productos',
+          registroId: params.id,
+          accion: 'DELETE',
+          usuarioId: req.usuario!.id,
+          valorAnterior: { nombre: before.nombre, activo: before.activo },
+        });
+        return { ok: true, deleted: true };
+      } catch {
+        // FK con items_venta (ventas históricas) → soft-delete.
+        const updated = await prisma.producto.update({
+          where: { id: params.id },
+          data: { activo: false },
+        });
+        await recordAudit({
+          tabla: 'productos',
+          registroId: params.id,
+          accion: 'UPDATE',
+          usuarioId: req.usuario!.id,
+          valorAnterior: { activo: before.activo },
+          valorNuevo: { activo: false },
+          contexto: { motivo: 'soft-delete (referenciado por ventas)' },
+        });
+        return reply.send({
+          ok: true,
+          deleted: false,
+          deactivated: true,
+          mensaje:
+            'El producto tiene ventas históricas asociadas, así que se desactivó ' +
+            'en vez de borrarse (para no romper reportes). Ya no aparece en el catálogo del cajero.',
+        });
+      }
     },
   );
 
@@ -3203,7 +3265,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
       schema: {
         querystring: z.object({
-          incluirInactivos: z.coerce.boolean().default(false),
+          incluirInactivos: queryBool(false),
         }),
       },
     },

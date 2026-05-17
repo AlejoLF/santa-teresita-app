@@ -158,6 +158,51 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         ORDER BY d.fecha
       `);
 
+      // Ventas por hora del día — agregado sobre TODO el período seleccionado
+      // (ej: en "30 días", cuánto se vende a cada hora sumando los 30 días).
+      // Usamos AT TIME ZONE Argentina para que la hora sea la local del local,
+      // independiente de la TZ del cluster (Supabase corre en UTC).
+      const porHoraSql = await prisma.$queryRaw<
+        Array<{ hora: number; monto: string; cantidad: number }>
+      >(Prisma.sql`
+        WITH horas AS (
+          SELECT generate_series(0, 23) AS hora
+        ),
+        v AS (
+          SELECT
+            EXTRACT(HOUR FROM (fecha_finalizacion AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS hora,
+            SUM(total)::text AS monto,
+            COUNT(*)::int AS cantidad
+          FROM ventas
+          WHERE estado = 'FINALIZADA'
+            AND fecha_finalizacion >= ${desde}
+            AND fecha_finalizacion <= ${hasta}
+          GROUP BY 1
+        )
+        SELECT
+          h.hora,
+          COALESCE(v.monto, '0') AS monto,
+          COALESCE(v.cantidad, 0) AS cantidad
+        FROM horas h
+        LEFT JOIN v ON v.hora = h.hora
+        ORDER BY h.hora
+      `);
+      // Recortamos a la franja con actividad real (primera hora con ventas →
+      // última), o 9–23 por defecto si no hubo ventas, para no mostrar 24
+      // barras vacías de madrugada.
+      const horasConVenta = porHoraSql.filter((h) => Number(h.cantidad) > 0);
+      const primeraHora =
+        horasConVenta.length > 0 ? Math.min(...horasConVenta.map((h) => h.hora)) : 9;
+      const ultimaHora =
+        horasConVenta.length > 0 ? Math.max(...horasConVenta.map((h) => h.hora)) : 23;
+      const porHora = porHoraSql
+        .filter((h) => h.hora >= primeraHora && h.hora <= ultimaHora)
+        .map((h) => ({
+          hora: h.hora,
+          monto: Number(h.monto),
+          cantidad: Number(h.cantidad),
+        }));
+
       // Proyección de cierre de mes (solo si periodo='mes' o custom-mes-actual)
       let proyeccion = null;
       const ahora = new Date();
@@ -205,6 +250,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
           resultadoNeto: resultadoNeto.toFixed(2),
         },
         sparklines: sparklineSql,
+        porHora,
         proyeccion,
       };
     },
@@ -713,7 +759,11 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
           comisionPct,
           comisionMonto: comisionMonto.toFixed(2),
           montoNeto: (monto - comisionMonto).toFixed(2),
-          anuladasPct: Number(anuladasPct.toFixed(2)),
+          // snake_case para matchear el contrato del frontend (TabCanales
+          // espera `anuladas_pct`). Antes salía como `anuladasPct` →
+          // c.anuladas_pct era undefined → undefined.toFixed() crasheaba
+          // toda la pestaña Canales y por ende la página de analytics.
+          anuladas_pct: Number(anuladasPct.toFixed(2)),
         };
       });
 
