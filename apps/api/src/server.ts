@@ -48,6 +48,30 @@ export async function buildServer() {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
+  // Red de seguridad: Fastify por defecto rechaza requests con
+  // `Content-Type: application/json` y body vacío con
+  // FST_ERR_CTP_EMPTY_JSON_BODY (400). Eso rompía los DELETE sin body
+  // (quitar item del pedido, eliminar producto). El fix principal está en
+  // el cliente (no manda Content-Type si no hay body), pero parseamos el
+  // body vacío como `undefined` para tolerar cualquier cliente.
+  app.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (_req, bodyStr, done) => {
+      const s = (bodyStr as string).trim();
+      if (s.length === 0) {
+        done(null, undefined);
+        return;
+      }
+      try {
+        done(null, JSON.parse(s));
+      } catch (err) {
+        (err as { statusCode?: number }).statusCode = 400;
+        done(err as Error, undefined);
+      }
+    },
+  );
+
   await app.register(helmet, { contentSecurityPolicy: false });
   // Gzip/deflate de respuestas: con cajeros en conexión común argentina y
   // payloads grandes (catálogo de 2000 productos = ~200KB JSON), comprimir

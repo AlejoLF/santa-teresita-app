@@ -160,6 +160,23 @@ Ver SPEC §1.5. Punteo:
   Cerrar la app antes de regenerar. Verificar con:
   `Get-Process | ? { $_.Modules.FileName -like '*query_engine-windows*' }`.
 
+- **NO correr `prisma migrate dev` (ni `pnpm db:migrate` si mapea a eso)
+  contra ninguna DB de este repo.** Las migraciones se aplican vía raw SQL
+  (`scripts/cloud/migrate.mjs` para cloud; aplicar el `migration.sql` a mano
+  para local). `migrate dev` compara la schema contra su shadow DB, detecta
+  "drift" (porque el historial se aplicó por SQL, no por Prisma Migrate) y
+  AUTO-GENERA una migración correctiva que **dropea índices de performance**
+  y reordena columnas. Si aparece una migración no creada a mano (ej.
+  `*_alpha20` con DROP INDEX), borrar el dir + el registro en
+  `_prisma_migrations` + recrear los índices. Para sincronizar una DB local
+  nueva: aplicar los `migration.sql` en orden con un script, no `migrate dev`.
+
+- **Cliente API: nunca mandar `Content-Type: application/json` sin body.**
+  Fastify rechaza body vacío con ese header (FST_ERR_CTP_EMPTY_JSON_BODY,
+  400) — rompía todos los DELETE sin body (quitar item, eliminar producto).
+  `lib/api.ts` setea el header solo si hay body; `server.ts` además parsea
+  body vacío como `undefined` (red de seguridad para cualquier cliente).
+
 - **Repartidor en tickets: se infiere del canal** (`repartidorPorCanal()` en
   `services/impresion.ts`). RAPPI/PYA/MELI/DELIVERATE no requieren asignación
   manual. Prioridad: empleado interno asignado > empresa explícita > inferido

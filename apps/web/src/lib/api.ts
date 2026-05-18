@@ -130,8 +130,14 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
 
   const isWrite = method !== 'GET';
   const token = getAuthToken();
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  // Auth-only base headers. NO seteamos Content-Type si no hay body: Fastify
+  // rechaza requests con `Content-Type: application/json` y body vacío con
+  // FST_ERR_CTP_EMPTY_JSON_BODY (400). Eso rompía todos los DELETE sin body
+  // (quitar item del pedido, eliminar producto, etc.).
+  const baseHeaders: Record<string, string> = {};
+  if (token) baseHeaders['Authorization'] = `Bearer ${token}`;
+  const headers: Record<string, string> = { ...baseHeaders };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
 
   let res: Response;
   try {
@@ -151,7 +157,9 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
         await fetch(`${BASE_URL}/sync/queue`, {
           method: 'POST',
           credentials: 'include',
-          headers,
+          // El outbox SIEMPRE manda body → Content-Type explícito (headers
+          // base puede no tenerlo si el request original era bodyless).
+          headers: { ...baseHeaders, 'Content-Type': 'application/json' },
           body: JSON.stringify({ method, url: path, body }),
         });
         // Devolvemos un objeto especial que el caller puede detectar para
