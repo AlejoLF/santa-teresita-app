@@ -199,6 +199,36 @@ function buildApi() {
   // Si @sta/db expone @prisma/client desde packages/db, agarramos también los archivos generados
   fs.writeFileSync(path.join(dest, 'package.json'), JSON.stringify(pkgPlano, null, 2));
   run('npm install --omit=dev --no-package-lock --no-fund --no-audit', dest);
+
+  // ── better-sqlite3: rebuild contra la ABI de Electron ──
+  // npm install baja el prebuilt compilado para Node estándar (ABI 127).
+  // Pero la API corre como child process de Electron (ELECTRON_RUN_AS_NODE),
+  // que usa la ABI de Electron 33 (130). Sin esto, al cargar el .node tira
+  // ERR_DLOPEN_FAILED y se rompe el outbox (/sync/*). Forzamos a
+  // prebuild-install a bajar el binario de Electron con runtime/target.
+  const electronVer = JSON.parse(
+    fs.readFileSync(path.join(DESKTOP_DIR, 'node_modules', 'electron', 'package.json'), 'utf8'),
+  ).version;
+  step(`Rebuild better-sqlite3 para Electron ${electronVer} (ABI nativa)`);
+  // Invocamos el prebuild-install bundleado de better-sqlite3 con flags CLI
+  // (-r electron -t <ver>). NO usar `npm rebuild` + npm_config_* env vars:
+  // npm moderno los ignora/warnea y termina bajando el binario de Node
+  // (ABI 137) en vez del de Electron (ABI 130) → ERR_DLOPEN_FAILED en
+  // runtime y se rompe el outbox (/sync/*). Con prebuild-install directo y
+  // cwd en el dir del paquete, baja el tarball electron-v130 correcto.
+  const bsqDir = path.join(dest, 'node_modules', 'better-sqlite3');
+  const prebuildBin = path.join(
+    dest,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'prebuild-install.cmd' : 'prebuild-install',
+  );
+  execSync(`"${prebuildBin}" -r electron -t ${electronVer} --tag-prefix v`, {
+    stdio: 'inherit',
+    cwd: bsqDir,
+    shell: process.platform === 'win32',
+  });
+
   step('Limpiando archivos dev de resources/api/node_modules');
   pruneDevArtifacts(path.join(dest, 'node_modules'));
 
