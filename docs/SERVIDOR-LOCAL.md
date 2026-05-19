@@ -168,57 +168,69 @@ Detalle fino se cierra al implementar Fase 1.5 (esquema de `origen` +
 
 ---
 
-## 6. API en Vercel (serverless)
+## 6. PWA en Vercel — IMPLEMENTADO
 
-El mismo codebase `apps/api` (Fastify) se deploya como funciones serverless en
-Vercel, junto a la web. `DATABASE_URL` → Supabase pooler (`aws-1-sa-east-1`,
-`pgbouncer=true&connection_limit=1`).
+La PWA del corte **ya existe**: es `apps/mobile` (Next.js). NO se deploya
+Fastify a Vercel — `apps/mobile` tiene sus propias Route Handlers
+server-side que pegan a Supabase con `pg`. Es la "API cloud":
+
+- `apps/mobile/src/app/api/ventas/route.ts` `POST` crea la venta express
+  (venta+items+pago+sesión) en una tx contra Supabase, y **ahora también
+  escribe un `audit_log` con `origen='cloud'`** chaineado al audit de la
+  isla Supabase (Fase 1.5 — reusa `@sta/shared/hash-chain`).
+- Reusa la sesión `ABIERTA` que Fase 1A ya replicó a Supabase → en el caso
+  común NO crea sesión nueva (no hay colisión en el catch-up). Si el corte
+  empieza antes de abrir caja, crea una sesión nueva; el catch-up la
+  re-apunta a la local si colisiona por `(fecha,turno)`.
+
+**Env requeridas en Vercel para `apps/mobile`:**
+- `SUPABASE_DB_URL_POOLED` → pooler `aws-1-sa-east-1` (NO aws-0).
+- `AUDIT_HASH_SALT` → **el MISMO valor que el resto del sistema**. Si falta,
+  la PWA igual registra la venta (no se pierde) con hash sentinel
+  `NO_SALT_CLOUD`; el catch-up la re-chainea con el salt local igual. Pero
+  conviene setearlo para que la copia de Supabase tenga un chain válido
+  auditables standalone.
 
 Consideraciones:
-- **Cold start**: primer request tras inactividad ~1-2 s. Aceptable para uso de
-  contingencia (corte de luz), no es la ruta normal.
-- **`recordAudit` (hash-chain)**: hoy hace 3 queries en tx Serializable. Sobre
-  pooler + serverless eso es lento. La optimización pendiente (precomputar
-  `secuencia` con `nextval()` → 1 INSERT) se hace acá también — relevante para
-  que la PWA no se sienta lentísima en el corte.
-- **Estado**: serverless es stateless → OK, toda la lógica de sesión vive en
-  Postgres (Supabase), no en memoria del proceso.
-- La PWA apunta a `https://<vercel-app>/api/v1` siempre (en el corte es la única
-  ruta; con luz la PWA igual puede usarse pero la ruta normal del local es el
-  `.exe`).
+- **Cold start**: ~1-2 s el primer request tras inactividad. Aceptable para
+  contingencia (corte), no es la ruta normal.
+- **Optimización `recordAudit` con `nextval()`** (3→2 queries): DIFERIDA — toca
+  el código más sensible a concurrencia (fork del hash-chain) y no es
+  requisito de correctitud de 1.5. Se revisa aparte.
+- El deploy de `apps/mobile` a Vercel + setear las env es paso de OPERACIÓN
+  (lo hace el usuario); el código ya está listo.
 
 ---
 
 ## 7. Plan de implementación
 
-### Fase 1 — Server local + replicación forward  *(esta entrega, parte A)*
+### Fase 1A — Server local + replicación forward  ✅ HECHO (commit d32d4d7)
 
-1. `STA_ROLE` (`server`|`caja`) + resolución de URL LAN/cloud (`main.js` +
-   `packages/db/client`).
-2. Router de Prisma: LAN primary / Supabase read-only, con healthcheck.
-3. Hook en `services/audit.ts`: insertar `outbox_events` en la misma tx.
-4. `services/replicator.ts` (solo `STA_ROLE=server`): drain idempotente →
-   Supabase, backoff, métricas en `/sync/status`.
-5. Failover A (LAN down con luz): caja lee Supabase + writes al `outbox.sqlite`.
-6. Provisión mini PC (`tools/setup-mini-pc.ps1`): Postgres 16, DB+rol,
-   migraciones por SQL (NO `prisma migrate dev` — ver gotcha CLAUDE.md), seed,
-   `config.json rol:server`, **Windows Services (NSSM)** con recovery +
-   dependencia de Postgres, firewall LAN, acceso remoto admin (RDP/SSH).
-7. Validar arranque headless (simular reboot, verificar recuperación sola).
+`STA_ROLE`, `outbox_events` hook en audit, `replicator.ts`, paquete
+`apps/server` (build + `setup-mini-pc.ps1` headless + README).
 
-### Fase 1.5 — Corte de luz: API Vercel + PWA + catch-up  *(esta entrega, parte B)*
+### Fase 1B — Failover caja → Supabase read-only  ✅ HECHO (commit 22cfd72)
 
-8. Deploy del API Fastify como serverless en Vercel apuntando a Supabase.
-9. Optimizar `recordAudit` a 1 INSERT (`nextval()` precomputado) — necesario
-   para latencia aceptable de la PWA sobre pooler.
-10. PWA (`apps/mobile`): apuntar al API de Vercel; flujo mínimo de carga de
-    pedido + cobro (lo que se necesita para operar en el corte).
-11. Migración chica: `origen` + `secuencia_origen` en tablas transaccionales
-    (o en `audit_log`) para el catch-up.
-12. Catch-up Supabase→local en el replicator: al bootear, detectar ventana del
-    corte e importar idempotente antes de reanudar forward.
-13. Simular corte completo (apagar mini PC + cajas, operar por PWA, reencender,
-    verificar que el local absorbe todo sin intervención ni duplicados).
+`prisma` Proxy router, `db-router.ts` (healthcheck LAN), preHandler 503
+`DB_DEGRADED`, frontend encola en outbox, `main.js` lee `lanDbUrl`.
+
+### Fase 1.5 — Corte de luz: PWA + catch-up  ✅ HECHO (este commit)
+
+- Migración `audit_log.origen` + `secuencia_origen` (aplicada Supabase+local).
+- `schema.prisma` + `config.STA_ROLE='cloud'` + `audit.ts` tag `origen`.
+- `apps/mobile/.../ventas/route.ts`: escribe `audit_log` `origen='cloud'`
+  chaineado a la isla Supabase (reusa `@sta/shared/hash-chain`).
+- `services/catch-up.ts`: en boot del server (STA_ROLE=server) absorbe las
+  ventas del corte (audit origen='cloud') ANTES de reanudar forward.
+  Importa el grafo (sesión/cliente/venta/items/pagos/delivery) por PK
+  idempotente, re-chainea el audit en la secuencia LOCAL
+  (`secuencia_origen` preservada), re-apunta sesiones que colisionen.
+- **Pendiente OPERACIÓN (no código)**: deploy `apps/mobile` a Vercel +
+  env (`SUPABASE_DB_URL_POOLED` aws-1, `AUDIT_HASH_SALT`). Test end-to-end
+  del corte completo (apagar todo, operar por PWA, reencender, verificar
+  absorción sin duplicados) — se hace cuando se despliegue el server.
+- **Diferido**: optimización `recordAudit` con `nextval()` (toca el código
+  más sensible a concurrencia; no es requisito de 1.5).
 
 ### Fase 2 — Reconciliación bidireccional concurrente  *(diferida, quizá innecesaria)*
 

@@ -23,6 +23,7 @@ import analyticsRoutes from './routes/analytics.js';
 import syncRoutes from './routes/sync.js';
 import { startOutboxFlusher } from './services/outbox-flusher.js';
 import { startReplicator } from './services/replicator.js';
+import { runCatchUp } from './services/catch-up.js';
 import { startDbRouter, dbRouterEnabled, dbState } from './services/db-router.js';
 import proveedoresRoutes from './routes/proveedores.js';
 import empleadosRoutes from './routes/empleados.js';
@@ -272,6 +273,15 @@ try {
     agentToken: process.env.AGENT_API_TOKEN,
   });
   app.log.info('Outbox flusher iniciado (interval 5s)');
+
+  // Catch-up Supabase → local: ANTES de reanudar la replicación forward,
+  // el server absorbe las ventas que la PWA cargó durante un corte de luz
+  // (audit origen='cloud'). Idempotente, no bloquea el listen (corre en
+  // background; el replicator forward igual no pisa nada porque el import
+  // no genera outbox_events). Solo STA_ROLE=server. Ver §5.2.
+  void runCatchUp().then((n) => {
+    if (n > 0) app.log.info(`Catch-up: ${n} ventas del corte absorbidas`);
+  });
 
   // Replicator local → Supabase. Solo arranca si STA_ROLE=server +
   // REPLICATE_TO_URL configurado (el mini PC). En las cajas es no-op.

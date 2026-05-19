@@ -15,10 +15,11 @@ const ConfigSchema = z.object({
   AUDIT_HASH_SALT: z.string().min(16),
 
   // ── Servidor local LAN (ver docs/SERVIDOR-LOCAL.md) ──
-  // STA_ROLE: 'caja' (default — el .exe de cada caja) vs 'server' (el mini PC
-  //   que es fuente de verdad y corre el replicator). Solo 'server' arranca
-  //   el worker de replicación.
-  STA_ROLE: z.enum(['caja', 'server']).default('caja'),
+  // STA_ROLE: 'caja' (default — el .exe de cada caja) | 'server' (mini PC,
+  //   fuente de verdad, corre el replicator) | 'cloud' (Fastify hosteado en
+  //   Vercel, escribe a Supabase durante un corte → audit tag origen='cloud').
+  //   Solo 'server' arranca el replicator/catch-up.
+  STA_ROLE: z.enum(['caja', 'server', 'cloud']).default('caja'),
   // STA_OUTBOX_REPLICATION: si true, recordAudit escribe también un
   //   outbox_events en la MISMA tx (patrón transactional-outbox). Se prende
   //   en el server Y en las cajas que apuntan al Postgres LAN (sus writes

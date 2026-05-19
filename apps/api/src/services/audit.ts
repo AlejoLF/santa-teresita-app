@@ -44,6 +44,10 @@ async function writeAuditEntry(client: DbClient, entry: AuditEntryInput): Promis
       observaciones: entry.observaciones ?? null,
       hashAnterior: last?.hashActual ?? null,
       hashActual: 'pending',
+      // Isla de origen (catch-up post-corte, docs/SERVIDOR-LOCAL.md §5.3).
+      // 'cloud' solo si esta API corre en Vercel (STA_ROLE=cloud); el
+      // server LAN y las cajas escriben 'local'.
+      origen: config.STA_ROLE === 'cloud' ? 'cloud' : 'local',
     },
   });
   const chainEntry: HashChainEntry = {

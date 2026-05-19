@@ -1222,6 +1222,12 @@ model AuditLog {
   timestamp     DateTime @default(now())
   hashAnterior  String?  @map("hash_anterior") @db.VarChar(80)
   hashActual    String   @map("hash_actual") @db.VarChar(80)
+  // Isla de origen para el catch-up post-corte (ver docs/SERVIDOR-LOCAL.md
+  // §5.3). 'local' = server LAN (default). 'cloud' = PWA durante un corte.
+  // secuenciaOrigen preserva el `secuencia` que tuvo en su DB de origen
+  // (al importar al local se le asigna uno local nuevo = re-chain).
+  origen          String  @default("local") @db.VarChar(8)
+  secuenciaOrigen BigInt? @map("secuencia_origen")
 
   usuario Usuario? @relation(fields: [usuarioId], references: [id])
 

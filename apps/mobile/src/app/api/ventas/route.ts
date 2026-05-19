@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Pool } from 'pg';
+import { computeHashChain } from '@sta/shared/hash-chain';
 import { requireSession } from '@/lib/auth';
 import { query } from '@/lib/db';
 
@@ -443,6 +444,53 @@ export async function POST(req: NextRequest) {
         [ventaId, direccionSnap],
       );
     }
+
+    // 11) Audit log de la ISLA cloud (Fase 1.5, docs/SERVIDOR-LOCAL.md §5.3).
+    //     La PWA durante un corte es el único nodo vivo: appendea al
+    //     hash-chain de Supabase con origen='cloud'. Cuando vuelve el server
+    //     local, el catch-up importa estas filas y las RE-CHAIN en la
+    //     secuencia local (preservando secuencia_origen). Si falta el salt,
+    //     igual registramos la fila (origen='cloud') con hash sentinel — el
+    //     re-chain local la recomputa con el salt local; lo prioritario es
+    //     que la venta no se pierda durante el corte.
+    const salt = process.env.AUDIT_HASH_SALT ?? '';
+    const tail = await client.query<{ hash_actual: string }>(
+      `SELECT hash_actual FROM audit_log ORDER BY secuencia DESC LIMIT 1`,
+    );
+    const prevHash = tail.rows[0]?.hash_actual ?? null;
+    const seqRow = await client.query<{ s: string }>(
+      `SELECT nextval('audit_log_secuencia_seq')::text AS s`,
+    );
+    const secuencia = seqRow.rows[0].s;
+    const ts = new Date();
+    const valorNuevo = {
+      estado: 'FINALIZADA',
+      total: total.toFixed(2),
+      descuento: descuento.toFixed(2),
+      origen: 'mobile-pwa',
+    };
+    const hashActual = salt
+      ? computeHashChain(prevHash, {
+          secuencia: BigInt(secuencia),
+          tabla: 'ventas',
+          registroId: ventaId,
+          accion: 'TRANSITION',
+          valorAnterior: null,
+          valorNuevo,
+          usuarioId: session.userId,
+          timestamp: ts,
+        }, salt)
+      : 'NO_SALT_CLOUD';
+    await client.query(
+      `INSERT INTO audit_log (
+         id, secuencia, tabla, registro_id, accion, usuario_id, pc_origen,
+         valor_nuevo, timestamp, hash_anterior, hash_actual, origen
+       ) VALUES (
+         gen_random_uuid(), $1, 'ventas', $2, 'TRANSITION', $3, 'mobile-pwa',
+         $4::jsonb, $5, $6, $7, 'cloud'
+       )`,
+      [secuencia, ventaId, session.userId, JSON.stringify(valorNuevo), ts.toISOString(), prevHash, hashActual],
+    );
 
     await client.query('COMMIT');
 
