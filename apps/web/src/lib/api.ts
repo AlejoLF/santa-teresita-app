@@ -88,6 +88,40 @@ class ApiError extends Error {
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
+/**
+ * Encola un write en el outbox local (POST /sync/queue) y SIEMPRE tira:
+ *   - ApiError(202, {queued:true}) si encoló bien → el caller muestra UX
+ *     optimista ("guardado, sincroniza solo").
+ *   - ApiError(0) si ni la API local responde (catastrófico).
+ *
+ * Se usa tanto ante error de red (cloud/LAN caída) como ante 503
+ * DB_DEGRADED (server LAN caído pero la API viva). Mismo comportamiento:
+ * el outbox-flusher reproduce el write cuando la conexión vuelve.
+ */
+async function queueWrite(
+  method: Method,
+  path: string,
+  body: unknown,
+  baseHeaders: Record<string, string>,
+): Promise<never> {
+  try {
+    await fetch(`${BASE_URL}/sync/queue`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { ...baseHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method, url: path, body }),
+    });
+    throw new ApiError(
+      202,
+      'Sin conexión — guardado localmente, se va a sincronizar cuando vuelva',
+      { queued: true },
+    );
+  } catch (queueErr) {
+    if (queueErr instanceof ApiError) throw queueErr;
+    throw new ApiError(0, 'No se pudo guardar localmente (API local caída)', undefined);
+  }
+}
+
 async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
   if (DEMO_MODE) {
     const { handleMock, buildCierrePayloadFromDemo } = await getDemoModule();
@@ -153,36 +187,30 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
     // reintentar cuando la cloud vuelva. Para reads, propagamos el error
     // (los reads no se pueden "encolar", el usuario tiene que reintentar).
     if (isWrite) {
-      try {
-        await fetch(`${BASE_URL}/sync/queue`, {
-          method: 'POST',
-          credentials: 'include',
-          // El outbox SIEMPRE manda body → Content-Type explícito (headers
-          // base puede no tenerlo si el request original era bodyless).
-          headers: { ...baseHeaders, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ method, url: path, body }),
-        });
-        // Devolvemos un objeto especial que el caller puede detectar para
-        // mostrar UX optimista ("guardado, sincronizando...").
-        throw new ApiError(
-          202,
-          'Sin conexión — guardado localmente, se va a sincronizar cuando vuelva',
-          { queued: true },
-        );
-      } catch (queueErr) {
-        if (queueErr instanceof ApiError) throw queueErr;
-        // Si NI la API local responde (catastrófico — la API local crasheó),
-        // tiramos el error original.
-        throw new ApiError(
-          0,
-          e instanceof Error ? e.message : 'Error de red',
-          undefined,
-        );
-      }
+      await queueWrite(method, path, body, baseHeaders);
+      // queueWrite siempre tira (ApiError 202 si encoló, o el error de red).
     }
     throw new ApiError(0, e instanceof Error ? e.message : 'Error de red', undefined);
   }
   if (!res.ok) {
+    // Failover Fase 1B: el server local cayó (LAN_DOWN). La API responde
+    // 503 DB_DEGRADED para los writes. Lo tratamos IGUAL que un error de
+    // red: encolamos en el outbox y el flusher lo reproduce al volver el
+    // LAN. Excepción: /auth/* (encolar un login no tiene sentido) → error
+    // claro para que el usuario sepa que necesita conexión al server.
+    if (res.status === 503 && isWrite) {
+      const degradedBody = await res.json().catch(() => ({}));
+      if ((degradedBody as { code?: string })?.code === 'DB_DEGRADED') {
+        if (path.startsWith('/auth/')) {
+          throw new ApiError(
+            503,
+            'Sin conexión con el servidor del local — no se puede iniciar/cerrar sesión hasta que vuelva.',
+            degradedBody,
+          );
+        }
+        await queueWrite(method, path, body, baseHeaders);
+      }
+    }
     if (res.status === 401) {
       // Sesión expirada/invalidada — limpiamos el token de localStorage
       // para que el próximo render redirija a /login. El layout de cada

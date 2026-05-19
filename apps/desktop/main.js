@@ -246,6 +246,24 @@ function leerCloudDbUrl() {
   return raw;
 }
 
+/**
+ * URL del Postgres del SERVER LOCAL LAN (mini PC). Solo se lee de
+ * userData/config.json → `lanDbUrl` (es config por-máquina, no se bundlea).
+ * Si está presente, la caja opera contra el LAN (rápido) y cae a Supabase
+ * (cloudDbUrl) read-only si el LAN no responde. Si NO está, comportamiento
+ * legacy: un solo DATABASE_URL = Supabase. Ver docs/SERVIDOR-LOCAL.md §4.
+ */
+function leerLanDbUrl() {
+  const userConfigPath = path.join(app.getPath('userData'), 'config.json');
+  if (!fs.existsSync(userConfigPath)) return null;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(userConfigPath, 'utf8'));
+    return typeof cfg.lanDbUrl === 'string' && cfg.lanDbUrl ? cfg.lanDbUrl : null;
+  } catch {
+    return null;
+  }
+}
+
 async function runSeed() {
   log('Ejecutando seed...');
   const seedPath = path.join(resourcesDir(), 'seed', 'seed.mjs');
@@ -278,7 +296,18 @@ function startApi(cloudDbUrl) {
   setSplashStatus('Iniciando servidor de la app...');
   const apiEntry = path.join(resourcesDir(), 'api', 'server.mjs');
   log('Spawning API: ' + apiEntry);
-  log('API → cloud DB (Supabase) — sin Postgres local');
+
+  // Failover Fase 1B: si hay lanDbUrl configurado, la caja apunta al
+  // Postgres del server LAN (DATABASE_URL) y cae a Supabase read-only
+  // (STA_FALLBACK_DB_URL) si el LAN no responde. Sin lanDbUrl =
+  // comportamiento legacy cloud-first (un solo DATABASE_URL = Supabase).
+  const lanDbUrl = leerLanDbUrl();
+  const dbUrlPrimaria = lanDbUrl ?? cloudDbUrl;
+  if (lanDbUrl) {
+    log('API → server LAN (DATABASE_URL=lan, failover a Supabase configurado)');
+  } else {
+    log('API → cloud DB (Supabase) — sin server LAN configurado');
+  }
 
   apiProcess = spawn(process.execPath, [apiEntry], {
     env: {
@@ -290,10 +319,13 @@ function startApi(cloudDbUrl) {
       // independiente del locale regional de Windows. AR no observa DST desde
       // 2009, valor estable.
       TZ: 'America/Argentina/Buenos_Aires',
-      // ── v2.x ── La API ya NO se conecta a Postgres local (no existe más).
-      // Apunta directamente al pooler de Supabase. Si en Fase 2 se instala
-      // el server local, las PCs cliente cambian este URL al server LAN.
-      DATABASE_URL: cloudDbUrl,
+      // DATABASE_URL = LAN si está configurado (failover Fase 1B), sino
+      // Supabase (legacy cloud-first). STA_FALLBACK_DB_URL solo se setea
+      // cuando hay LAN → habilita el db-router (healthcheck + caer a
+      // Supabase read-only). STA_ROLE=caja: nunca arranca el replicator.
+      DATABASE_URL: dbUrlPrimaria,
+      ...(lanDbUrl ? { STA_FALLBACK_DB_URL: cloudDbUrl } : {}),
+      STA_ROLE: 'caja',
       API_HOST: '127.0.0.1',
       API_PORT: String(API_PORT),
       // CORS: aceptamos el web local (loopback) + el dominio de Vercel

@@ -23,6 +23,7 @@ import analyticsRoutes from './routes/analytics.js';
 import syncRoutes from './routes/sync.js';
 import { startOutboxFlusher } from './services/outbox-flusher.js';
 import { startReplicator } from './services/replicator.js';
+import { startDbRouter, dbRouterEnabled, dbState } from './services/db-router.js';
 import proveedoresRoutes from './routes/proveedores.js';
 import empleadosRoutes from './routes/empleados.js';
 import configuracionRoutes from './routes/configuracion.js';
@@ -138,8 +139,31 @@ export async function buildServer() {
     // local sin Electron, sale como "dev".
     version: process.env.STA_DESKTOP_VERSION ?? 'dev',
     env: config.NODE_ENV,
+    dbState: dbRouterEnabled() ? dbState() : 'PRIMARY',
     time: new Date().toISOString(),
   }));
+
+  // Failover Fase 1B: si el router está en DEGRADED (LAN caído), las
+  // LECTURAS pasan (el prisma activo apunta a Supabase mirror y la UI
+  // sigue viva) pero las ESCRITURAS se rechazan con 503 DB_DEGRADED. El
+  // frontend (lib/api.ts) interpreta ese código igual que un error de red:
+  // encola el write en outbox.sqlite y el outbox-flusher lo reproduce
+  // cuando vuelve el LAN. Supabase nunca recibe escrituras autoritativas.
+  // Exento: /sync/* (outbox, backend SQLite — debe funcionar degradado) y
+  // /health, /version.
+  app.addHook('onRequest', async (req, reply) => {
+    if (!dbRouterEnabled() || dbState() !== 'DEGRADED') return;
+    const m = req.method;
+    if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return;
+    const u = typeof req.url === 'string' ? req.url : '';
+    if (u.includes('/sync/') || u.endsWith('/health') || u.endsWith('/version')) return;
+    return reply.code(503).send({
+      error:
+        'Sin conexión con el servidor del local. Tu acción se guarda y se ' +
+        'sincroniza sola cuando vuelva.',
+      code: 'DB_DEGRADED',
+    });
+  });
 
   // Hook global: invalidar el cache del catálogo después de mutaciones
   // exitosas en /admin/productos, /admin/categorias, /admin/tipos-producto,
@@ -252,6 +276,10 @@ try {
   // Replicator local → Supabase. Solo arranca si STA_ROLE=server +
   // REPLICATE_TO_URL configurado (el mini PC). En las cajas es no-op.
   startReplicator();
+
+  // DB router de la caja (failover LAN→Supabase). Solo activo si
+  // STA_FALLBACK_DB_URL está configurado. En el server / .exe legacy: no-op.
+  startDbRouter();
 } catch (err) {
   app.log.error(err);
   process.exit(1);

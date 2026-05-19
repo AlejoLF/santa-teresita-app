@@ -31,6 +31,13 @@ const ConfigSchema = z.object({
   // REPLICATE_TO_URL: destino del replicator (Supabase pooler aws-1). Solo
   //   se usa cuando STA_ROLE='server'. Si falta, el replicator no arranca.
   REPLICATE_TO_URL: z.string().optional(),
+  // STA_FALLBACK_DB_URL: en la CAJA, la URL de Supabase (read-only) a la que
+  //   cae si el Postgres LAN del server no responde. DATABASE_URL apunta al
+  //   LAN; este al cloud. Si falta, no hay failover (comportamiento legacy:
+  //   un solo DATABASE_URL, sin router).
+  STA_FALLBACK_DB_URL: z.string().optional(),
+  // STA_DB_HEALTHCHECK_MS: cada cuánto el db-router pinguea el LAN.
+  STA_DB_HEALTHCHECK_MS: z.coerce.number().default(10_000),
 });
 
 const parsed = ConfigSchema.safeParse(process.env);
