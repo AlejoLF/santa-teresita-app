@@ -20,6 +20,8 @@ el acceso remoto del dueño.
 | Replicación | local → Supabase, app-level CDC vía `outbox_events` | Replicación lógica PG es inviable (Supabase tendría que entrar a la LAN por NAT) |
 | Failover (Fase 1) | mini PC caído → cajas leen de Supabase + ventas al `outbox.sqlite` de cada caja; flush al volver | Cero conflictos: Supabase nunca recibe escrituras autoritativas. Reusa el outbox que ya existe |
 | Failover (Fase 2) | escritura autoritativa a Supabase + reconciliación bidireccional | Solo si los cortes resultan largos/frecuentes. Diseñado acá, NO se implementa en Fase 1 |
+| Server headless | Postgres + API/replicator como **Windows Services** (NO el `.exe` Electron). Arranque automático post-corte de luz, sin login/UAC/humano | Mini PC sin monitor, dedicado. Ver §9 |
+| Restore post-corte | Automático: `outbox-flusher` de cada caja drena al volver el LAN. Cero intervención | Ver §4.2.1 |
 
 ---
 
@@ -136,8 +138,32 @@ write crítico). Estados: `LAN_OK` / `LAN_DOWN`.
 | `LAN_OK` | API local de la caja → Postgres mini PC | → Postgres mini PC (directo, autoritativo) |
 | `LAN_DOWN` | API local → **Supabase mirror (read-only)** para que la UI siga viva | → **`outbox.sqlite` de la caja** (encolado). NO se escribe a Supabase |
 
-Al volver `LAN_OK`: el `outbox-flusher` (ya existe, 5 s) drena el `outbox.sqlite`
-contra la API del mini PC → Postgres local → el replicator lo propaga a Supabase.
+### 4.2.1 Restauración al volver el LAN — 100% automática, sin humano
+
+Secuencia exacta cuando el mini PC vuelve (recovery):
+
+1. El `outbox-flusher` de cada caja (ya existe, loop cada 5 s) detecta que la
+   API del mini PC responde de nuevo.
+2. Drena su `outbox.sqlite` en orden FIFO: reproduce cada write encolado
+   (`POST /ventas`, `/finalizar`, `/movimientos`, …) contra la API del mini PC
+   → Postgres local. El orden se preserva (FIFO + `audit_log.secuencia`).
+3. Es **idempotente**: si un reintento manda dos veces el mismo evento, el
+   upsert por PK no duplica. Un corte de red a mitad de drenado se recupera
+   solo en el siguiente tick.
+4. El `replicator` del mini PC toma esos writes recién aplicados desde
+   `outbox_events` y los propaga a Supabase.
+
+Cero clicks, cero intervención. El `outbox.sqlite` es un archivo en disco de
+cada caja: si una caja se apaga durante el corte, al rebootear el flusher
+retoma desde donde quedó — no se pierde nada salvo muerte del disco físico.
+
+**Visibilidad durante el corte (límite explícito)**: mientras el mini PC está
+caído, Supabase NO recibe los pedidos del corte (es mirror read-only en Fase 1).
+Julio, mirando Supabase remoto, NO ve esos pedidos hasta que el mini PC vuelve y
+el flusher+replicator se ponen al día. Además, durante el corte cada caja solo
+tiene su propia cola (no hay vista consolidada). Aceptable para cortes de
+minutos/horas; Fase 2 cubre cortes largos.
+
 **Supabase nunca recibe escrituras autoritativas en Fase 1** → cero
 reconciliación, cero conflictos.
 
@@ -229,11 +255,14 @@ mismas migraciones).
    Supabase, backoff, métricas en `/sync/status`.
 5. Failover read-only: cuando `LAN_DOWN`, la API de la caja lee de Supabase y los
    writes van al `outbox.sqlite` (ya existe el camino vía `/sync/queue`).
-6. Script de provisión del mini PC: instalar Postgres 16, crear DB, aplicar
-   migraciones (vía SQL, **no `prisma migrate dev`** — ver gotcha en CLAUDE.md),
-   seed, configurar `config.json` con `rol: server`.
-7. Doc de operación: cómo levantar el mini PC, IP fija, firewall LAN (puerto
-   5432 solo en la subred), backup.
+6. Script de provisión del mini PC (`tools/setup-mini-pc.ps1`): instalar
+   Postgres 16, crear DB + rol, aplicar migraciones (vía SQL, **no
+   `prisma migrate dev`** — ver gotcha CLAUDE.md), seed, `config.json` con
+   `rol: server`, **registrar API + replicator como Windows Service (NSSM)**
+   con recovery + dependencia de Postgres, firewall LAN (5432 solo subred),
+   habilitar acceso remoto admin (RDP/SSH). Ver §9.
+7. Validar arranque headless: simular reboot del mini PC y verificar que todo
+   levanta solo y las cajas recuperan sin intervención.
 
 ### Fase 2 — Failover autoritativo + reconciliación bidireccional  *(diferida)*
 
@@ -260,14 +289,66 @@ Solo si los cortes del mini PC resultan largos/frecuentes en la práctica.
 
 ---
 
-## 9. Operación (se completa al implementar Fase 1)
+## 9. Operación — mini PC HEADLESS, arranque 100% automático
 
-- Provisión del mini PC (script).
-- IP fija + DNS LAN opcional (`server.local`).
-- Backup: el replicator a Supabase ES el backup off-site. Adicional: `pg_dump`
-  diario local a disco externo.
-- Monitoreo: `/sync/status` ahora también reporta lag del replicator
-  (eventos pendientes, último error, antigüedad del más viejo).
+El mini PC no tiene monitor (o no se usa). Requisito duro: tras un corte de luz,
+cuando vuelve la energía y Windows bootea, **todo el stack del server tiene que
+levantar solo, sin que nadie le dé OK, sin login, sin UAC, sin ventana**.
+
+### 9.1 El server NO corre el `.exe` de Electron
+
+El `.exe` de Electron (splash, ventana, posible prompt UAC) es **solo para las
+cajas** (tienen pantalla). El mini PC corre infra headless pura:
+
+| Componente | Cómo corre en el mini PC | Auto-start |
+|-|-|-|
+| Postgres 16 | **Windows Service** (lo crea el instalador de Postgres) | Sí, nativo. Arranca antes de cualquier login |
+| API + replicator (`STA_ROLE=server`) | **Windows Service** vía NSSM (o `node-windows`), Node puro corriendo `resources/api/server.mjs` — sin Electron | Sí, `Startup type: Automatic` |
+| Web (opcional, si las cajas usan el web del server) | Mismo service o uno aparte (`next start`) | Sí |
+
+Servicios de Windows arrancan **antes del login de usuario** → no hace falta
+auto-login, no aparece UAC (los services no lo disparan), no hay ventana que
+cerrar. Si el proceso crashea, el Service Manager lo reinicia
+(`Recovery: Restart the Service`, configurado por el script de provisión).
+
+### 9.2 Secuencia post-corte de luz (sin humano)
+
+1. Vuelve la luz → el mini PC bootea Windows.
+2. Service `postgresql-x64-16` arranca (Automatic) → DB lista.
+3. Service `sta-api` arranca (Automatic, `DependOnService=postgresql-x64-16`)
+   → API en `:3001` + replicator drenando `outbox_events` a Supabase.
+4. Las cajas (su `.exe`) detectan `LAN_OK` en el próximo healthcheck (≤10 s) y
+   sus `outbox-flusher` vacían lo encolado durante el corte (§4.2.1).
+
+Cero intervención. Tiempo típico de recuperación: lo que tarda Windows en
+bootear + ~10 s del healthcheck.
+
+### 9.3 UPS — recomendado, no opcional para producción seria
+
+Un UPS chico en el mini PC:
+- Un parpadeo de luz NO reinicia nada (se evita la clase entera de problemas).
+- En un corte real, da tiempo a que Postgres haga shutdown limpio (vía script
+  del UPS o `shutdown /s` a batería baja) → **evita corrupción del WAL** de
+  Postgres, que sería el peor escenario (DB inconsistente).
+- Sin UPS igual funciona (Postgres tiene WAL + crash recovery), pero el UPS
+  elimina el riesgo de un boot con DB dañada que sí requeriría humano.
+
+### 9.4 Provisión y mantenimiento
+
+- Script de provisión (`tools/setup-mini-pc.ps1`, a crear en Fase 1):
+  instala Postgres 16, crea DB + rol, aplica migraciones por SQL (NO
+  `prisma migrate dev`), seed, escribe `config.json` con `rol: server`,
+  registra los Windows Services con NSSM + recovery + dependencias, abre el
+  puerto 5432 solo en la subred LAN en el firewall.
+- IP fija en el mini PC (reserva DHCP por MAC o IP estática). DNS LAN opcional
+  (`server.local`).
+- Backup: el replicator a Supabase ES el backup off-site. Adicional: tarea
+  programada `pg_dump` diario a disco externo / carpeta sincronizada.
+- Monitoreo: `/sync/status` reporta lag del replicator (pendientes, último
+  error, antigüedad del más viejo) — visible desde cualquier caja o remoto.
+- Acceso administrativo al server sin monitor: RDP / AnyDesk / SSH (OpenSSH
+  para Windows) habilitado en el script, para mantenimiento puntual sin tener
+  que enchufar un monitor.
 
 ---
 
