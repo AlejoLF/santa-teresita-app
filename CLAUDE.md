@@ -13,6 +13,8 @@ problemas estructurales.
 - [docs/SPEC.md](docs/SPEC.md) — especificación funcional completa (13 secciones, ~5.000 líneas).
 - [docs/PREGUNTAS.md](docs/PREGUNTAS.md) — pendientes a resolver con el cliente.
 - [docs/wireframes/00-INDEX.md](docs/wireframes/00-INDEX.md) — wireframes ASCII.
+- [docs/SERVIDOR-LOCAL.md](docs/SERVIDOR-LOCAL.md) — diseño del servidor local LAN (Fase 1A/1B/1.5 implementadas).
+- [docs/DEPLOY-SERVIDOR-LOCAL.md](docs/DEPLOY-SERVIDOR-LOCAL.md) — **playbook de deploy** del server, cajas y PWA. Abrir cuando vayas a desplegar.
 
 ## Arquitectura: WAT (Workflows / Agents / Tools)
 

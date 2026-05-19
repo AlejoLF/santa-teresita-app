@@ -164,10 +164,16 @@ const seedDataSrc = path.join(REPO_ROOT, 'packages', 'db', 'prisma', 'seed-data'
 if (fs.existsSync(seedDataSrc)) copyDir(seedDataSrc, path.join(seedDir, 'seed-data'));
 
 // ── Artefactos del operador ──
-step('Copiando .env.example, setup-mini-pc.ps1, README');
+step('Copiando .env.example, setup-mini-pc.ps1, README, DEPLOY playbook');
 for (const f of ['.env.example', 'setup-mini-pc.ps1', 'README.md']) {
   const src = path.join(SERVER_DIR, f.startsWith('setup') ? path.join('scripts', f) : f);
   if (fs.existsSync(src)) fs.copyFileSync(src, path.join(DIST, f));
+}
+// Playbook completo de deploy (server + cajas + Vercel + verificación +
+// troubleshooting). Vale tenerlo localmente en el mini PC.
+const deployDoc = path.join(REPO_ROOT, 'docs', 'DEPLOY-SERVIDOR-LOCAL.md');
+if (fs.existsSync(deployDoc)) {
+  fs.copyFileSync(deployDoc, path.join(DIST, 'DEPLOY-SERVIDOR-LOCAL.md'));
 }
 
 step(`✓ Server build listo en ${DIST}`);
