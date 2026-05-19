@@ -7,6 +7,8 @@ import {
   listAbandoned,
   deleteAbandoned,
 } from '../services/outbox.js';
+import { replicatorLag } from '../services/replicator.js';
+import { config } from '../config.js';
 
 /**
  * Endpoints de sincronización offline (resilencia local cuando cloud cae).
@@ -49,11 +51,17 @@ export default async function syncRoutes(fastify: FastifyInstance) {
   );
 
   fastify.get('/sync/status', async () => {
+    // Lag del replicator local→Supabase. Solo tiene sentido en el server;
+    // en las cajas STA_ROLE=caja y no hay replicator (replicacion: null).
+    let replicacion: Awaited<ReturnType<typeof replicatorLag>> | null = null;
+    if (config.STA_ROLE === 'server' && config.REPLICATE_TO_URL) {
+      replicacion = await replicatorLag().catch(() => null);
+    }
     return {
       pending: pendingCount(),
       abandoned: abandonedCount(),
-      // El timestamp del último flush exitoso es estado runtime — lo dejo
-      // para más adelante (no lo necesitamos para el badge inicial).
+      rol: config.STA_ROLE,
+      replicacion,
     };
   });
 

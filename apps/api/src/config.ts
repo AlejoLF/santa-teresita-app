@@ -13,6 +13,24 @@ const ConfigSchema = z.object({
   AUTH_PIN_LOCKOUT_THRESHOLD: z.coerce.number().default(5),
   AUTH_PIN_LOCKOUT_MINUTES: z.coerce.number().default(15),
   AUDIT_HASH_SALT: z.string().min(16),
+
+  // ── Servidor local LAN (ver docs/SERVIDOR-LOCAL.md) ──
+  // STA_ROLE: 'caja' (default — el .exe de cada caja) vs 'server' (el mini PC
+  //   que es fuente de verdad y corre el replicator). Solo 'server' arranca
+  //   el worker de replicación.
+  STA_ROLE: z.enum(['caja', 'server']).default('caja'),
+  // STA_OUTBOX_REPLICATION: si true, recordAudit escribe también un
+  //   outbox_events en la MISMA tx (patrón transactional-outbox). Se prende
+  //   en el server Y en las cajas que apuntan al Postgres LAN (sus writes
+  //   también deben replicarse). Default false → comportamiento legacy
+  //   cloud-first sin cambios.
+  STA_OUTBOX_REPLICATION: z
+    .union([z.boolean(), z.string()])
+    .default(false)
+    .transform((v) => v === true || v === 'true' || v === '1'),
+  // REPLICATE_TO_URL: destino del replicator (Supabase pooler aws-1). Solo
+  //   se usa cuando STA_ROLE='server'. Si falta, el replicator no arranca.
+  REPLICATE_TO_URL: z.string().optional(),
 });
 
 const parsed = ConfigSchema.safeParse(process.env);

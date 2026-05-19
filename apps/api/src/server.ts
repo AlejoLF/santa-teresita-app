@@ -22,6 +22,7 @@ import adminRoutes from './routes/admin.js';
 import analyticsRoutes from './routes/analytics.js';
 import syncRoutes from './routes/sync.js';
 import { startOutboxFlusher } from './services/outbox-flusher.js';
+import { startReplicator } from './services/replicator.js';
 import proveedoresRoutes from './routes/proveedores.js';
 import empleadosRoutes from './routes/empleados.js';
 import configuracionRoutes from './routes/configuracion.js';
@@ -247,6 +248,10 @@ try {
     agentToken: process.env.AGENT_API_TOKEN,
   });
   app.log.info('Outbox flusher iniciado (interval 5s)');
+
+  // Replicator local → Supabase. Solo arranca si STA_ROLE=server +
+  // REPLICATE_TO_URL configurado (el mini PC). En las cajas es no-op.
+  startReplicator();
 } catch (err) {
   app.log.error(err);
   process.exit(1);

@@ -61,6 +61,26 @@ async function writeAuditEntry(client: DbClient, entry: AuditEntryInput): Promis
     where: { id: created.id },
     data: { hashActual: hash },
   });
+
+  // ── Transactional outbox (replicación local → Supabase) ──
+  // Solo si STA_OUTBOX_REPLICATION está prendido (server LAN + cajas en
+  // modo LAN). En la MISMA tx que el audit → garantía atómica: si la
+  // mutación commitea, el evento de replicación existe; si rollbackea, no.
+  // El payload es mínimo (qué fila cambió + secuencia para orden total);
+  // el replicator resuelve el row completo al drenar (idempotente).
+  if (config.STA_OUTBOX_REPLICATION) {
+    await client.outboxEvent.create({
+      data: {
+        topic: `${entry.tabla}.${entry.accion}`,
+        payload: {
+          tabla: entry.tabla,
+          registroId: entry.registroId,
+          accion: entry.accion,
+          secuencia: created.secuencia.toString(),
+        } as never,
+      },
+    });
+  }
 }
 
 /**
