@@ -576,13 +576,7 @@ function EfectivoEnCajaBlock({
     <section className="card p-5 border-l-4 border-basil-600 bg-basil-100/40">
       <div className="flex items-baseline justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="font-display text-md text-basil-600">
-            💵 Efectivo en caja (en este momento)
-          </h2>
-          <p className="text-xs text-ink-500 mt-0.5">
-            Lo que la encargada debería tener en caja física al cierre. Se actualiza con
-            cada venta y movimiento.
-          </p>
+          <h2 className="font-display text-md text-basil-600">💵 Efectivo en caja</h2>
         </div>
         <div className="text-right">
           <MoneyAmount
