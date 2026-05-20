@@ -10,6 +10,7 @@ import {
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { calcSaldoFactura } from '../services/facturas.js';
+import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
 
 /**
  * Endpoints para proveedores, facturas recibidas y el flujo de pago multi-cuenta
@@ -913,6 +914,25 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         return reply.code(500).send({ error: 'Categoría "Insumos" no existe en el sistema' });
       }
 
+      // Resolver/crear sesión actual para que el movimiento cuente en el
+      // cierre del turno. Sin esto, el pago a proveedor queda con
+      // sesion_caja_id=NULL y la encargada no lo ve al cerrar caja
+      // (aunque sí en /admin/movimientos por fecha). Mismo patrón que
+      // el fix de alpha.19 para POST /admin/movimientos.
+      let sesion;
+      try {
+        sesion = await getOrCreateSesionActual(req.usuario!.id);
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error: 'Fuera del horario de atención configurado',
+            codigo: 'FUERA_DE_HORARIO',
+            resolucion: e.resolucion,
+          });
+        }
+        throw e;
+      }
+
       // Transacción: crear movimiento, pagos, pagosFactura, actualizar facturas y saldos
       const result = await prisma.$transaction(async (tx) => {
         // 1. Movimiento (un solo egreso por la suma total)
@@ -932,6 +952,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
             observacion: body.observaciones ?? null,
             estado: EstadoMovimiento.CONFIRMADO,
             usuarioId: req.usuario!.id,
+            sesionCajaId: sesion.id,
           },
         });
 
@@ -1103,6 +1124,22 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         body.observaciones ??
         `Pago a cuenta corriente · ${proveedor.nombre} (sin factura específica)`;
 
+      // Resolver/crear sesión actual — mismo patrón que pagos-multicuenta.
+      // Sin esto el pago queda fuera del cierre de caja.
+      let sesion;
+      try {
+        sesion = await getOrCreateSesionActual(req.usuario!.id);
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error: 'Fuera del horario de atención configurado',
+            codigo: 'FUERA_DE_HORARIO',
+            resolucion: e.resolucion,
+          });
+        }
+        throw e;
+      }
+
       const result = await prisma.$transaction(async (tx) => {
         const cuentaUnica =
           new Set(body.pagos.map((p) => p.cuentaId)).size === 1
@@ -1120,6 +1157,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
             observacion: observacionFinal,
             estado: EstadoMovimiento.CONFIRMADO,
             usuarioId: req.usuario!.id,
+            sesionCajaId: sesion.id,
           },
         });
 
@@ -1259,6 +1297,22 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           : `Pago a ${proveedor.nombre}` +
             (excedente > 0.01 ? ` · excedente $${excedente.toFixed(2)} a saldo a favor` : ''));
 
+      // Resolver/crear sesión actual — mismo patrón que pagos-multicuenta.
+      // Sin esto el egreso queda fuera del cierre de caja.
+      let sesion;
+      try {
+        sesion = await getOrCreateSesionActual(req.usuario!.id);
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error: 'Fuera del horario de atención configurado',
+            codigo: 'FUERA_DE_HORARIO',
+            resolucion: e.resolucion,
+          });
+        }
+        throw e;
+      }
+
       const result = await prisma.$transaction(async (tx) => {
         // 1. Movimiento (egreso)
         const movimiento = await tx.movimiento.create({
@@ -1272,6 +1326,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
             observacion: observacionFinal,
             estado: EstadoMovimiento.CONFIRMADO,
             usuarioId: req.usuario!.id,
+            sesionCajaId: sesion.id,
           },
         });
 

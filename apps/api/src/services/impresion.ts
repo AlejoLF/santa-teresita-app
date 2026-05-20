@@ -38,9 +38,10 @@ export type DestinoImpresion = 'MOSTRADOR' | 'DELIVERY' | 'COCINA';
  * Devuelve el "repartidor" que se deriva automáticamente del canal cuando
  * es una plataforma externa. Para los canales internos (MOSTRADOR/TELEFONO/
  * WHATSAPP/WEB) devuelve null — en esos casos el repartidor lo asigna
- * manualmente la cajera (Damián / otro empleado / DELIVERATE / etc.).
+ * manualmente la cajera (Damián / otro empleado / DELIVERATE / etc.) o,
+ * si no asignó nada, cae al default de `configuracion_sistema.delivery_repartidor_default`.
  */
-function repartidorPorCanal(canal: string): string | undefined {
+export function repartidorPorCanal(canal: string): string | undefined {
   switch (canal) {
     case 'RAPPI':
       return 'RAPPI';
@@ -53,6 +54,58 @@ function repartidorPorCanal(canal: string): string | undefined {
     default:
       return undefined;
   }
+}
+
+/**
+ * Lee el repartidor default configurado en `configuracion_sistema` para los
+ * canales internos sin asignación manual. Cache simple por proceso para no
+ * pegar a la DB en cada impresión. La encargada puede cambiarlo desde admin
+ * — invalidar con `resetDeliveryRepartidorDefaultCache()` cuando se actualice.
+ */
+let _deliveryRepartidorDefaultCache: string | null | undefined;
+async function getDeliveryRepartidorDefault(client: DbClient = prisma): Promise<string | undefined> {
+  if (_deliveryRepartidorDefaultCache !== undefined) {
+    return _deliveryRepartidorDefaultCache ?? undefined;
+  }
+  const row = await client.configuracionSistema.findUnique({
+    where: { clave: 'delivery_repartidor_default' },
+  });
+  const valor = row?.valor?.trim();
+  _deliveryRepartidorDefaultCache = valor && valor.length > 0 ? valor : null;
+  return _deliveryRepartidorDefaultCache ?? undefined;
+}
+
+export function resetDeliveryRepartidorDefaultCache(): void {
+  _deliveryRepartidorDefaultCache = undefined;
+}
+
+/**
+ * Resuelve el repartidor a imprimir en tickets/comandas según la prioridad:
+ *   1. Empleado interno asignado explícitamente (`_empleadoNombre` en snapshot)
+ *   2. Empresa explícita (DELIVERATE u otra cargada por la cajera)
+ *   3. Inferido del canal (RAPPI/PEDIDOS_YA/MERCADO_LIBRE/DELIVERATE)
+ *   4. Default de `configuracion_sistema.delivery_repartidor_default` (Damián por seed)
+ *      — sólo aplica si modalidad es DELIVERY_PROPIO (no en TAKE_AWAY donde no hay reparto).
+ */
+async function resolverRepartidor(args: {
+  canal: string;
+  modalidad: string;
+  deliveryInfo: { empresaExterna?: string | null; direccionSnapshot?: unknown } | null;
+  client?: DbClient;
+}): Promise<string | undefined> {
+  const snap = (args.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
+  const empleado = typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
+  const empresaExplicita =
+    args.deliveryInfo?.empresaExterna ??
+    (typeof snap._empresaExterna === 'string' ? snap._empresaExterna : undefined);
+  const inferido = repartidorPorCanal(args.canal);
+  const resuelto = empleado ?? empresaExplicita ?? inferido;
+  if (resuelto) return resuelto;
+  // Fallback al default global SOLO si la venta es delivery (no TAKE_AWAY).
+  if (args.modalidad === 'DELIVERY_PROPIO') {
+    return getDeliveryRepartidorDefault(args.client);
+  }
+  return undefined;
 }
 
 /**
@@ -137,16 +190,12 @@ export async function buildComandaPayload(
   if (venta.modalidad !== 'TAKE_AWAY') {
     const snap =
       (venta.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
-    // Repartidor: prioridad → empleado interno > empresa explícita
-    // > inferido del canal de plataforma externa. Así las comandas de
-    // RAPPI/PYA/MELI/DELIVERATE siempre muestran quién retira.
-    const empleadoNombre =
-      typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
-    const empresaExplicita =
-      venta.deliveryInfo?.empresaExterna ??
-      (typeof snap._empresaExterna === 'string' ? snap._empresaExterna : undefined);
-    const empresaInferida = repartidorPorCanal(venta.canal);
-    const repartidor = empleadoNombre ?? empresaExplicita ?? empresaInferida;
+    const repartidor = await resolverRepartidor({
+      canal: venta.canal,
+      modalidad: venta.modalidad,
+      deliveryInfo: venta.deliveryInfo,
+      client,
+    });
     delivery = {
       clienteNombre: snap.clienteNombre ?? null,
       clienteTelefono: snap.clienteTelefono ?? null,
@@ -181,18 +230,16 @@ export async function buildComandaPayload(
 }
 
 /**
- * Encolar comandas para una venta — aplica las reglas de `determinarDestinos`
- * y crea trabajos del tipo correcto por destino:
- *   - COCINA   → COMANDA_COCINA (formato comanda con items para preparar)
- *   - DELIVERY → TICKET_DELIVERY (ticket completo: cliente, dirección, total,
- *                forma de pago, hora prometida — todo lo que el motoquero
- *                necesita para entregar y cobrar)
+ * Encolar COCINA al crear venta y al agregar items.
  *
- * MOSTRADOR no se encola desde acá — el ticket cliente sale en
- * `encolarTicketClienteParaVenta` al finalizar la venta.
+ * IMPORTANTE: el TICKET_DELIVERY NO se encola desde acá — al momento de
+ * crear la venta todavía no hay pago registrado, así que el ticket saldría
+ * con el método "EFECTIVO / A_COBRAR" default (incidente real: la encargada
+ * recibió tickets con metodo=EFECTIVO cuando la venta se había cobrado con
+ * DEBITO). El TICKET_DELIVERY se encola al finalizar la venta en
+ * `encolarTicketDeliveryParaVenta`, con el pago real ya registrado.
  *
- * Se llama al crear venta y al agregar items. Idempotente para retries: cada
- * llamada genera trabajos nuevos.
+ * Idempotente para retries: cada llamada genera trabajos nuevos.
  */
 export async function encolarComandasParaVenta(
   ventaId: string,
@@ -204,38 +251,58 @@ export async function encolarComandasParaVenta(
   });
   if (!venta) return [];
 
-  const destinos = determinarDestinos(venta.canal, venta.tieneCocina);
+  // Sólo COCINA en este path. DELIVERY se mueve al cierre/finalización.
+  const destinos = determinarDestinos(venta.canal, venta.tieneCocina).filter(
+    (d) => d === 'COCINA',
+  );
   if (destinos.length === 0) return [];
 
-  // Cocina y delivery tienen payloads distintos; las construimos solo si
-  // hace falta para no pegarle a la DB de más.
-  let comandaPayload: Record<string, unknown> | null = null;
-  let deliveryPayload: Record<string, unknown> | null = null;
-
+  const comandaPayload = await buildComandaPayload(ventaId, tx);
   for (const destino of destinos) {
-    if (destino === 'COCINA') {
-      comandaPayload ??= await buildComandaPayload(ventaId, tx);
-      await encolarTrabajo({
-        tipo: TipoTrabajoImpresion.COMANDA_COCINA,
-        destino,
-        payload: comandaPayload,
-        ventaId,
-        tx,
-      });
-    } else if (destino === 'DELIVERY') {
-      deliveryPayload ??= await buildTicketDeliveryPayload(ventaId, tx);
-      if (deliveryPayload) {
-        await encolarTrabajo({
-          tipo: TipoTrabajoImpresion.TICKET_DELIVERY,
-          destino,
-          payload: deliveryPayload,
-          ventaId,
-          tx,
-        });
-      }
-    }
+    await encolarTrabajo({
+      tipo: TipoTrabajoImpresion.COMANDA_COCINA,
+      destino,
+      payload: comandaPayload,
+      ventaId,
+      tx,
+    });
   }
   return destinos;
+}
+
+/**
+ * Encola el TICKET_DELIVERY al finalizar la venta — con el pago REAL ya
+ * registrado en la DB. Sólo aplica para canales internos con DELIVERY_PROPIO
+ * (TELEFONO/WHATSAPP/WEB). Las apps externas (RAPPI/PYA/MELI/DELIVERATE) no
+ * necesitan TICKET_DELIVERY: la propia app maneja la entrega.
+ *
+ * Devuelve true si se encoló (la venta era delivery propio), false si no.
+ */
+export async function encolarTicketDeliveryParaVenta(
+  ventaId: string,
+  tx: Prisma.TransactionClient,
+): Promise<boolean> {
+  const venta = await tx.venta.findUnique({
+    where: { id: ventaId },
+    select: { canal: true, modalidad: true },
+  });
+  if (!venta) return false;
+  // Apps externas y mostrador no van por acá.
+  if (venta.modalidad !== 'DELIVERY_PROPIO') return false;
+  const esCanalInterno =
+    venta.canal === 'TELEFONO' || venta.canal === 'WHATSAPP' || venta.canal === 'WEB';
+  if (!esCanalInterno) return false;
+
+  const payload = await buildTicketDeliveryPayload(ventaId, tx);
+  if (!payload) return false;
+  await encolarTrabajo({
+    tipo: TipoTrabajoImpresion.TICKET_DELIVERY,
+    destino: 'DELIVERY',
+    payload,
+    ventaId,
+    tx,
+  });
+  return true;
 }
 
 /**
@@ -301,15 +368,23 @@ async function buildTicketDeliveryPayload(
     venta.deliveryInfo?.observaciones ||
     undefined;
 
-  // Repartidor: empleado explícito > empresa explícita > inferido del canal.
+  // Repartidor: empleado explícito > empresa explícita > inferido del canal
+  // > default global (configuracion_sistema.delivery_repartidor_default).
   // El renderer del ticket delivery elige empleadoNombre o empresaExterna,
-  // así que populamos AL MENOS uno cuando aplica.
-  const empleadoNombre =
+  // así que decidimos cuál de los dos populamos según el origen del valor.
+  const empleadoExplicito =
     typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
   const empresaExplicita =
     venta.deliveryInfo?.empresaExterna ??
     (typeof snap._empresaExterna === 'string' ? snap._empresaExterna : undefined);
-  const empresaExterna = empresaExplicita ?? repartidorPorCanal(venta.canal);
+  const empresaInferida = empresaExplicita ?? repartidorPorCanal(venta.canal);
+  let empleadoNombre: string | undefined = empleadoExplicito;
+  let empresaExterna: string | undefined = empresaInferida;
+  if (!empleadoNombre && !empresaExterna && venta.modalidad === 'DELIVERY_PROPIO') {
+    // Default global a empleado interno (típicamente "Damián").
+    const def = await getDeliveryRepartidorDefault(client);
+    if (def) empleadoNombre = def;
+  }
 
   // Pago: si hay pagos confirmados → PAGADO. Sino A_COBRAR (motoquero cobra).
   const pagosConfirmados = venta.pagos.filter((p) => p.estado === 'CONFIRMADO');
@@ -366,8 +441,11 @@ async function buildTicketDeliveryPayload(
 /**
  * Encolar comandas CANCELADAS para una venta — sale con marca
  * "*** CANCELADA ***" en todas las comanderas donde se imprimió el original
- * (mostrador / delivery / cocina), para que el operador en cada estación
- * tache el pedido.
+ * para que el operador en cada estación tache el pedido.
+ *
+ * Filtra DELIVERY si la venta no fue finalizada — sólo se encola el ticket
+ * delivery al finalizar (con el pago real), así que si la anularon antes de
+ * cobrar, no hay nada que cancelar en la comandera de delivery.
  */
 export async function encolarComandasCanceladas(
   ventaId: string,
@@ -375,11 +453,16 @@ export async function encolarComandasCanceladas(
 ): Promise<DestinoImpresion[]> {
   const venta = await tx.venta.findUnique({
     where: { id: ventaId },
-    select: { canal: true, tieneCocina: true },
+    select: { canal: true, tieneCocina: true, fechaFinalizacion: true },
   });
   if (!venta) return [];
 
-  const destinos = determinarDestinos(venta.canal, venta.tieneCocina);
+  let destinos = determinarDestinos(venta.canal, venta.tieneCocina);
+  // Si la venta nunca llegó a finalizarse, el TICKET_DELIVERY nunca se
+  // imprimió — no encolar cancelación de DELIVERY.
+  if (!venta.fechaFinalizacion) {
+    destinos = destinos.filter((d) => d !== 'DELIVERY');
+  }
   if (destinos.length === 0) return [];
 
   const payload = await buildComandaPayload(ventaId, tx);
@@ -427,17 +510,15 @@ export async function encolarTicketClienteParaVenta(
   if (!venta) return false;
   if (venta.canal !== 'MOSTRADOR') return false;
 
-  // Repartidor: empleado interno > empresa explícita > inferido del canal.
-  // Se imprime en la misma sección que el método de pago para que la
-  // encargada vea quién va a entregar al despachar.
-  let repartidor: string | undefined;
-  const snap =
-    (venta.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
-  const emp = typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
-  const ext =
-    venta.deliveryInfo?.empresaExterna ??
-    (typeof snap._empresaExterna === 'string' ? snap._empresaExterna : undefined);
-  repartidor = emp ?? ext ?? repartidorPorCanal(venta.canal) ?? undefined;
+  // Repartidor: empleado interno > empresa explícita > inferido del canal
+  // > default global. Se imprime en la misma sección que el método de pago
+  // para que la encargada vea quién va a entregar al despachar.
+  const repartidor = await resolverRepartidor({
+    canal: venta.canal,
+    modalidad: venta.modalidad,
+    deliveryInfo: venta.deliveryInfo,
+    client: tx,
+  });
 
   const pagosConfirmados = venta.pagos.filter((p) => p.estado === 'CONFIRMADO');
   let pagoInfo: { metodo: string; recibido?: string; cambio?: string };

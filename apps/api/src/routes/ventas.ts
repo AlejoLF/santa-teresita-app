@@ -19,6 +19,7 @@ import { aprobarConPinAdmin } from '../services/auth.js';
 import {
   encolarComandasCanceladas,
   encolarTicketClienteParaVenta,
+  encolarTicketDeliveryParaVenta,
 } from '../services/impresion.js';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta, EstadoPago } from '@sta/db';
@@ -536,10 +537,17 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           tx,
         });
 
-        // Encolamos el ticket del cliente DENTRO de la misma transacción.
-        // Si la transición rolleba, no queda print job huérfano. Solo se
-        // encola si canal=MOSTRADOR (el cliente está físicamente acá).
+        // Encolamos los tickets físicos DENTRO de la misma transacción —
+        // si la transición rollea, no quedan print jobs huérfanos.
+        //   - TICKET_CLIENTE: sólo si canal=MOSTRADOR (cliente está acá).
+        //   - TICKET_DELIVERY: sólo si modalidad=DELIVERY_PROPIO + canal interno
+        //     (TELEFONO/WHATSAPP/WEB). Se emite acá (no al crear venta) para
+        //     que refleje el método de pago real — antes salía con default
+        //     "EFECTIVO / A_COBRAR" porque al crear venta todavía no había
+        //     pagos registrados (incidente: ticket de #79 DEBITO impreso como
+        //     EFECTIVO).
         await encolarTicketClienteParaVenta(venta.id, tx);
+        await encolarTicketDeliveryParaVenta(venta.id, tx);
 
         return updated;
       });

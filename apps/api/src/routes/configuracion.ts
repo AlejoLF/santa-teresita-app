@@ -7,6 +7,7 @@ import { PinSchema, pinEsDebil } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { invalidateAuthCacheByUsuario } from '../plugins/auth.js';
 import { invalidate as invalidateCache } from '../lib/cache.js';
+import { resetDeliveryRepartidorDefaultCache } from '../services/impresion.js';
 import {
   DEFAULT_CONFIG,
   getConfigHorarios,
@@ -542,6 +543,10 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         where: { clave: params.clave },
         data: { valor: body.valor, actualizadoPor: req.usuario!.nombre },
       });
+      // Invalidar caches en proceso de servicios que cachean por clave.
+      if (params.clave === 'delivery_repartidor_default') {
+        resetDeliveryRepartidorDefaultCache();
+      }
       await recordAudit({
         tabla: 'configuracion_sistema',
         registroId: updated.id,

@@ -1285,6 +1285,15 @@ const CONFIG_DEFAULT: Array<{
     descripcion: 'Instagram que aparece en el ticket',
     categoria: 'ticket',
   },
+  // Delivery
+  {
+    clave: 'delivery_repartidor_default',
+    valor: 'Damián',
+    tipo: 'string',
+    descripcion:
+      'Repartidor que se imprime en los tickets cuando la venta es DELIVERY_PROPIO de canal interno (TELEFONO/WHATSAPP/WEB) y la cajera no asigna a nadie explícitamente. Si cambia el motoquero, editar acá.',
+    categoria: 'local',
+  },
 ];
 
 async function seedConfiguracion() {

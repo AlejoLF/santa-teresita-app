@@ -118,18 +118,32 @@ export function ReimprimirModal({
   const cliente = (() => {
     if (!venta?.deliveryInfo?.direccionSnapshot) return null;
     const s = venta.deliveryInfo.direccionSnapshot;
+    // Espejo de la lógica del servidor (services/impresion.ts):
+    //   empleado explícito > empresa explícita > inferido del canal externo.
+    // El default global de configuración (típicamente "Damián") lo resuelve
+    // el servidor en tiempo de impresión — acá mostramos "(default)" para que
+    // la encargada vea que va a salir un repartidor aunque la preview esté en
+    // blanco. La regla final la decide el render del ticket.
+    const empleado = typeof s._empleadoNombre === 'string' ? s._empleadoNombre : null;
+    const empresaExplicita =
+      venta.deliveryInfo.empresaExterna ??
+      (typeof s._empresaExterna === 'string' ? s._empresaExterna : null);
+    const inferidoCanal: string | null = ({
+      RAPPI: 'RAPPI',
+      PEDIDOS_YA: 'PEDIDOS YA',
+      MERCADO_LIBRE: 'MERCADO LIBRE',
+      DELIVERATE: 'DELIVERATE',
+    } as Record<string, string>)[venta.canal] ?? null;
+    const repartidor = empleado ?? empresaExplicita ?? inferidoCanal;
+    const repartidorAplicaraDefault =
+      !repartidor && venta.modalidad === 'DELIVERY_PROPIO';
     return {
       nombre: typeof s.clienteNombre === 'string' ? s.clienteNombre : null,
       telefono: typeof s.clienteTelefono === 'string' ? s.clienteTelefono : null,
       direccion: typeof s.direccion === 'string' ? s.direccion : null,
       indicaciones: typeof s.indicaciones === 'string' ? s.indicaciones : null,
-      repartidor:
-        venta.deliveryInfo.empresaExterna ??
-        (typeof s._empleadoNombre === 'string'
-          ? s._empleadoNombre
-          : typeof s._empresaExterna === 'string'
-            ? s._empresaExterna
-            : null),
+      repartidor,
+      repartidorAplicaraDefault,
     };
   })();
 
@@ -194,6 +208,11 @@ export function ReimprimirModal({
                     {cliente.indicaciones && <div>Ref: {cliente.indicaciones}</div>}
                     {cliente.repartidor && (
                       <div className="font-bold">Repartidor: {cliente.repartidor}</div>
+                    )}
+                    {!cliente.repartidor && cliente.repartidorAplicaraDefault && (
+                      <div className="text-ink-500 italic">
+                        Repartidor: (default del sistema)
+                      </div>
                     )}
                     <div className="border-t border-dashed border-ink-300 my-2" />
                   </div>

@@ -1391,20 +1391,34 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       if (!sesion) return { sesion: null, resolucion };
 
       // Sumar pagos de ventas finalizadas en esta sesión, por método
-      const pagos = await prisma.pago.groupBy({
-        by: ['metodo'],
-        _sum: { monto: true },
-        _count: { _all: true },
+      // (incluye también la cuenta destino para distinguir lo que entró a
+      // caja física vs lo que quedó en banco/wallet/cuentas a cobrar).
+      const pagosRaw = await prisma.pago.findMany({
         where: {
           estado: 'CONFIRMADO',
           venta: { sesionCajaId: sesion.id, estado: EstadoVenta.FINALIZADA },
         },
+        select: {
+          metodo: true,
+          monto: true,
+          cuenta: { select: { tipo: true } },
+        },
       });
 
-      // Movimientos del turno
+      // Movimientos del turno + cuentas para saber el efecto en caja física.
+      // Resta egreso/transferencia desde EFECTIVO; suma ingreso/transferencia hacia EFECTIVO.
+      // El resto (egreso desde banco, ingreso a banco, etc.) NO afecta caja —
+      // siguen viéndose en el listado pero no en la fórmula de efectivo.
       const movimientos = await prisma.movimiento.findMany({
         where: { sesionCajaId: sesion.id, estado: EstadoMovimiento.CONFIRMADO },
-        select: { id: true, tipo: true, monto: true, categoria: { select: { nombre: true } } },
+        select: {
+          id: true,
+          tipo: true,
+          monto: true,
+          categoria: { select: { nombre: true } },
+          cuentaOrigen: { select: { tipo: true, nombre: true } },
+          cuentaDestino: { select: { tipo: true, nombre: true } },
+        },
       });
 
       const ventasCount = await prisma.venta.count({
@@ -1414,22 +1428,49 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         where: { sesionCajaId: sesion.id, estado: EstadoVenta.PROCESADA },
       });
 
-      const cobrosPorMetodo = pagos.map((p) => ({
-        metodo: p.metodo,
-        monto: Number(p._sum.monto ?? 0).toFixed(2),
-        cantidad: p._count._all,
+      // Cobros por método — informativo, no afecta el cálculo de caja.
+      const cobrosByMetodo = new Map<string, { monto: number; cantidad: number }>();
+      for (const p of pagosRaw) {
+        const cur = cobrosByMetodo.get(p.metodo) ?? { monto: 0, cantidad: 0 };
+        cur.monto += Number(p.monto);
+        cur.cantidad += 1;
+        cobrosByMetodo.set(p.metodo, cur);
+      }
+      const cobrosPorMetodo = [...cobrosByMetodo.entries()].map(([metodo, v]) => ({
+        metodo,
+        monto: v.monto.toFixed(2),
+        cantidad: v.cantidad,
       }));
 
-      const totalEfectivo = pagos
-        .filter((p) => p.metodo === 'EFECTIVO')
-        .reduce((acc, p) => acc + Number(p._sum.monto ?? 0), 0);
+      // Plata que ENTRÓ a caja física por ventas (filtra por cuenta destino EFECTIVO,
+      // no por método — un EFECTIVO contra cuenta a cobrar de plataforma no es caja).
+      const totalEfectivo = pagosRaw
+        .filter((p) => p.cuenta?.tipo === 'EFECTIVO')
+        .reduce((acc, p) => acc + Number(p.monto), 0);
 
-      const totalEgresos = movimientos
-        .filter((m) => m.tipo === 'EGRESO')
+      // Plata que SALIÓ de caja física por movimientos (egresos + transferencias internas saliendo).
+      const totalEgresosCaja = movimientos
+        .filter(
+          (m) =>
+            (m.tipo === 'EGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
+            m.cuentaOrigen?.tipo === 'EFECTIVO',
+        )
+        .reduce((acc, m) => acc + Number(m.monto), 0);
+
+      // Plata que ENTRÓ a caja física por movimientos (ingresos + transferencias internas entrando).
+      const totalIngresosCaja = movimientos
+        .filter(
+          (m) =>
+            (m.tipo === 'INGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
+            m.cuentaDestino?.tipo === 'EFECTIVO',
+        )
         .reduce((acc, m) => acc + Number(m.monto), 0);
 
       const recaudacionEsperadaEfectivo =
-        Number(sesion.existenciaInicial) + totalEfectivo - totalEgresos;
+        Number(sesion.existenciaInicial) +
+        totalEfectivo +
+        totalIngresosCaja -
+        totalEgresosCaja;
 
       return {
         sesion: {
@@ -1447,16 +1488,30 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           usuarioCierre: sesion.usuarioCierre?.nombre ?? null,
         },
         cobrosPorMetodo,
-        movimientos: movimientos.map((m) => ({
-          id: m.id,
-          tipo: m.tipo,
-          monto: m.monto.toString(),
-          categoria: m.categoria.nombre,
-        })),
+        // Listado completo de movimientos del turno (sin filtrar por cuenta —
+        // la encargada quiere verlos todos; el filtro es sólo en el cálculo).
+        // Cada item incluye `afectaCaja` para que la UI pueda destacarlos.
+        movimientos: movimientos.map((m) => {
+          const sale = m.cuentaOrigen?.tipo === 'EFECTIVO';
+          const entra = m.cuentaDestino?.tipo === 'EFECTIVO';
+          return {
+            id: m.id,
+            tipo: m.tipo,
+            monto: m.monto.toString(),
+            categoria: m.categoria.nombre,
+            cuentaOrigen: m.cuentaOrigen?.nombre ?? null,
+            cuentaDestino: m.cuentaDestino?.nombre ?? null,
+            afectaCaja: sale || entra,
+          };
+        }),
         ventasCount,
         ventasAbiertas,
         totalEfectivo: totalEfectivo.toFixed(2),
-        totalEgresos: totalEgresos.toFixed(2),
+        totalIngresosCaja: totalIngresosCaja.toFixed(2),
+        totalEgresosCaja: totalEgresosCaja.toFixed(2),
+        // Alias deprecado conservado por compatibilidad de UI vieja. Igual al egresos-de-caja
+        // — antes incluía egresos desde cualquier cuenta, ahora sólo desde caja.
+        totalEgresos: totalEgresosCaja.toFixed(2),
         recaudacionEsperadaEfectivo: recaudacionEsperadaEfectivo.toFixed(2),
         resolucion,
       };
@@ -1501,27 +1556,43 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: `La sesión está ${sesion.estado}` });
       }
 
-      // Calcular esperada
+      // Calcular esperada — sólo lo que entra y sale de la caja física (tipo=EFECTIVO).
+      // Antes (pre-fix) se sumaba TODO pago con metodo='EFECTIVO' y se restaban TODOS
+      // los egresos de la sesión sin importar cuenta origen — eso mezclaba pagos a
+      // proveedores hechos desde banco con la caja, dando diferencias fantasma de
+      // millones (incidente: cierre del 17/05 MAÑANA con dif=$4.86M por un egreso de
+      // Santander que se restaba como si fuera efectivo).
       const pagosEfectivo = await prisma.pago.aggregate({
         _sum: { monto: true },
         where: {
-          metodo: 'EFECTIVO',
           estado: 'CONFIRMADO',
+          cuenta: { tipo: 'EFECTIVO' },
           venta: { sesionCajaId: sesion.id, estado: EstadoVenta.FINALIZADA },
         },
       });
-      const egresos = await prisma.movimiento.aggregate({
+      const egresosCaja = await prisma.movimiento.aggregate({
         _sum: { monto: true },
         where: {
           sesionCajaId: sesion.id,
-          tipo: 'EGRESO',
           estado: EstadoMovimiento.CONFIRMADO,
+          tipo: { in: ['EGRESO', 'TRANSFERENCIA_INTERNA'] },
+          cuentaOrigen: { tipo: 'EFECTIVO' },
+        },
+      });
+      const ingresosCaja = await prisma.movimiento.aggregate({
+        _sum: { monto: true },
+        where: {
+          sesionCajaId: sesion.id,
+          estado: EstadoMovimiento.CONFIRMADO,
+          tipo: { in: ['INGRESO', 'TRANSFERENCIA_INTERNA'] },
+          cuentaDestino: { tipo: 'EFECTIVO' },
         },
       });
       const esperada =
         Number(sesion.existenciaInicial) +
-        Number(pagosEfectivo._sum.monto ?? 0) -
-        Number(egresos._sum.monto ?? 0);
+        Number(pagosEfectivo._sum.monto ?? 0) +
+        Number(ingresosCaja._sum.monto ?? 0) -
+        Number(egresosCaja._sum.monto ?? 0);
       const final = Number(body.existenciaFinal);
       const diferencia = final - esperada;
 
