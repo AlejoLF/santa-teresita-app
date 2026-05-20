@@ -8,6 +8,7 @@ import { recordAudit } from '../services/audit.js';
 import { invalidateAuthCacheByUsuario } from '../plugins/auth.js';
 import { invalidate as invalidateCache } from '../lib/cache.js';
 import { resetDeliveryRepartidorDefaultCache } from '../services/impresion.js';
+import { getMailerStatus } from '../services/mailer.js';
 import {
   DEFAULT_CONFIG,
   getConfigHorarios,
@@ -623,6 +624,120 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         contexto: { clave: 'cierre_email_recipients' },
       });
       return { ok: true, emails: body.emails };
+    },
+  );
+
+  // ────────────────────────────────────────────────────────────────────
+  //   SMTP — servidor de email para envíos de cierre
+  // ────────────────────────────────────────────────────────────────────
+  // Antes vivía sólo en .env (no llegaba al .exe del local). Ahora la
+  // encargada lo configura desde /admin/configuracion/usuarios. Storage en
+  // configuracion_sistema (claves smtp_*). El password se guarda plano en
+  // la DB local (acceso sólo desde la red del local) y se enmascara en
+  // todas las responses de la API.
+
+  const SMTP_KEYS = [
+    'smtp_host',
+    'smtp_port',
+    'smtp_secure',
+    'smtp_user',
+    'smtp_pass',
+    'smtp_from',
+    'email_auto_envio_cierre',
+  ] as const;
+
+  fastify.get(
+    '/admin/configuracion/smtp',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const rows = await prisma.configuracionSistema.findMany({
+        where: { clave: { in: [...SMTP_KEYS] } },
+      });
+      const map = Object.fromEntries(rows.map((r) => [r.clave, r.valor]));
+      const status = await getMailerStatus();
+      return {
+        host: map.smtp_host ?? '',
+        port: map.smtp_port ?? '587',
+        secure: map.smtp_secure === 'true',
+        user: map.smtp_user ?? '',
+        // Enmascaramos el pass: si está seteado mostramos sólo si tiene algo.
+        passConfigurado: !!(map.smtp_pass && map.smtp_pass.length > 0),
+        from: map.smtp_from ?? '',
+        autoEnvioCierre: map.email_auto_envio_cierre === 'true',
+        // Estado actual del mailer (incluye fallback al .env si la DB no tiene).
+        status,
+      };
+    },
+  );
+
+  fastify.put(
+    '/admin/configuracion/smtp',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z.object({
+          host: z.string().max(200).optional(),
+          port: z.union([z.number().int().min(1).max(65535), z.string().regex(/^\d+$/)]).optional(),
+          secure: z.boolean().optional(),
+          user: z.string().max(200).optional(),
+          // Si pass viene undefined o "" → NO se actualiza. Para limpiar el
+          // pass guardado, mandar { pass: '__CLEAR__' }.
+          pass: z.string().max(200).optional(),
+          from: z.string().max(200).optional(),
+          autoEnvioCierre: z.boolean().optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const body = req.body as {
+        host?: string;
+        port?: number | string;
+        secure?: boolean;
+        user?: string;
+        pass?: string;
+        from?: string;
+        autoEnvioCierre?: boolean;
+      };
+      const updates: Array<{ clave: string; valor: string }> = [];
+      if (body.host !== undefined) updates.push({ clave: 'smtp_host', valor: body.host });
+      if (body.port !== undefined) updates.push({ clave: 'smtp_port', valor: String(body.port) });
+      if (body.secure !== undefined) updates.push({ clave: 'smtp_secure', valor: body.secure ? 'true' : 'false' });
+      if (body.user !== undefined) updates.push({ clave: 'smtp_user', valor: body.user });
+      if (body.pass !== undefined && body.pass !== '') {
+        updates.push({ clave: 'smtp_pass', valor: body.pass === '__CLEAR__' ? '' : body.pass });
+      }
+      if (body.from !== undefined) updates.push({ clave: 'smtp_from', valor: body.from });
+      if (body.autoEnvioCierre !== undefined) {
+        updates.push({ clave: 'email_auto_envio_cierre', valor: body.autoEnvioCierre ? 'true' : 'false' });
+      }
+      for (const u of updates) {
+        const before = await prisma.configuracionSistema.findUnique({ where: { clave: u.clave } });
+        const row = await prisma.configuracionSistema.upsert({
+          where: { clave: u.clave },
+          create: {
+            clave: u.clave,
+            valor: u.valor,
+            tipo: u.clave === 'smtp_port' ? 'number' : u.clave === 'smtp_secure' || u.clave === 'email_auto_envio_cierre' ? 'boolean' : 'string',
+            categoria: 'email',
+            editable: true,
+            actualizadoPor: req.usuario?.nombre ?? null,
+          },
+          update: { valor: u.valor, actualizadoPor: req.usuario?.nombre ?? null },
+        });
+        await recordAudit({
+          tabla: 'configuracion_sistema',
+          registroId: row.id,
+          accion: before ? 'UPDATE' : 'INSERT',
+          usuarioId: req.usuario!.id,
+          // Enmascaramos el pass en el audit log para no leakear.
+          valorAnterior: before
+            ? { valor: u.clave === 'smtp_pass' ? '***' : before.valor }
+            : null,
+          valorNuevo: { valor: u.clave === 'smtp_pass' ? '***' : u.valor },
+          contexto: { clave: u.clave },
+        });
+      }
+      return { ok: true, applied: updates.length };
     },
   );
 

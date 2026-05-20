@@ -1294,6 +1294,61 @@ const CONFIG_DEFAULT: Array<{
       'Repartidor que se imprime en los tickets cuando la venta es DELIVERY_PROPIO de canal interno (TELEFONO/WHATSAPP/WEB) y la cajera no asigna a nadie explícitamente. Si cambia el motoquero, editar acá.',
     categoria: 'local',
   },
+  // SMTP — para que la encargada configure desde admin, no desde .env.
+  // El password NO se seedea (se setea por única vez desde la UI). Defaults
+  // apuntan a Gmail con la cuenta del local.
+  {
+    clave: 'smtp_host',
+    valor: 'smtp.gmail.com',
+    tipo: 'string',
+    descripcion: 'Servidor SMTP para enviar emails del cierre (default: Gmail).',
+    categoria: 'email',
+  },
+  {
+    clave: 'smtp_port',
+    valor: '587',
+    tipo: 'number',
+    descripcion: 'Puerto SMTP (587 = STARTTLS, 465 = SSL).',
+    categoria: 'email',
+  },
+  {
+    clave: 'smtp_secure',
+    valor: 'false',
+    tipo: 'boolean',
+    descripcion: 'TLS implícito (puerto 465). En general false para Gmail/587.',
+    categoria: 'email',
+  },
+  {
+    clave: 'smtp_user',
+    valor: '',
+    tipo: 'string',
+    descripcion: 'Usuario SMTP (en Gmail: la dirección completa, ej. local@gmail.com).',
+    categoria: 'email',
+  },
+  {
+    clave: 'smtp_pass',
+    valor: '',
+    tipo: 'string',
+    descripcion:
+      'Password SMTP. En Gmail: App Password de 16 chars (sin espacios). Generar en https://myaccount.google.com/apppasswords. NO la contraseña normal de la cuenta.',
+    categoria: 'email',
+  },
+  {
+    clave: 'smtp_from',
+    valor: 'Santa Teresita Pastas <>',
+    tipo: 'string',
+    descripcion:
+      'Remitente que aparece en los emails. Formato: "Nombre <email@dominio>". Si queda vacío entre los <>, se usa smtp_user.',
+    categoria: 'email',
+  },
+  {
+    clave: 'email_auto_envio_cierre',
+    valor: 'true',
+    tipo: 'boolean',
+    descripcion:
+      'Si está en true, al cerrar una sesión de caja se envía automáticamente el email con el adjunto Excel a los destinatarios configurados.',
+    categoria: 'email',
+  },
 ];
 
 async function seedConfiguracion() {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
@@ -189,12 +190,16 @@ export default function AdminCierresPage() {
             <div
               key={s.id}
               className={cn(
-                'card p-4',
+                'card p-4 hover:shadow-md transition-shadow',
                 necesitaAprobacion && 'border-l-4 border-saffron-600',
               )}
             >
               <div className="flex items-baseline justify-between mb-3">
-                <div>
+                <Link
+                  href={`/admin/cierres/${s.id}`}
+                  className="hover:text-teresita-700 transition-colors"
+                  title="Ver detalle del cierre"
+                >
                   <span className="font-display text-md text-ink-900">
                     {new Date(s.fecha).toLocaleDateString('es-AR', {
                       weekday: 'short',
@@ -216,7 +221,7 @@ export default function AdminCierresPage() {
                     {' · cerró '}
                     {s.usuarioCierre?.nombre ?? '—'}
                   </div>
-                </div>
+                </Link>
                 <span
                   className={cn(
                     'text-2xs font-medium px-2 py-0.5 rounded uppercase tracking-wider',
@@ -227,31 +232,36 @@ export default function AdminCierresPage() {
                 </span>
               </div>
 
-              <div className="grid grid-cols-4 gap-3 text-sm">
-                <div>
-                  <div className="text-2xs text-ink-500 uppercase">Inicial</div>
-                  <MoneyAmount value={s.existenciaInicial} />
+              <Link href={`/admin/cierres/${s.id}`} className="block">
+                <div className="grid grid-cols-4 gap-3 text-sm">
+                  <div>
+                    <div className="text-2xs text-ink-500 uppercase">Inicial</div>
+                    <MoneyAmount value={s.existenciaInicial} />
+                  </div>
+                  <div title="Lo que el sistema calculó que debería haber en la caja física">
+                    <div className="text-2xs text-ink-500 uppercase">Esperado</div>
+                    <MoneyAmount value={s.recaudacionEsperada} />
+                  </div>
+                  <div title="Lo que la encargada contó físicamente al cerrar">
+                    <div className="text-2xs text-ink-500 uppercase">Contado</div>
+                    <MoneyAmount value={s.existenciaFinal} className="text-teresita-700" />
+                  </div>
+                  <div title="Contado − Esperado">
+                    <div className="text-2xs text-ink-500 uppercase">Diferencia</div>
+                    <MoneyAmount
+                      value={s.diferencia}
+                      className={cn(
+                        Math.abs(dif) < 0.01 && 'text-basil-600',
+                        dif < 0 && 'text-pomodoro-600 font-semibold',
+                        dif > 0 && 'text-saffron-600',
+                      )}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <div className="text-2xs text-ink-500 uppercase">Esperado</div>
-                  <MoneyAmount value={s.recaudacionEsperada} />
-                </div>
-                <div>
-                  <div className="text-2xs text-ink-500 uppercase">Contado</div>
-                  <MoneyAmount value={s.existenciaFinal} className="text-teresita-700" />
-                </div>
-                <div>
-                  <div className="text-2xs text-ink-500 uppercase">Diferencia</div>
-                  <MoneyAmount
-                    value={s.diferencia}
-                    className={cn(
-                      Math.abs(dif) < 0.01 && 'text-basil-600',
-                      dif < 0 && 'text-pomodoro-600 font-semibold',
-                      dif > 0 && 'text-saffron-600',
-                    )}
-                  />
-                </div>
-              </div>
+                <p className="text-2xs text-teresita-700 mt-2 hover:underline">
+                  → Ver detalle del cierre
+                </p>
+              </Link>
 
               {s.observaciones && (
                 <p className="text-xs text-ink-700 italic mt-3 border-t border-cream-200 pt-2">

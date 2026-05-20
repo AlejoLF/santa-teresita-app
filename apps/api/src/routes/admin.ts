@@ -22,6 +22,58 @@ import {
 } from '../services/sesion-caja.js';
 
 /**
+ * Auto-envío del email del cierre al cerrar la sesión. Helper standalone
+ * (fuera de fastify) para que el handler del cierre dispare fire-and-forget
+ * sin bloquear el response.
+ *
+ *   - Si la sesión no existe o no está cerrada → no hace nada.
+ *   - Si la flag `email_auto_envio_cierre` está en false → no hace nada.
+ *   - Si SMTP cae a Ethereal (no configurado) → log warning, no manda.
+ *   - Si hay error → log, no rethrow (el caller debe hacer .catch()).
+ */
+async function enviarEmailDeCierreSiCorresponde(sesionId: string): Promise<void> {
+  const flag = await prisma.configuracionSistema
+    .findUnique({ where: { clave: 'email_auto_envio_cierre' } })
+    .catch(() => null);
+  if (flag && flag.valor !== 'true') {
+    console.log(`[email-cierre] auto-envío deshabilitado (sesion=${sesionId})`);
+    return;
+  }
+  const data = await cargarCierre(sesionId);
+  const xlsx = await generarExcelCierre(data);
+  const { subject, html, text } = generarHtmlCierre(data);
+  const fechaSlug = data.sesion.fecha.toISOString().slice(0, 10);
+  const turnoSlug = data.sesion.turno.toLowerCase();
+  const result = await sendMail({
+    subject,
+    html,
+    text,
+    attachments: [
+      {
+        filename: `cierre-${fechaSlug}-${turnoSlug}.xlsx`,
+        content: xlsx,
+        contentType:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      },
+    ],
+  });
+  if (result.isEthereal) {
+    console.warn(
+      `[email-cierre] sesion=${sesionId} usó Ethereal (SMTP no configurado). Preview: ${result.previewUrl}`,
+    );
+    return;
+  }
+  await prisma.sesionCaja.update({
+    where: { id: sesionId },
+    data: {
+      emailEnviadoA: result.recipients.join(', '),
+      emailEnviadoAt: new Date(),
+    },
+  });
+  console.log(`[email-cierre] sesion=${sesionId} → ${result.recipients.join(', ')}`);
+}
+
+/**
  * Endpoints exclusivos del rol Admin. Devuelven KPIs agregados para los dashboards.
  * Todas las queries usan agregaciones de Postgres (no fetch + sum en app) para que escale.
  */
@@ -1628,6 +1680,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         },
       });
 
+      // Auto-envío del email del cierre (fire-and-forget). Si SMTP no está
+      // configurado o falla, NO bloquea el cierre — sólo loguea. La
+      // encargada puede re-enviar manualmente desde /admin/cierres si hace
+      // falta. Controlado por flag email_auto_envio_cierre.
+      void enviarEmailDeCierreSiCorresponde(sesion.id).catch((e) => {
+        req.log.error({ err: e, sesionId: sesion.id }, 'Auto-envío de email del cierre falló');
+      });
+
       return updated;
     },
   );
@@ -1821,6 +1881,232 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         prisma.sesionCaja.count({ where: { estado: { in: ['CERRADA', 'APROBADA'] } } }),
       ]);
       return { sesiones, total, page: q.page, pageSize: q.pageSize };
+    },
+  );
+
+  // GET /admin/caja/cierres/:id — detalle completo del cierre con desglose
+  // paso a paso de cómo se llega al "esperado" + movimientos y ventas.
+  fastify.get(
+    '/admin/caja/cierres/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const sesion = await prisma.sesionCaja.findUnique({
+        where: { id: params.id },
+        include: {
+          usuarioApertura: { select: { nombre: true } },
+          usuarioCierre: { select: { nombre: true } },
+          aprobadaAdmin: { select: { nombre: true } },
+        },
+      });
+      if (!sesion) return reply.code(404).send({ error: 'Sesión no encontrada' });
+
+      // 1. Pagos de la sesión — todos con cuenta para identificar EFECTIVO.
+      const pagos = await prisma.pago.findMany({
+        where: {
+          estado: 'CONFIRMADO',
+          venta: { sesionCajaId: sesion.id, estado: EstadoVenta.FINALIZADA },
+        },
+        select: {
+          id: true,
+          metodo: true,
+          monto: true,
+          cuenta: { select: { id: true, nombre: true, tipo: true } },
+          venta: { select: { numero: true, numeroOrdenTurno: true, canal: true } },
+        },
+      });
+
+      // 2. Movimientos con detalle de cuentas para identificar afecta-caja.
+      const movs = await prisma.movimiento.findMany({
+        where: { sesionCajaId: sesion.id, estado: EstadoMovimiento.CONFIRMADO },
+        select: {
+          id: true,
+          tipo: true,
+          monto: true,
+          observacion: true,
+          fechaComputo: true,
+          categoria: { select: { nombre: true } },
+          cuentaOrigen: { select: { nombre: true, tipo: true } },
+          cuentaDestino: { select: { nombre: true, tipo: true } },
+          usuario: { select: { nombre: true } },
+        },
+        orderBy: { fechaComputo: 'asc' },
+      });
+
+      // 3. Ventas (con totales por estado).
+      const ventas = await prisma.venta.findMany({
+        where: { sesionCajaId: sesion.id },
+        select: {
+          id: true,
+          numero: true,
+          numeroOrdenTurno: true,
+          canal: true,
+          modalidad: true,
+          estado: true,
+          total: true,
+          fechaApertura: true,
+          fechaFinalizacion: true,
+        },
+        orderBy: { numeroOrdenTurno: 'asc' },
+      });
+
+      // Desglose paso a paso del esperado.
+      const cobrosEfectivo = pagos.filter((p) => p.cuenta?.tipo === 'EFECTIVO');
+      const totalCobrosEfectivo = cobrosEfectivo.reduce((acc, p) => acc + Number(p.monto), 0);
+      const ingresosCaja = movs.filter(
+        (m) =>
+          (m.tipo === 'INGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
+          m.cuentaDestino?.tipo === 'EFECTIVO',
+      );
+      const totalIngresosCaja = ingresosCaja.reduce((acc, m) => acc + Number(m.monto), 0);
+      const egresosCaja = movs.filter(
+        (m) =>
+          (m.tipo === 'EGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
+          m.cuentaOrigen?.tipo === 'EFECTIVO',
+      );
+      const totalEgresosCaja = egresosCaja.reduce((acc, m) => acc + Number(m.monto), 0);
+
+      const existenciaInicial = Number(sesion.existenciaInicial);
+      const esperadaCalculada =
+        existenciaInicial + totalCobrosEfectivo + totalIngresosCaja - totalEgresosCaja;
+
+      // Pagos no-efectivo (info — no afectan caja física)
+      const pagosNoEfectivo = pagos.filter((p) => p.cuenta?.tipo !== 'EFECTIVO');
+      // Movimientos que NO afectan caja (egresos/ingresos contra banco, etc.)
+      const movsNoAfectanCaja = movs.filter((m) => {
+        const sale = m.cuentaOrigen?.tipo === 'EFECTIVO';
+        const entra = m.cuentaDestino?.tipo === 'EFECTIVO';
+        return !sale && !entra;
+      });
+
+      // Agrupar pagos efectivo por método (info breakdown).
+      const cobrosEfectivoPorMetodo = new Map<string, { monto: number; cantidad: number }>();
+      for (const p of cobrosEfectivo) {
+        const cur = cobrosEfectivoPorMetodo.get(p.metodo) ?? { monto: 0, cantidad: 0 };
+        cur.monto += Number(p.monto);
+        cur.cantidad += 1;
+        cobrosEfectivoPorMetodo.set(p.metodo, cur);
+      }
+      const cobrosNoEfectivoPorMetodo = new Map<string, { monto: number; cantidad: number; cuenta: string }>();
+      for (const p of pagosNoEfectivo) {
+        const key = `${p.metodo}|${p.cuenta?.nombre ?? '—'}`;
+        const cur = cobrosNoEfectivoPorMetodo.get(key) ?? {
+          monto: 0,
+          cantidad: 0,
+          cuenta: p.cuenta?.nombre ?? '—',
+        };
+        cur.monto += Number(p.monto);
+        cur.cantidad += 1;
+        cobrosNoEfectivoPorMetodo.set(key, cur);
+      }
+
+      return {
+        sesion: {
+          id: sesion.id,
+          fecha: sesion.fecha,
+          turno: sesion.turno,
+          estado: sesion.estado,
+          horarioApertura: sesion.horarioApertura,
+          horarioCierre: sesion.horarioCierre,
+          existenciaInicial: existenciaInicial.toFixed(2),
+          existenciaFinal: sesion.existenciaFinal?.toFixed(2) ?? null,
+          recaudacionEsperada: sesion.recaudacionEsperada?.toFixed(2) ?? null,
+          diferencia: sesion.diferencia?.toFixed(2) ?? null,
+          observaciones: sesion.observaciones,
+          cerradaAnticipadamente: sesion.cerradaAnticipadamente,
+          fechaAprobacion: sesion.fechaAprobacion,
+          usuarioApertura: sesion.usuarioApertura?.nombre ?? null,
+          usuarioCierre: sesion.usuarioCierre?.nombre ?? null,
+          aprobadaAdmin: sesion.aprobadaAdmin?.nombre ?? null,
+          emailEnviadoA: sesion.emailEnviadoA,
+          emailEnviadoAt: sesion.emailEnviadoAt,
+        },
+        // Desglose paso a paso del esperado (las 4 líneas que dan el número).
+        desgloseEsperado: {
+          existenciaInicial: existenciaInicial.toFixed(2),
+          cobrosEfectivo: totalCobrosEfectivo.toFixed(2),
+          cobrosEfectivoCantidad: cobrosEfectivo.length,
+          ingresosCaja: totalIngresosCaja.toFixed(2),
+          ingresosCajaCantidad: ingresosCaja.length,
+          egresosCaja: totalEgresosCaja.toFixed(2),
+          egresosCajaCantidad: egresosCaja.length,
+          esperadaCalculada: esperadaCalculada.toFixed(2),
+          // Si lo recalculado no coincide con lo guardado en la sesión, lo
+          // marcamos para que la UI lo destaque (debug). Diferencia menor a
+          // 1 centavo se considera igualdad.
+          coincideConGuardado:
+            sesion.recaudacionEsperada == null ||
+            Math.abs(esperadaCalculada - Number(sesion.recaudacionEsperada)) < 0.01,
+        },
+        // Breakdown por método dentro de cada bucket.
+        breakdownCobrosEfectivo: [...cobrosEfectivoPorMetodo.entries()].map(([metodo, v]) => ({
+          metodo,
+          monto: v.monto.toFixed(2),
+          cantidad: v.cantidad,
+        })),
+        breakdownCobrosNoEfectivo: [...cobrosNoEfectivoPorMetodo.entries()].map(([key, v]) => ({
+          metodo: key.split('|')[0],
+          cuenta: v.cuenta,
+          monto: v.monto.toFixed(2),
+          cantidad: v.cantidad,
+        })),
+        // Listas detalladas que la UI muestra agrupadas/colapsables.
+        ingresosCaja: ingresosCaja.map((m) => ({
+          id: m.id,
+          tipo: m.tipo,
+          monto: m.monto.toString(),
+          categoria: m.categoria.nombre,
+          cuentaOrigen: m.cuentaOrigen?.nombre ?? null,
+          cuentaDestino: m.cuentaDestino?.nombre ?? null,
+          observacion: m.observacion,
+          fecha: m.fechaComputo,
+          usuario: m.usuario.nombre,
+        })),
+        egresosCaja: egresosCaja.map((m) => ({
+          id: m.id,
+          tipo: m.tipo,
+          monto: m.monto.toString(),
+          categoria: m.categoria.nombre,
+          cuentaOrigen: m.cuentaOrigen?.nombre ?? null,
+          cuentaDestino: m.cuentaDestino?.nombre ?? null,
+          observacion: m.observacion,
+          fecha: m.fechaComputo,
+          usuario: m.usuario.nombre,
+        })),
+        movsNoAfectanCaja: movsNoAfectanCaja.map((m) => ({
+          id: m.id,
+          tipo: m.tipo,
+          monto: m.monto.toString(),
+          categoria: m.categoria.nombre,
+          cuentaOrigen: m.cuentaOrigen?.nombre ?? null,
+          cuentaDestino: m.cuentaDestino?.nombre ?? null,
+          observacion: m.observacion,
+          fecha: m.fechaComputo,
+          usuario: m.usuario.nombre,
+        })),
+        ventas: {
+          finalizadas: ventas.filter((v) => v.estado === 'FINALIZADA').map((v) => ({
+            id: v.id,
+            numero: v.numero,
+            numeroOrdenTurno: v.numeroOrdenTurno,
+            canal: v.canal,
+            modalidad: v.modalidad,
+            total: v.total.toString(),
+            fechaFinalizacion: v.fechaFinalizacion,
+          })),
+          anuladas: ventas.filter((v) => v.estado === 'ANULADA').map((v) => ({
+            id: v.id,
+            numero: v.numero,
+            numeroOrdenTurno: v.numeroOrdenTurno,
+            canal: v.canal,
+            total: v.total.toString(),
+          })),
+          procesadas: ventas.filter((v) => v.estado === 'PROCESADA').length,
+        },
+      };
     },
   );
 

@@ -1,23 +1,18 @@
 /**
  * Servicio de email — nodemailer.
  *
- * Configuración:
- *   - SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS → usa ese SMTP real
- *   - sin SMTP_HOST → cae a Ethereal (https://ethereal.email): inbox de
- *     prueba que devuelve una URL para previsualizar el mail. NO llega a
- *     gmail; sirve para validar que el contenido se generó OK sin tocar
- *     credenciales.
+ * Configuración (en orden de prioridad):
+ *   1. Tabla `configuracion_sistema` con claves smtp_host, smtp_port,
+ *      smtp_user, smtp_pass, smtp_from, smtp_secure. La encargada edita
+ *      desde /admin/configuracion/usuarios sin tocar .env.
+ *   2. Variables de entorno SMTP_HOST, SMTP_PORT, etc. (fallback dev).
+ *   3. Si no hay host configurado por ningún medio → Ethereal preview-only.
  *
  * Para Gmail (recomendado):
- *   1. Activar verificación en 2 pasos en la cuenta google
- *   2. Crear app password en https://myaccount.google.com/apppasswords
- *   3. Setear en .env:
- *        SMTP_HOST=smtp.gmail.com
- *        SMTP_PORT=587
- *        SMTP_USER=tu@gmail.com
- *        SMTP_PASS=<app password>
- *        SMTP_FROM="Santa Teresita <tu@gmail.com>"
- *        ADMIN_EMAIL_RECIPIENTS=alejolafalce@gmail.com,otra@dom.com
+ *   1. Activar verificación en 2 pasos en la cuenta google.
+ *   2. Crear app password en https://myaccount.google.com/apppasswords.
+ *   3. Cargar desde la UI admin: host=smtp.gmail.com, port=587, user=...,
+ *      pass=<app password>.
  */
 
 import nodemailer, { type Transporter } from 'nodemailer';
@@ -29,16 +24,58 @@ interface MailerConfig {
 }
 
 // Sólo cacheamos el transporter Ethereal (que requiere crear cuenta remota y
-// no cambia con env). Para SMTP real no cacheamos: así si el usuario cambia
-// SMTP_* en .env, basta reiniciar la API y la próxima llamada usa la nueva config.
+// no cambia con env). Para SMTP real no cacheamos: así si la encargada
+// actualiza el SMTP por la UI, basta esperar el próximo send.
 let cachedEtherealTransporter: Transporter | null = null;
 let cachedEtherealConfig: MailerConfig | null = null;
+
+interface SmtpDbConfig {
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+  from: string;
+  secure: boolean;
+}
+
+/**
+ * Lee la config SMTP de `configuracion_sistema` y completa con .env como
+ * fallback campo a campo. Devuelve null si NI la DB NI el env tienen host
+ * — en ese caso se cae a Ethereal preview.
+ */
+async function loadSmtpConfig(): Promise<SmtpDbConfig | null> {
+  const { prisma } = await import('@sta/db/client');
+  const claves = [
+    'smtp_host',
+    'smtp_port',
+    'smtp_user',
+    'smtp_pass',
+    'smtp_from',
+    'smtp_secure',
+  ];
+  const rows = await prisma.configuracionSistema
+    .findMany({ where: { clave: { in: claves } } })
+    .catch(() => [] as Array<{ clave: string; valor: string }>);
+  const get = (k: string) => rows.find((r) => r.clave === k)?.valor?.trim() ?? '';
+
+  const host = get('smtp_host') || process.env.SMTP_HOST || '';
+  if (!host) return null;
+
+  const portRaw = get('smtp_port') || process.env.SMTP_PORT || '587';
+  const user = get('smtp_user') || process.env.SMTP_USER || '';
+  const pass = (get('smtp_pass') || process.env.SMTP_PASS || '').replace(/\s+/g, '');
+  const fromConf = get('smtp_from') || process.env.SMTP_FROM || '';
+  // Si el from viene con <> vacío, usamos smtp_user adentro de los <>.
+  const from = fromConf.replace('<>', `<${user}>`) || `"Santa Teresita Pastas" <${user || 'no-reply@santateresita.local'}>`;
+  const secure = (get('smtp_secure') || process.env.SMTP_SECURE || 'false') === 'true';
+
+  return { host, port: Number(portRaw) || 587, user, pass, from, secure };
+}
 
 async function buildTransporter(): Promise<{
   transporter: Transporter;
   config: MailerConfig;
 }> {
-  const host = process.env.SMTP_HOST;
   // Destinatarios: primero buscamos en ConfiguracionSistema (panel UI),
   // sino fallback al ENV. La encargada configura desde /admin/configuracion/
   // usuarios — no hace falta editar .env y rebuildear.
@@ -49,43 +86,40 @@ async function buildTransporter(): Promise<{
   const fromDb = dbConfig?.valor
     ? dbConfig.valor.split(',').map((s) => s.trim()).filter(Boolean)
     : [];
-  const recipientsDefault = fromDb.length > 0
-    ? fromDb
-    : (process.env.ADMIN_EMAIL_RECIPIENTS ?? '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
+  const recipientsDefault =
+    fromDb.length > 0
+      ? fromDb
+      : (process.env.ADMIN_EMAIL_RECIPIENTS ?? '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
 
-  if (host) {
-    // Limpiamos el password de espacios (Gmail App Password se muestra con
-    // espacios visualmente: "abcd efgh ijkl mnop", pero se debe enviar sin).
-    const pass = (process.env.SMTP_PASS ?? '').replace(/\s+/g, '');
+  const smtp = await loadSmtpConfig();
+  if (smtp) {
     const transporter = nodemailer.createTransport({
-      host,
-      port: Number(process.env.SMTP_PORT ?? 587),
-      secure: process.env.SMTP_SECURE === 'true',
-      auth: process.env.SMTP_USER
-        ? { user: process.env.SMTP_USER, pass }
-        : undefined,
+      host: smtp.host,
+      port: smtp.port,
+      secure: smtp.secure,
+      auth: smtp.user ? { user: smtp.user, pass: smtp.pass } : undefined,
     });
-    const from =
-      process.env.SMTP_FROM ??
-      `"Santa Teresita Pastas" <${process.env.SMTP_USER ?? 'no-reply@santateresita.local'}>`;
     console.log(
-      `[mailer] usando SMTP real: ${host} via ${process.env.SMTP_USER ?? '(sin auth)'}`,
+      `[mailer] SMTP real: ${smtp.host}:${smtp.port} via ${smtp.user || '(sin auth)'}`,
     );
     return {
       transporter,
-      config: { from, recipientsDefault, isEthereal: false },
+      config: { from: smtp.from, recipientsDefault, isEthereal: false },
     };
   }
 
-  // Fallback: Ethereal — generamos cuenta temporal una vez y la reusamos
+  // Fallback: Ethereal — generamos cuenta temporal una vez y la reusamos.
+  // Esto SIRVE para validar contenido del email en dev sin SMTP real, pero
+  // NUNCA llega a Gmail. Si la encargada ve "Ethereal" en /admin/configuracion,
+  // significa que falta cargar SMTP.
   if (cachedEtherealTransporter && cachedEtherealConfig) {
     return { transporter: cachedEtherealTransporter, config: cachedEtherealConfig };
   }
   console.warn(
-    '[mailer] SMTP_HOST no está seteado en .env → usando Ethereal (preview only, NO llega a Gmail real)',
+    '[mailer] SMTP no configurado (ni en DB ni en env) → Ethereal preview (NO llega a Gmail)',
   );
   const test = await nodemailer.createTestAccount();
   const transporter = nodemailer.createTransport({
@@ -101,6 +135,34 @@ async function buildTransporter(): Promise<{
     isEthereal: true,
   };
   return { transporter, config: cachedEtherealConfig };
+}
+
+/**
+ * Devuelve el estado de configuración actual (sin password). Útil para que
+ * la UI muestre "SMTP configurado correctamente" o un warning de Ethereal.
+ */
+export async function getMailerStatus(): Promise<{
+  modo: 'smtp' | 'ethereal';
+  host: string | null;
+  user: string | null;
+  destinatarios: string[];
+  passConfigurado: boolean;
+}> {
+  const { prisma } = await import('@sta/db/client');
+  const dbConfig = await prisma.configuracionSistema
+    .findUnique({ where: { clave: 'cierre_email_recipients' } })
+    .catch(() => null);
+  const dest = dbConfig?.valor
+    ? dbConfig.valor.split(',').map((s) => s.trim()).filter(Boolean)
+    : (process.env.ADMIN_EMAIL_RECIPIENTS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const smtp = await loadSmtpConfig();
+  return {
+    modo: smtp ? 'smtp' : 'ethereal',
+    host: smtp?.host ?? null,
+    user: smtp?.user ?? null,
+    destinatarios: dest,
+    passConfigurado: !!smtp?.pass,
+  };
 }
 
 export interface SendMailOpts {

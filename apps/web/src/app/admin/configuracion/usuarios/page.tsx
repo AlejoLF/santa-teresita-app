@@ -170,6 +170,7 @@ export default function ConfigUsuariosPage() {
         </table>
       </section>
 
+      <SmtpSection />
       <CierreEmailsSection />
 
       {showCambiarPin && (
@@ -327,6 +328,293 @@ function CierreEmailsSection() {
           </div>
         </>
       )}
+    </section>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   SMTP — config del servidor de email
+//   Antes vivía sólo en .env (no llegaba al .exe del local). Ahora la
+//   encargada lo configura desde acá.
+// ────────────────────────────────────────────────────────────────────────
+
+interface SmtpConfig {
+  host: string;
+  port: string;
+  secure: boolean;
+  user: string;
+  passConfigurado: boolean;
+  from: string;
+  autoEnvioCierre: boolean;
+  status: {
+    modo: 'smtp' | 'ethereal';
+    host: string | null;
+    user: string | null;
+    destinatarios: string[];
+    passConfigurado: boolean;
+  };
+}
+
+function SmtpSection() {
+  const [cfg, setCfg] = useState<SmtpConfig | null>(null);
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('587');
+  const [secure, setSecure] = useState(false);
+  const [user, setUser] = useState('');
+  const [pass, setPass] = useState('');
+  const [from, setFrom] = useState('');
+  const [autoEnvio, setAutoEnvio] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedFlash, setSavedFlash] = useState<string | null>(null);
+
+  async function reload() {
+    try {
+      const r = await api.get<SmtpConfig>('/admin/configuracion/smtp');
+      setCfg(r);
+      setHost(r.host);
+      setPort(r.port);
+      setSecure(r.secure);
+      setUser(r.user);
+      setFrom(r.from);
+      setAutoEnvio(r.autoEnvioCierre);
+    } catch {
+      setError('No se pudo cargar la config SMTP');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+  }, []);
+
+  async function guardar() {
+    setSaving(true);
+    setError(null);
+    setSavedFlash(null);
+    try {
+      const body: Record<string, unknown> = {
+        host,
+        port: Number(port) || 587,
+        secure,
+        user,
+        from,
+        autoEnvioCierre: autoEnvio,
+      };
+      // Sólo enviamos pass si la encargada escribió uno nuevo. Vacío =
+      // mantener el actual. '__CLEAR__' = borrar el guardado.
+      if (pass.trim()) body.pass = pass.trim();
+      await api.put('/admin/configuracion/smtp', body);
+      setPass('');
+      setSavedFlash('✓ Guardado');
+      setTimeout(() => setSavedFlash(null), 3000);
+      void reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al guardar');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function probar() {
+    const to = prompt('Email destinatario para el test:', cfg?.status.destinatarios[0] ?? '');
+    if (!to) return;
+    try {
+      const r = await api.post<{
+        isEthereal: boolean;
+        previewUrl: string | null;
+        recipients: string[];
+      }>('/admin/email/test', { to });
+      if (r.isEthereal) {
+        alert(
+          `⚠ SMTP no configurado (modo Ethereal). El email NO llegó a Gmail.\n\nPreview: ${r.previewUrl}\n\nGuardá la config SMTP arriba antes de probar de nuevo.`,
+        );
+      } else {
+        alert(`✓ Email de prueba enviado a ${r.recipients.join(', ')}`);
+      }
+    } catch (e) {
+      alert('✗ ' + (e instanceof Error ? e.message : 'Error desconocido'));
+    }
+  }
+
+  if (loading) return <p className="card p-4 text-ink-500 text-sm">Cargando SMTP…</p>;
+
+  const enEthereal = cfg?.status.modo === 'ethereal';
+
+  return (
+    <section className="card p-4">
+      <header className="mb-3">
+        <h2 className="font-display text-md text-ink-900">
+          ⚙️ Servidor SMTP (envío de email)
+        </h2>
+        <p className="text-sm text-ink-500">
+          Configura el servidor que envía los cierres por email. Sin SMTP cargado, el
+          sistema usa <strong>Ethereal</strong> (modo preview que NO llega a Gmail real).
+        </p>
+      </header>
+
+      <div
+        className={cn(
+          'px-3 py-2 rounded text-xs mb-3',
+          enEthereal
+            ? 'bg-pomodoro-100 text-pomodoro-700'
+            : 'bg-basil-100 text-basil-700',
+        )}
+      >
+        {enEthereal ? (
+          <>
+            ⚠ <strong>Modo Ethereal</strong> — los emails NO se están enviando a Gmail.
+            Cargá host/usuario/password abajo y guardá.
+          </>
+        ) : (
+          <>
+            ✓ <strong>SMTP activo</strong>: {cfg?.status.host} via{' '}
+            {cfg?.status.user ?? '(sin auth)'} ·{' '}
+            {cfg?.status.passConfigurado ? 'password configurado' : 'sin password'}
+          </>
+        )}
+      </div>
+
+      {error && (
+        <div className="bg-pomodoro-100 text-pomodoro-600 px-3 py-2 rounded text-sm mb-2">
+          {error}
+        </div>
+      )}
+      {savedFlash && (
+        <div className="bg-basil-100 text-basil-600 px-3 py-2 rounded text-sm mb-2">
+          {savedFlash}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <label className="space-y-1">
+          <div className="text-2xs uppercase text-ink-500">Host</div>
+          <input
+            type="text"
+            value={host}
+            onChange={(e) => setHost(e.target.value)}
+            placeholder="smtp.gmail.com"
+            className="input w-full"
+          />
+        </label>
+        <label className="space-y-1">
+          <div className="text-2xs uppercase text-ink-500">Puerto</div>
+          <input
+            type="number"
+            value={port}
+            onChange={(e) => setPort(e.target.value)}
+            placeholder="587"
+            className="input w-full"
+          />
+        </label>
+        <label className="space-y-1">
+          <div className="text-2xs uppercase text-ink-500">Usuario (email completo)</div>
+          <input
+            type="text"
+            value={user}
+            onChange={(e) => setUser(e.target.value)}
+            placeholder="local@gmail.com"
+            className="input w-full"
+          />
+        </label>
+        <label className="space-y-1">
+          <div className="text-2xs uppercase text-ink-500">
+            Password{' '}
+            {cfg?.passConfigurado && (
+              <span className="text-basil-600 normal-case">(ya configurado — dejá vacío para conservar)</span>
+            )}
+          </div>
+          <input
+            type="password"
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+            placeholder={cfg?.passConfigurado ? '••••••••' : 'App Password de 16 chars'}
+            className="input w-full"
+          />
+        </label>
+        <label className="space-y-1 col-span-2">
+          <div className="text-2xs uppercase text-ink-500">
+            Remitente (cómo aparece en el email)
+          </div>
+          <input
+            type="text"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            placeholder='Santa Teresita Pastas <local@gmail.com>'
+            className="input w-full"
+          />
+          <p className="text-2xs text-ink-500">
+            Si dejás <code>&lt;&gt;</code> vacío, se usa el usuario. Ej: <code>"Santa Teresita Pastas &lt;&gt;"</code>.
+          </p>
+        </label>
+        <label className="col-span-2 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={secure}
+            onChange={(e) => setSecure(e.target.checked)}
+          />
+          <span>Conexión TLS implícita (sólo si usás puerto 465)</span>
+        </label>
+        <label className="col-span-2 flex items-center gap-2 text-sm p-2 rounded bg-cream-100">
+          <input
+            type="checkbox"
+            checked={autoEnvio}
+            onChange={(e) => setAutoEnvio(e.target.checked)}
+          />
+          <span>
+            <strong>Enviar email automáticamente al cerrar caja</strong> —
+            sin esto, hay que clickear el botón "Enviar por email" en cada cierre.
+          </span>
+        </label>
+      </div>
+
+      <div className="mt-3 flex gap-2">
+        <Button onClick={guardar} disabled={saving}>
+          {saving ? 'Guardando…' : 'Guardar config'}
+        </Button>
+        <Button variant="secondary" onClick={probar}>
+          ✉️ Probar (enviar email de test)
+        </Button>
+      </div>
+
+      <details className="mt-4">
+        <summary className="cursor-pointer text-2xs text-ink-500">
+          ¿Cómo obtengo un App Password de Gmail?
+        </summary>
+        <ol className="text-2xs text-ink-700 mt-2 ml-4 list-decimal space-y-1">
+          <li>
+            Entrar a{' '}
+            <a
+              href="https://myaccount.google.com/security"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-teresita-700 underline"
+            >
+              myaccount.google.com/security
+            </a>{' '}
+            y activar verificación en 2 pasos.
+          </li>
+          <li>
+            Ir a{' '}
+            <a
+              href="https://myaccount.google.com/apppasswords"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-teresita-700 underline"
+            >
+              myaccount.google.com/apppasswords
+            </a>
+            .
+          </li>
+          <li>
+            Crear app password con nombre "Santa Teresita". Google devuelve 16 letras
+            (ej. <code>abcd efgh ijkl mnop</code>).
+          </li>
+          <li>Copiar y pegar acá arriba (con o sin espacios, los limpiamos).</li>
+        </ol>
+      </details>
     </section>
   );
 }
