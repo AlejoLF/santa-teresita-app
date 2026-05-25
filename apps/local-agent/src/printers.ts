@@ -68,6 +68,13 @@ export function makePrinter(destino: DestinoImpresora): ThermalPrinter {
 
 export interface ComandaPayload {
   numeroOrden: number;
+  /**
+   * ID global de la venta (lo que aparece en /admin/ventas en el programa).
+   * Distinto del `numeroOrden` que es el correlativo del turno (sirve para
+   * contar pedidos del día). Se imprime chiquito al pie para que la encargada
+   * pueda buscar el pedido en el programa cuando le acercan el ticket.
+   */
+  numeroVenta?: number;
   hora: string;
   canal: string;
   items: Array<{
@@ -219,6 +226,11 @@ export async function imprimirComanda(
   printer.drawLine();
   printer.alignLeft();
   printer.println(`${payload.pcOrigen}  ·  ${payload.hora}`);
+  if (payload.numeroVenta != null) {
+    printer.alignCenter();
+    printer.println(`Venta #${payload.numeroVenta} en el programa`);
+    printer.alignLeft();
+  }
   printer.newLine();
   printer.cut();
 
@@ -376,6 +388,7 @@ export async function imprimirTicketCliente(payload: TicketClientePayload): Prom
   printer.drawLine();
   printer.println('Ticket no fiscal');
   printer.println(`Fecha y hora: ${formatFechaAR(payload.fecha)}`);
+  printer.println(`Venta #${payload.numeroVenta} en el programa`);
   printer.drawLine();
   printer.cut();
 
@@ -539,6 +552,8 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
   printer.alignLeft();
   printer.println(`Impresión: ${formatFechaAR(payload.fecha)}`);
   printer.println(`Usuario: ${payload.cajero}`);
+  printer.alignCenter();
+  printer.println(`Venta #${payload.numeroVenta} en el programa`);
   printer.cut();
 
   await printer.execute();

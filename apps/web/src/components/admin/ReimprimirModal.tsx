@@ -251,6 +251,10 @@ export function ReimprimirModal({
                     Pago: {venta.pagos.map((p) => p.metodo).join(' + ')}
                   </div>
                 )}
+                <div className="border-t border-dashed border-ink-300 my-2" />
+                <div className="text-center text-ink-500 text-2xs">
+                  Venta #{venta.numero} en el programa
+                </div>
               </div>
 
               {/* Selectores de destino */}

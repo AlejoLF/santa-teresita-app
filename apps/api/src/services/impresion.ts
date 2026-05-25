@@ -209,7 +209,12 @@ export async function buildComandaPayload(
   }
 
   return {
+    // numeroOrdenTurno = el "Pedido #017" grande arriba (correlativo del turno).
+    // numero = el id global de la venta, lo que aparece en /admin/ventas — se
+    // imprime chiquito al pie para que la encargada pueda buscar el pedido
+    // en el programa cuando le acercan el ticket.
     numeroOrden: venta.numeroOrdenTurno,
+    numeroVenta: venta.numero,
     hora: venta.fechaApertura.toISOString().slice(11, 16),
     canal: venta.canal,
     items: venta.items.map((it) => {

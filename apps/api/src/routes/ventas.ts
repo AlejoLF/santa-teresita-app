@@ -18,6 +18,7 @@ import { recordAudit } from '../services/audit.js';
 import { aprobarConPinAdmin } from '../services/auth.js';
 import {
   encolarComandasCanceladas,
+  encolarComandasParaVenta,
   encolarTicketClienteParaVenta,
   encolarTicketDeliveryParaVenta,
 } from '../services/impresion.js';
@@ -275,26 +276,39 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
         }),
       };
 
-      const updated = await prisma.deliveryInfo.upsert({
-        where: { ventaId: params.id },
-        create: {
-          ventaId: params.id,
-          empresaExterna: empresaExternaFinal,
-          direccionSnapshot: datosDeliveryRepartidor as never,
-          horaPrometida: body.horaPrometida ? new Date(body.horaPrometida) : null,
-          observaciones: body.observaciones ?? null,
-        },
-        update: {
-          // Solo updateamos empresaExterna si vino body.repartidor.
-          ...(body.repartidor !== undefined && { empresaExterna: empresaExternaFinal }),
-          direccionSnapshot: datosDeliveryRepartidor as never,
-          ...(body.horaPrometida !== undefined && {
+      // Si vino body.repartidor (cambió la asignación) re-encolamos comandas
+      // dentro de una transacción para que la cocina vea el repartidor nuevo.
+      // Antes: la COCINA se encolaba al crear la venta con el default
+      // (Damián). Si la cajera elegía otro repartidor después, el ticket
+      // de adelante salía correcto pero el de cocina seguía diciendo Damián
+      // (incidente reportado por la encargada).
+      const cambiaRepartidor = body.repartidor !== undefined;
+      const updated = await prisma.$transaction(async (tx) => {
+        const u = await tx.deliveryInfo.upsert({
+          where: { ventaId: params.id },
+          create: {
+            ventaId: params.id,
+            empresaExterna: empresaExternaFinal,
+            direccionSnapshot: datosDeliveryRepartidor as never,
             horaPrometida: body.horaPrometida ? new Date(body.horaPrometida) : null,
-          }),
-          ...(body.observaciones !== undefined && {
             observaciones: body.observaciones ?? null,
-          }),
-        },
+          },
+          update: {
+            // Solo updateamos empresaExterna si vino body.repartidor.
+            ...(body.repartidor !== undefined && { empresaExterna: empresaExternaFinal }),
+            direccionSnapshot: datosDeliveryRepartidor as never,
+            ...(body.horaPrometida !== undefined && {
+              horaPrometida: body.horaPrometida ? new Date(body.horaPrometida) : null,
+            }),
+            ...(body.observaciones !== undefined && {
+              observaciones: body.observaciones ?? null,
+            }),
+          },
+        });
+        if (cambiaRepartidor) {
+          await encolarComandasParaVenta(params.id, tx);
+        }
+        return u;
       });
 
       await recordAudit({
