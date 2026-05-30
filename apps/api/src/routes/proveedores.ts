@@ -151,50 +151,50 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // POST /admin/proveedores — crear proveedor
+  // POST /admin/proveedores — crear proveedor con info fiscal + dirección
+  const proveedorBodyBase = {
+    nombre: z.string().min(1).max(120),
+    razonSocial: z.string().max(160).nullable().optional(),
+    cuit: z.string().max(20).nullable().optional(),
+    condicionIva: z
+      .enum(['RESPONSABLE_INSCRIPTO', 'MONOTRIBUTO', 'EXENTO', 'CONSUMIDOR_FINAL'])
+      .nullable()
+      .optional(),
+    direccion: z.string().max(200).nullable().optional(),
+    localidad: z.string().max(80).nullable().optional(),
+    telefono: z.string().max(40).nullable().optional(),
+    email: z.string().email().nullable().optional().or(z.literal('')),
+    personaContacto: z.string().max(120).nullable().optional(),
+    categoriaPrincipal: z.string().max(80).nullable().optional(),
+    plazoPagoDias: z.number().int().min(0).default(0),
+    observaciones: z.string().max(500).nullable().optional(),
+    activo: z.boolean().optional(),
+  };
+
   fastify.post(
     '/admin/proveedores',
     {
       preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
-      schema: {
-        body: z.object({
-          nombre: z.string().min(1).max(120),
-          razonSocial: z.string().max(160).optional(),
-          cuit: z.string().max(20).optional(),
-          condicionIva: z
-            .enum(['RESPONSABLE_INSCRIPTO', 'MONOTRIBUTO', 'EXENTO', 'CONSUMIDOR_FINAL'])
-            .optional(),
-          telefono: z.string().max(40).optional(),
-          email: z.string().email().optional(),
-          categoriaPrincipal: z.string().max(80).optional(),
-          plazoPagoDias: z.number().int().min(0).default(0),
-          observaciones: z.string().max(500).optional(),
-        }),
-      },
+      schema: { body: z.object(proveedorBodyBase) },
     },
     async (req, reply) => {
-      const body = req.body as {
-        nombre: string;
-        razonSocial?: string;
-        cuit?: string;
-        condicionIva?: 'RESPONSABLE_INSCRIPTO' | 'MONOTRIBUTO' | 'EXENTO' | 'CONSUMIDOR_FINAL';
-        telefono?: string;
-        email?: string;
-        categoriaPrincipal?: string;
-        plazoPagoDias?: number;
-        observaciones?: string;
-      };
+      const body = req.body as Record<string, unknown>;
+      // Email vacío → null (zod acepta '' como alternativa al email válido).
+      const email = body.email === '' ? null : (body.email ?? null);
       const created = await prisma.proveedor.create({
         data: {
-          nombre: body.nombre,
-          razonSocial: body.razonSocial ?? null,
-          cuit: body.cuit ?? null,
-          condicionIva: body.condicionIva ?? null,
-          telefono: body.telefono ?? null,
-          email: body.email ?? null,
-          categoriaPrincipal: body.categoriaPrincipal ?? null,
-          plazoPagoDias: body.plazoPagoDias ?? 0,
-          observaciones: body.observaciones ?? null,
+          nombre: body.nombre as string,
+          razonSocial: (body.razonSocial as string | null | undefined) ?? null,
+          cuit: (body.cuit as string | null | undefined) ?? null,
+          condicionIva: (body.condicionIva as never) ?? null,
+          direccion: (body.direccion as string | null | undefined) ?? null,
+          localidad: (body.localidad as string | null | undefined) ?? null,
+          telefono: (body.telefono as string | null | undefined) ?? null,
+          email: email as string | null,
+          personaContacto: (body.personaContacto as string | null | undefined) ?? null,
+          categoriaPrincipal: (body.categoriaPrincipal as string | null | undefined) ?? null,
+          plazoPagoDias: (body.plazoPagoDias as number | undefined) ?? 0,
+          observaciones: (body.observaciones as string | null | undefined) ?? null,
         },
       });
       await recordAudit({
@@ -205,6 +205,50 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         valorNuevo: { nombre: created.nombre, cuit: created.cuit },
       });
       return reply.code(201).send(created);
+    },
+  );
+
+  // PATCH /admin/proveedores/:id — editar proveedor existente. Todos los
+  // campos son opcionales; mandar `null` para limpiar un valor.
+  fastify.patch(
+    '/admin/proveedores/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          ...proveedorBodyBase,
+          nombre: z.string().min(1).max(120).optional(),
+          plazoPagoDias: z.number().int().min(0).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const body = req.body as Record<string, unknown>;
+      const before = await prisma.proveedor.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Proveedor no encontrado' });
+
+      // Email vacío explícito → null (limpieza).
+      const data: Record<string, unknown> = {};
+      for (const k of Object.keys(body)) {
+        if (body[k] === undefined) continue;
+        data[k] = body[k] === '' ? null : body[k];
+      }
+
+      const updated = await prisma.proveedor.update({
+        where: { id: params.id },
+        data,
+      });
+      await recordAudit({
+        tabla: 'proveedores',
+        registroId: updated.id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: before.nombre, cuit: before.cuit, activo: before.activo },
+        valorNuevo: { nombre: updated.nombre, cuit: updated.cuit, activo: updated.activo },
+      });
+      return updated;
     },
   );
 

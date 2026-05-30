@@ -209,7 +209,25 @@ async function seedCuentas() {
     update: {},
   });
 
-  console.log('  ✓ 5 cuentas reales');
+  // Efectivo acumulado del dueño — cajas anteriores. EFECTIVO pero NO afecta
+  // al cierre de caja (excluida_de_cierre_caja=true). Permite registrar
+  // egresos de plata "vieja" sin que la cajera tenga que justificarlos en
+  // su turno.
+  await prisma.cuenta.upsert({
+    where: { nombre: 'Efectivo acumulado' },
+    create: {
+      nombre: 'Efectivo acumulado',
+      tipo: TipoCuenta.EFECTIVO,
+      metodoActualizacion: MetodoActualizacionCuenta.MANUAL,
+      excluidaDeCierreCaja: true,
+    },
+    update: {
+      // Si ya existe pero por error tiene la flag en false, la corregimos.
+      excluidaDeCierreCaja: true,
+    },
+  });
+
+  console.log('  ✓ 5 cuentas reales + 1 acumulado');
 
   // Cuentas a cobrar — tarjetas por banco + plataformas
   const cac: Array<{
@@ -1349,6 +1367,24 @@ const CONFIG_DEFAULT: Array<{
       'Si está en true, al cerrar una sesión de caja se envía automáticamente el email con el adjunto Excel a los destinatarios configurados.',
     categoria: 'email',
   },
+  // Envíos — botones en pantalla de cobro. Si cambian los precios, la
+  // encargada los actualiza desde admin sin tocar código.
+  {
+    clave: 'envio_simple_monto',
+    valor: '3800',
+    tipo: 'number',
+    descripcion:
+      'Costo del envío simple. Se agrega como item del pedido cuando la cajera clickea "Agregar envío" en la pantalla de cobro.',
+    categoria: 'delivery',
+  },
+  {
+    clave: 'envio_doble_monto',
+    valor: '5400',
+    tipo: 'number',
+    descripcion:
+      'Costo del envío doble (varios pedidos al mismo destino o entrega doble).',
+    categoria: 'delivery',
+  },
 ];
 
 async function seedConfiguracion() {
@@ -1452,6 +1488,54 @@ async function seedPosnets() {
   console.log(`  ✓ ${posnets.length} posnets`);
 }
 
+// Productos sentinel "Envío Simple" / "Envío Doble" para el botón
+// "Agregar envío" en la pantalla de cobro. Se buscan por código fijo
+// (ENV01 / ENV02). El precio del item se toma de configuracion_sistema
+// al agregar — el `precio_base` del producto es solo un fallback inicial.
+async function seedEnvios() {
+  console.log('▸ Seeding productos de envío...');
+
+  // Categoría "Servicios" (no aparece en el catálogo principal del vendedor —
+  // es interna). Si ya existe la reutilizamos.
+  const catServicios = await prisma.categoria.upsert({
+    where: { nombre: 'Servicios' },
+    create: { nombre: 'Servicios', orden: 999, icono: '🛵', color: '#9CA3AF' },
+    update: {},
+  });
+
+  const tipoEnvio =
+    (await prisma.tipoProducto.findFirst({
+      where: { categoriaId: catServicios.id, nombre: 'Envío' },
+    })) ??
+    (await prisma.tipoProducto.create({
+      data: {
+        categoriaId: catServicios.id,
+        nombre: 'Envío',
+        cocinaInterviene: false,
+        descripcion: 'Costo de envío del pedido (no interviene cocina).',
+      },
+    }));
+
+  for (const [codigo, nombre, precio] of [
+    ['ENV01', 'Envío Simple', '3800.00'],
+    ['ENV02', 'Envío Doble', '5400.00'],
+  ] as const) {
+    await prisma.producto.upsert({
+      where: { codigo },
+      create: {
+        codigo,
+        tipoProductoId: tipoEnvio.id,
+        nombre,
+        formaVenta: FormaVenta.UNIDAD,
+        unidadPrecio: UnidadPrecio.POR_UNIDAD,
+        precioBase: precio,
+      },
+      update: { nombre },
+    });
+  }
+  console.log('  ✓ ENV01 (Envío Simple) + ENV02 (Envío Doble)');
+}
+
 async function seedEmpleados() {
   console.log('▸ Seeding empleados...');
   const empleados: Array<{
@@ -1494,6 +1578,7 @@ async function main() {
   await seedProveedores();
   await seedEmpleados();
   await seedConfiguracion();
+  await seedEnvios();
   await seedPosnets();
 
   console.log('\n═══════════════════════════════════════════════════════════');

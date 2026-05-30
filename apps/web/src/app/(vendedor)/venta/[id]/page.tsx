@@ -547,6 +547,9 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
                 </button>
               </div>
 
+              {/* Botón "Agregar envío" — agrega ENV01/ENV02 con monto configurable */}
+              <AgregarEnvioPanel ventaId={venta.id} onAgregado={refetch} />
+
               {/* Selector de % de descuento al efectivo (solo mostrador) */}
               {habilitaDescuentoEfectivo && (
                 <div className="bg-basil-100 px-3 py-2 rounded mb-3">
@@ -804,6 +807,81 @@ const METODOS_SPLIT: Array<{ value: PagoLinea['metodo']; label: string; icon: st
   { value: 'MERCADOPAGO_QR', label: 'MP / QR', icon: '📱' },
   { value: 'TRANSFERENCIA', label: 'Transfer.', icon: '🏦' },
 ];
+
+// ────────────────────────────────────────────────────────────────────────
+//   Panel "Agregar envío" — atajo para sumar ENV01/ENV02 al pedido
+// ────────────────────────────────────────────────────────────────────────
+
+function AgregarEnvioPanel({
+  ventaId,
+  onAgregado,
+}: {
+  ventaId: string;
+  onAgregado: () => Promise<void>;
+}) {
+  const [agregando, setAgregando] = useState<'SIMPLE' | 'DOBLE' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [montos, setMontos] = useState<{ simple: string; doble: string } | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await api.get<{ envio_simple_monto?: string; envio_doble_monto?: string }>(
+          '/configuracion/publico',
+        );
+        setMontos({
+          simple: r.envio_simple_monto ?? '3800',
+          doble: r.envio_doble_monto ?? '5400',
+        });
+      } catch {
+        // Si falla, los botones igual funcionan — el backend tiene fallback.
+        setMontos({ simple: '3800', doble: '5400' });
+      }
+    })();
+  }, []);
+
+  async function agregar(tipo: 'SIMPLE' | 'DOBLE') {
+    setAgregando(tipo);
+    setError(null);
+    try {
+      await api.post(`/ventas/${ventaId}/envio`, { tipo });
+      await onAgregado();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo agregar el envío');
+    } finally {
+      setAgregando(null);
+    }
+  }
+
+  return (
+    <div className="bg-saffron-100/40 border border-saffron-200 px-3 py-2 rounded mb-3">
+      <div className="text-2xs text-saffron-600 font-medium uppercase tracking-wider mb-1.5">
+        Agregar envío
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          disabled={agregando !== null}
+          onClick={() => agregar('SIMPLE')}
+          className="px-3 py-2 rounded border border-saffron-300 bg-white hover:bg-saffron-100 text-sm font-medium disabled:opacity-50 transition-colors"
+        >
+          🛵 Envío simple
+          <div className="text-2xs text-ink-500 font-mono">${montos?.simple ?? '...'}</div>
+        </button>
+        <button
+          type="button"
+          disabled={agregando !== null}
+          onClick={() => agregar('DOBLE')}
+          className="px-3 py-2 rounded border border-saffron-300 bg-white hover:bg-saffron-100 text-sm font-medium disabled:opacity-50 transition-colors"
+        >
+          🛵🛵 Envío doble
+          <div className="text-2xs text-ink-500 font-mono">${montos?.doble ?? '...'}</div>
+        </button>
+      </div>
+      {error && <p className="text-2xs text-pomodoro-600 mt-1">⚠ {error}</p>}
+    </div>
+  );
+}
 
 // ────────────────────────────────────────────────────────────────────────
 //   Delivery panel: elegir repartidor (Damián / DELIVERATE / otro)

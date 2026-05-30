@@ -118,6 +118,7 @@ function ProveedoresTab() {
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [modalEdit, setModalEdit] = useState<'nuevo' | string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -148,12 +149,23 @@ function ProveedoresTab() {
   return (
     <div className="space-y-3">
       <div className="flex items-baseline justify-between">
-        <p className="text-sm text-ink-500">
-          {proveedores.length} proveedores · {conSaldo.length} con saldo adeudado
-        </p>
-        <div className="text-right">
-          <div className="text-2xs text-ink-500 uppercase">Total adeudado</div>
-          <MoneyAmount value={totalAdeudado.toFixed(2)} className="text-lg text-pomodoro-600" />
+        <div>
+          <p className="text-sm text-ink-500">
+            {proveedores.length} proveedores · {conSaldo.length} con saldo adeudado
+          </p>
+        </div>
+        <div className="flex items-baseline gap-4">
+          <button
+            type="button"
+            onClick={() => setModalEdit('nuevo')}
+            className="text-sm text-teresita-700 hover:underline font-medium"
+          >
+            + Nuevo proveedor
+          </button>
+          <div className="text-right">
+            <div className="text-2xs text-ink-500 uppercase">Total adeudado</div>
+            <MoneyAmount value={totalAdeudado.toFixed(2)} className="text-lg text-pomodoro-600" />
+          </div>
         </div>
       </div>
 
@@ -249,7 +261,14 @@ function ProveedoresTab() {
                       <span className="text-ink-300">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-ink-300">
+                  <td className="px-4 py-3 text-ink-300 whitespace-nowrap">
+                    <button
+                      onClick={() => setModalEdit(p.id)}
+                      className="text-xs text-teresita-700 hover:underline mr-2"
+                      title="Editar datos del proveedor"
+                    >
+                      ✎
+                    </button>
                     <Link href={`/admin/insumos/${p.id}`} className="hover:text-teresita-700">
                       →
                     </Link>
@@ -260,7 +279,332 @@ function ProveedoresTab() {
           </tbody>
         </table>
       </section>
+
+      {modalEdit && (
+        <ProveedorEditModal
+          proveedorId={modalEdit === 'nuevo' ? null : modalEdit}
+          onClose={() => setModalEdit(null)}
+          onSaved={() => {
+            setModalEdit(null);
+            void fetchData();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Modal de crear / editar proveedor
+// ────────────────────────────────────────────────────────────────────────
+
+interface ProveedorEditable {
+  nombre: string;
+  razonSocial?: string | null;
+  cuit?: string | null;
+  condicionIva?:
+    | 'RESPONSABLE_INSCRIPTO'
+    | 'MONOTRIBUTO'
+    | 'EXENTO'
+    | 'CONSUMIDOR_FINAL'
+    | null;
+  direccion?: string | null;
+  localidad?: string | null;
+  telefono?: string | null;
+  email?: string | null;
+  personaContacto?: string | null;
+  categoriaPrincipal?: string | null;
+  plazoPagoDias?: number;
+  observaciones?: string | null;
+  activo?: boolean;
+}
+
+function ProveedorEditModal({
+  proveedorId,
+  onClose,
+  onSaved,
+}: {
+  proveedorId: string | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const esNuevo = proveedorId === null;
+  const [form, setForm] = useState<ProveedorEditable>({ nombre: '', plazoPagoDias: 0, activo: true });
+  const [cargando, setCargando] = useState(!esNuevo);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (esNuevo) return;
+    void (async () => {
+      try {
+        const r = await api.get<{ proveedor: ProveedorEditable }>(
+          `/admin/proveedores/${proveedorId}`,
+        );
+        setForm({
+          nombre: r.proveedor.nombre,
+          razonSocial: r.proveedor.razonSocial ?? '',
+          cuit: r.proveedor.cuit ?? '',
+          condicionIva: r.proveedor.condicionIva ?? null,
+          direccion: r.proveedor.direccion ?? '',
+          localidad: r.proveedor.localidad ?? '',
+          telefono: r.proveedor.telefono ?? '',
+          email: r.proveedor.email ?? '',
+          personaContacto: r.proveedor.personaContacto ?? '',
+          categoriaPrincipal: r.proveedor.categoriaPrincipal ?? '',
+          plazoPagoDias: r.proveedor.plazoPagoDias ?? 0,
+          observaciones: r.proveedor.observaciones ?? '',
+          activo: r.proveedor.activo ?? true,
+        });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'No se pudo cargar el proveedor');
+      } finally {
+        setCargando(false);
+      }
+    })();
+  }, [proveedorId, esNuevo]);
+
+  function setField<K extends keyof ProveedorEditable>(k: K, v: ProveedorEditable[K]) {
+    setForm((prev) => ({ ...prev, [k]: v }));
+  }
+
+  async function guardar() {
+    if (!form.nombre.trim()) {
+      setError('El nombre es obligatorio');
+      return;
+    }
+    setGuardando(true);
+    setError(null);
+    try {
+      const body: Record<string, unknown> = {
+        nombre: form.nombre.trim(),
+        razonSocial: form.razonSocial || null,
+        cuit: form.cuit || null,
+        condicionIva: form.condicionIva || null,
+        direccion: form.direccion || null,
+        localidad: form.localidad || null,
+        telefono: form.telefono || null,
+        email: form.email || null,
+        personaContacto: form.personaContacto || null,
+        categoriaPrincipal: form.categoriaPrincipal || null,
+        plazoPagoDias: form.plazoPagoDias ?? 0,
+        observaciones: form.observaciones || null,
+      };
+      if (esNuevo) {
+        await api.post('/admin/proveedores', body);
+      } else {
+        body.activo = form.activo;
+        await api.patch(`/admin/proveedores/${proveedorId}`, body);
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al guardar');
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-ink-900/50 flex items-start justify-center p-4 pt-12"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-lg shadow-modal w-full max-w-2xl max-h-[85vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="px-4 py-3 border-b border-cream-300 flex items-baseline justify-between sticky top-0 bg-white z-10">
+          <h2 className="font-display text-md text-teresita-700">
+            {esNuevo ? 'Nuevo proveedor' : `Editar: ${form.nombre || '—'}`}
+          </h2>
+          <button onClick={onClose} className="text-ink-500 text-xl leading-none">
+            ×
+          </button>
+        </header>
+
+        {cargando ? (
+          <div className="p-6 text-center text-ink-500">Cargando…</div>
+        ) : (
+          <div className="p-4 space-y-3">
+            {error && (
+              <div className="bg-pomodoro-100 text-pomodoro-600 px-3 py-2 rounded text-sm">
+                {error}
+              </div>
+            )}
+
+            <Field label="Nombre / razón comercial *">
+              <input
+                type="text"
+                value={form.nombre}
+                onChange={(e) => setField('nombre', e.target.value)}
+                maxLength={120}
+                className="input w-full"
+              />
+            </Field>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Razón social (formal)">
+                <input
+                  type="text"
+                  value={form.razonSocial ?? ''}
+                  onChange={(e) => setField('razonSocial', e.target.value)}
+                  maxLength={160}
+                  className="input w-full"
+                />
+              </Field>
+              <Field label="CUIT">
+                <input
+                  type="text"
+                  value={form.cuit ?? ''}
+                  onChange={(e) => setField('cuit', e.target.value)}
+                  maxLength={20}
+                  placeholder="20-12345678-9"
+                  className="input w-full font-mono"
+                />
+              </Field>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Condición frente a IVA">
+                <select
+                  value={form.condicionIva ?? ''}
+                  onChange={(e) =>
+                    setField('condicionIva', (e.target.value || null) as ProveedorEditable['condicionIva'])
+                  }
+                  className="input w-full"
+                >
+                  <option value="">—</option>
+                  <option value="RESPONSABLE_INSCRIPTO">Responsable Inscripto</option>
+                  <option value="MONOTRIBUTO">Monotributo</option>
+                  <option value="EXENTO">Exento</option>
+                  <option value="CONSUMIDOR_FINAL">Consumidor Final</option>
+                </select>
+              </Field>
+              <Field label="Categoría principal">
+                <input
+                  type="text"
+                  value={form.categoriaPrincipal ?? ''}
+                  onChange={(e) => setField('categoriaPrincipal', e.target.value)}
+                  maxLength={80}
+                  placeholder="Lácteos, Harinas, etc."
+                  className="input w-full"
+                />
+              </Field>
+            </div>
+
+            <Field label="Dirección">
+              <input
+                type="text"
+                value={form.direccion ?? ''}
+                onChange={(e) => setField('direccion', e.target.value)}
+                maxLength={200}
+                placeholder="Calle, número, piso/dpto"
+                className="input w-full"
+              />
+            </Field>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Localidad">
+                <input
+                  type="text"
+                  value={form.localidad ?? ''}
+                  onChange={(e) => setField('localidad', e.target.value)}
+                  maxLength={80}
+                  className="input w-full"
+                />
+              </Field>
+              <Field label="Persona de contacto">
+                <input
+                  type="text"
+                  value={form.personaContacto ?? ''}
+                  onChange={(e) => setField('personaContacto', e.target.value)}
+                  maxLength={120}
+                  className="input w-full"
+                />
+              </Field>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Teléfono">
+                <input
+                  type="tel"
+                  value={form.telefono ?? ''}
+                  onChange={(e) => setField('telefono', e.target.value)}
+                  maxLength={40}
+                  className="input w-full"
+                />
+              </Field>
+              <Field label="Email">
+                <input
+                  type="email"
+                  value={form.email ?? ''}
+                  onChange={(e) => setField('email', e.target.value)}
+                  maxLength={120}
+                  className="input w-full"
+                />
+              </Field>
+            </div>
+
+            <Field label="Plazo de pago (días)">
+              <input
+                type="number"
+                min="0"
+                max="365"
+                value={form.plazoPagoDias ?? 0}
+                onChange={(e) => setField('plazoPagoDias', Number(e.target.value) || 0)}
+                className="input w-32"
+              />
+            </Field>
+
+            <Field label="Observaciones">
+              <textarea
+                value={form.observaciones ?? ''}
+                onChange={(e) => setField('observaciones', e.target.value)}
+                maxLength={500}
+                rows={3}
+                className="input w-full"
+              />
+            </Field>
+
+            {!esNuevo && (
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.activo ?? true}
+                  onChange={(e) => setField('activo', e.target.checked)}
+                />
+                <span>Proveedor activo (visible en listas y formularios)</span>
+              </label>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-cream-300">
+              <button
+                onClick={onClose}
+                className="px-4 py-2 text-sm text-ink-500 hover:text-ink-700"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={guardar}
+                disabled={guardando}
+                className="px-4 py-2 bg-teresita-700 text-cream-50 rounded text-sm font-medium hover:bg-teresita-900 disabled:opacity-50"
+              >
+                {guardando ? 'Guardando…' : esNuevo ? 'Crear proveedor' : 'Guardar cambios'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <div className="text-2xs uppercase tracking-wider text-ink-500 mb-1">{label}</div>
+      {children}
+    </label>
   );
 }
 

@@ -79,6 +79,14 @@ export function ClienteDeliveryFields({
   const [modalAbierto, setModalAbierto] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Autocomplete por nombre — sugerencias inline al tipear
+  const [sugerenciasNombre, setSugerenciasNombre] = useState<ClienteShort[]>([]);
+  const [mostrandoSugerenciasNombre, setMostrandoSugerenciasNombre] = useState(false);
+  const debounceRefNombre = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracking del último valor aplicado para no re-disparar la búsqueda
+  // cuando aplicarCliente() setea nombre directamente.
+  const ultimoNombreAplicado = useRef<string | null>(null);
+
   // Debounced search por teléfono
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -108,9 +116,41 @@ export function ClienteDeliveryFields({
     };
   }, [telefono]);
 
+  // Debounced search por nombre — mínimo 2 letras
+  useEffect(() => {
+    if (debounceRefNombre.current) clearTimeout(debounceRefNombre.current);
+    const nm = nombre.trim();
+    // Si el nombre actual es el que se acaba de aplicar al elegir un cliente,
+    // no abrimos el dropdown de nuevo (sería molesto).
+    if (nm === ultimoNombreAplicado.current) return;
+    if (nm.length < 2) {
+      setSugerenciasNombre([]);
+      setMostrandoSugerenciasNombre(false);
+      return;
+    }
+    debounceRefNombre.current = setTimeout(() => {
+      void (async () => {
+        try {
+          const r = await api.get<{ clientes: ClienteShort[] }>(
+            `/clientes/buscar?nombre=${encodeURIComponent(nm)}`,
+          );
+          setSugerenciasNombre(r.clientes);
+          setMostrandoSugerenciasNombre(r.clientes.length > 0);
+        } catch {
+          setSugerenciasNombre([]);
+          setMostrandoSugerenciasNombre(false);
+        }
+      })();
+    }, 300);
+    return () => {
+      if (debounceRefNombre.current) clearTimeout(debounceRefNombre.current);
+    };
+  }, [nombre]);
+
   function aplicarCliente(c: ClienteShort, d?: DireccionShort) {
     const dir = d ?? c.direcciones.find((x) => x.esDefault) ?? c.direcciones[0];
     const nombreCompleto = c.apellido ? `${c.nombre} ${c.apellido}` : c.nombre;
+    ultimoNombreAplicado.current = nombreCompleto;
     onNombre(nombreCompleto);
     if (c.telefono) onTelefono(c.telefono);
     if (dir) {
@@ -121,6 +161,7 @@ export function ClienteDeliveryFields({
       onIndicaciones(indicacionesPartes.join(' · '));
     }
     setMostrandoSugerencias(false);
+    setMostrandoSugerenciasNombre(false);
     setModalAbierto(false);
   }
 
@@ -133,6 +174,13 @@ export function ClienteDeliveryFields({
             type="text"
             value={nombre}
             onChange={(e) => onNombre(e.target.value)}
+            onFocus={() =>
+              sugerenciasNombre.length > 0 && setMostrandoSugerenciasNombre(true)
+            }
+            onBlur={() => {
+              // Delay para permitir click en una sugerencia
+              setTimeout(() => setMostrandoSugerenciasNombre(false), 150);
+            }}
             placeholder="Nombre"
             maxLength={120}
             className="input text-sm py-1 px-2 pr-8 w-full"
@@ -141,11 +189,37 @@ export function ClienteDeliveryFields({
             type="button"
             onClick={() => setModalAbierto(true)}
             className="absolute right-1 top-1/2 -translate-y-1/2 text-ink-500 hover:text-teresita-700 px-1"
-            title="Buscar cliente por nombre"
-            aria-label="Buscar cliente por nombre"
+            title="Búsqueda avanzada (modal)"
+            aria-label="Búsqueda avanzada de cliente"
           >
             🔍
           </button>
+          {mostrandoSugerenciasNombre && sugerenciasNombre.length > 0 && (
+            <div className="absolute z-20 left-0 right-0 top-full mt-1 bg-white border border-cream-300 rounded-md shadow-lg max-h-64 overflow-y-auto">
+              {sugerenciasNombre.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => aplicarCliente(c)}
+                  className="w-full text-left px-2 py-1.5 hover:bg-cream-100 border-b border-cream-200 last:border-b-0"
+                >
+                  <div className="text-sm text-ink-900 font-medium">
+                    {c.nombre} {c.apellido ?? ''}
+                    {c.telefono && (
+                      <span className="text-ink-500 font-normal"> · {c.telefono}</span>
+                    )}
+                  </div>
+                  {c.direcciones[0] && (
+                    <div className="text-2xs text-ink-500 truncate">
+                      {direccionFlatString(c.direcciones[0])}
+                      {c.direcciones.length > 1 && ` (+${c.direcciones.length - 1} más)`}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="relative">
           <input

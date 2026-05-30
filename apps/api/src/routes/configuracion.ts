@@ -29,6 +29,26 @@ const BCRYPT_ROUNDS = 12;
  */
 export default async function configuracionRoutes(fastify: FastifyInstance) {
   // ──────────────────────────────────────────────────────────────────────
+  //   PÚBLICO (sin admin) — valores que el vendedor necesita en el flujo
+  // ──────────────────────────────────────────────────────────────────────
+
+  // GET /configuracion/publico — devuelve un subset de keys que el vendedor
+  // necesita en el flujo de cobro (montos de envío). Cualquier usuario auth
+  // puede leer esto — no expone passwords ni secretos.
+  fastify.get(
+    '/configuracion/publico',
+    { preHandler: fastify.requireAuth() },
+    async () => {
+      const keys = ['envio_simple_monto', 'envio_doble_monto'];
+      const rows = await prisma.configuracionSistema.findMany({
+        where: { clave: { in: keys } },
+        select: { clave: true, valor: true },
+      });
+      return Object.fromEntries(rows.map((r) => [r.clave, r.valor]));
+    },
+  );
+
+  // ──────────────────────────────────────────────────────────────────────
   //   USUARIOS
   // ──────────────────────────────────────────────────────────────────────
 
@@ -300,6 +320,10 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
             .enum(['MANUAL', 'API_MP', 'BELVO', 'IMPORT_EXTRACTO'])
             .default('MANUAL'),
           comisionMensual: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+          // Si true, los movimientos contra esta cuenta no afectan al
+          // esperado del cierre de caja (ej: cuenta "Efectivo acumulado"
+          // del dueño con plata de cajas pasadas).
+          excluidaDeCierreCaja: z.boolean().optional(),
         }),
       },
     },
@@ -312,6 +336,7 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         alias?: string;
         metodoActualizacion: 'MANUAL' | 'API_MP' | 'BELVO' | 'IMPORT_EXTRACTO';
         comisionMensual?: string;
+        excluidaDeCierreCaja?: boolean;
       };
       const created = await prisma.cuenta.create({
         data: {
@@ -322,6 +347,7 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
           alias: body.alias ?? null,
           metodoActualizacion: body.metodoActualizacion,
           comisionMensual: body.comisionMensual ?? null,
+          excluidaDeCierreCaja: body.excluidaDeCierreCaja ?? false,
         },
       });
       await recordAudit({
@@ -352,6 +378,7 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
             .optional(),
           comisionMensual: z.string().regex(/^\d+(\.\d{1,2})?$/).nullable().optional(),
           activa: z.boolean().optional(),
+          excluidaDeCierreCaja: z.boolean().optional(),
         }),
       },
     },

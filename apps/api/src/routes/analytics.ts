@@ -530,13 +530,27 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
     '/admin/analytics/productos',
     {
       preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
-      schema: { querystring: QuerySchema },
+      schema: {
+        querystring: QuerySchema.extend({
+          // Filtro opcional por categoría (uuid). Aplica al top, ABC y declinantes.
+          categoriaId: z.string().uuid().optional(),
+        }),
+      },
     },
     async (req) => {
-      const q = req.query as z.infer<typeof QuerySchema>;
+      const q = req.query as z.infer<typeof QuerySchema> & { categoriaId?: string };
       const { desde, hasta, desdeAnterior, hastaAnterior } = resolverRango(q);
 
-      // Top productos del período
+      // Filtro de categoría: si vino el id, joineamos productos + tipos_producto
+      // para filtrar por categoria_id. Si no vino, ninguna condición extra.
+      const categoriaFilter = q.categoriaId
+        ? Prisma.sql`AND tp.categoria_id = ${q.categoriaId}::uuid`
+        : Prisma.empty;
+      const categoriaJoin = q.categoriaId
+        ? Prisma.sql`JOIN productos p ON p.id = i.producto_id JOIN tipos_producto tp ON tp.id = p.tipo_producto_id`
+        : Prisma.empty;
+
+      // Top productos del período — SIN LIMIT. El front pagina/colapsa.
       const top = await prisma.$queryRaw<
         Array<{
           producto_id: string;
@@ -554,12 +568,13 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
           COUNT(DISTINCT i.venta_id)::int AS ocurrencias
         FROM items_venta i
         JOIN ventas v ON v.id = i.venta_id
+        ${categoriaJoin}
         WHERE v.estado = 'FINALIZADA'
           AND v.fecha_finalizacion >= ${desde}
           AND v.fecha_finalizacion <= ${hasta}
+          ${categoriaFilter}
         GROUP BY 1, 2
         ORDER BY SUM(i.total_linea) DESC
-        LIMIT 30
       `);
 
       // ABC analysis (Pareto): % acumulado del monto total
@@ -580,9 +595,11 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
             SUM(i.total_linea) AS monto
           FROM items_venta i
           JOIN ventas v ON v.id = i.venta_id
+          ${categoriaJoin}
           WHERE v.estado = 'FINALIZADA'
             AND v.fecha_finalizacion >= ${desde}
             AND v.fecha_finalizacion <= ${hasta}
+            ${categoriaFilter}
           GROUP BY 1, 2
         ),
         ordenado AS (
@@ -663,18 +680,22 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
           SELECT i.producto_id, i.nombre_snapshot, SUM(i.total_linea) AS monto
           FROM items_venta i
           JOIN ventas v ON v.id = i.venta_id
+          ${categoriaJoin}
           WHERE v.estado = 'FINALIZADA'
             AND v.fecha_finalizacion >= ${desde}
             AND v.fecha_finalizacion <= ${hasta}
+            ${categoriaFilter}
           GROUP BY 1, 2
         ),
         anterior AS (
           SELECT i.producto_id, SUM(i.total_linea) AS monto
           FROM items_venta i
           JOIN ventas v ON v.id = i.venta_id
+          ${categoriaJoin}
           WHERE v.estado = 'FINALIZADA'
             AND v.fecha_finalizacion >= ${desdeAnterior}
             AND v.fecha_finalizacion < ${hastaAnterior}
+            ${categoriaFilter}
           GROUP BY 1
         )
         SELECT

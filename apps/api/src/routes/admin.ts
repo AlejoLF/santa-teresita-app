@@ -1453,7 +1453,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         select: {
           metodo: true,
           monto: true,
-          cuenta: { select: { tipo: true } },
+          cuenta: { select: { tipo: true, excluidaDeCierreCaja: true } },
         },
       });
 
@@ -1461,6 +1461,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       // Resta egreso/transferencia desde EFECTIVO; suma ingreso/transferencia hacia EFECTIVO.
       // El resto (egreso desde banco, ingreso a banco, etc.) NO afecta caja —
       // siguen viéndose en el listado pero no en la fórmula de efectivo.
+      // Cuentas con `excluidaDeCierreCaja=true` (ej: "Efectivo acumulado")
+      // se tratan como NO-efectivo para el cálculo aunque su tipo sea EFECTIVO.
       const movimientos = await prisma.movimiento.findMany({
         where: { sesionCajaId: sesion.id, estado: EstadoMovimiento.CONFIRMADO },
         select: {
@@ -1468,8 +1470,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           tipo: true,
           monto: true,
           categoria: { select: { nombre: true } },
-          cuentaOrigen: { select: { tipo: true, nombre: true } },
-          cuentaDestino: { select: { tipo: true, nombre: true } },
+          cuentaOrigen: { select: { tipo: true, nombre: true, excluidaDeCierreCaja: true } },
+          cuentaDestino: { select: { tipo: true, nombre: true, excluidaDeCierreCaja: true } },
         },
       });
 
@@ -1494,10 +1496,15 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         cantidad: v.cantidad,
       }));
 
-      // Plata que ENTRÓ a caja física por ventas (filtra por cuenta destino EFECTIVO,
-      // no por método — un EFECTIVO contra cuenta a cobrar de plataforma no es caja).
+      // Plata que ENTRÓ a caja física por ventas. `excluidaDeCierreCaja`
+      // descarta cuentas como "Efectivo acumulado" (efectivo del dueño que
+      // no entra al turno actual).
+      const esEfectivoCierre = (
+        c: { tipo: string; excluidaDeCierreCaja?: boolean } | null | undefined,
+      ): boolean => !!c && c.tipo === 'EFECTIVO' && c.excluidaDeCierreCaja !== true;
+
       const totalEfectivo = pagosRaw
-        .filter((p) => p.cuenta?.tipo === 'EFECTIVO')
+        .filter((p) => esEfectivoCierre(p.cuenta))
         .reduce((acc, p) => acc + Number(p.monto), 0);
 
       // Plata que SALIÓ de caja física por movimientos (egresos + transferencias internas saliendo).
@@ -1505,7 +1512,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         .filter(
           (m) =>
             (m.tipo === 'EGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
-            m.cuentaOrigen?.tipo === 'EFECTIVO',
+            esEfectivoCierre(m.cuentaOrigen),
         )
         .reduce((acc, m) => acc + Number(m.monto), 0);
 
@@ -1514,7 +1521,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         .filter(
           (m) =>
             (m.tipo === 'INGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
-            m.cuentaDestino?.tipo === 'EFECTIVO',
+            esEfectivoCierre(m.cuentaDestino),
         )
         .reduce((acc, m) => acc + Number(m.monto), 0);
 
@@ -1544,8 +1551,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         // la encargada quiere verlos todos; el filtro es sólo en el cálculo).
         // Cada item incluye `afectaCaja` para que la UI pueda destacarlos.
         movimientos: movimientos.map((m) => {
-          const sale = m.cuentaOrigen?.tipo === 'EFECTIVO';
-          const entra = m.cuentaDestino?.tipo === 'EFECTIVO';
+          const sale = esEfectivoCierre(m.cuentaOrigen);
+          const entra = esEfectivoCierre(m.cuentaDestino);
           return {
             id: m.id,
             tipo: m.tipo,
@@ -1614,11 +1621,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       // proveedores hechos desde banco con la caja, dando diferencias fantasma de
       // millones (incidente: cierre del 17/05 MAÑANA con dif=$4.86M por un egreso de
       // Santander que se restaba como si fuera efectivo).
+      // `excluidaDeCierreCaja=false` filtra cuentas como "Efectivo acumulado"
+      // (efectivo de cajas anteriores que el dueño guarda aparte). Movimientos
+      // contra esas cuentas NO afectan al esperado del turno.
       const pagosEfectivo = await prisma.pago.aggregate({
         _sum: { monto: true },
         where: {
           estado: 'CONFIRMADO',
-          cuenta: { tipo: 'EFECTIVO' },
+          cuenta: { tipo: 'EFECTIVO', excluidaDeCierreCaja: false },
           venta: { sesionCajaId: sesion.id, estado: EstadoVenta.FINALIZADA },
         },
       });
@@ -1628,7 +1638,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           sesionCajaId: sesion.id,
           estado: EstadoMovimiento.CONFIRMADO,
           tipo: { in: ['EGRESO', 'TRANSFERENCIA_INTERNA'] },
-          cuentaOrigen: { tipo: 'EFECTIVO' },
+          cuentaOrigen: { tipo: 'EFECTIVO', excluidaDeCierreCaja: false },
         },
       });
       const ingresosCaja = await prisma.movimiento.aggregate({
@@ -1637,7 +1647,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           sesionCajaId: sesion.id,
           estado: EstadoMovimiento.CONFIRMADO,
           tipo: { in: ['INGRESO', 'TRANSFERENCIA_INTERNA'] },
-          cuentaDestino: { tipo: 'EFECTIVO' },
+          cuentaDestino: { tipo: 'EFECTIVO', excluidaDeCierreCaja: false },
         },
       });
       const esperada =
@@ -1832,7 +1842,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   );
 
   // POST /admin/email/test — sirve para validar que el SMTP está bien antes
-  // de hacer un cierre real.
+  // de hacer un cierre real. Devuelve detalles de error de nodemailer
+  // (`code`, `command`, `response`) para que el admin sepa qué arreglar:
+  // EAUTH = pass mal, ECONNECTION = host/port/firewall, ETIMEDOUT = red, etc.
   fastify.post(
     '/admin/email/test',
     {
@@ -1845,9 +1857,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         const r = await sendTestEmail(body.to);
         return r;
       } catch (e) {
-        return reply
-          .code(500)
-          .send({ error: e instanceof Error ? e.message : 'Error al enviar test' });
+        const err = e as Record<string, unknown>;
+        return reply.code(500).send({
+          error: e instanceof Error ? e.message : 'Error al enviar test',
+          code: err?.code ?? null,
+          command: err?.command ?? null,
+          response: err?.response ?? null,
+          responseCode: err?.responseCode ?? null,
+        });
       }
     },
   );
@@ -1914,7 +1931,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           id: true,
           metodo: true,
           monto: true,
-          cuenta: { select: { id: true, nombre: true, tipo: true } },
+          cuenta: { select: { id: true, nombre: true, tipo: true, excluidaDeCierreCaja: true } },
           venta: { select: { numero: true, numeroOrdenTurno: true, canal: true } },
         },
       });
@@ -1929,8 +1946,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           observacion: true,
           fechaComputo: true,
           categoria: { select: { nombre: true } },
-          cuentaOrigen: { select: { nombre: true, tipo: true } },
-          cuentaDestino: { select: { nombre: true, tipo: true } },
+          cuentaOrigen: { select: { nombre: true, tipo: true, excluidaDeCierreCaja: true } },
+          cuentaDestino: { select: { nombre: true, tipo: true, excluidaDeCierreCaja: true } },
           usuario: { select: { nombre: true } },
         },
         orderBy: { fechaComputo: 'asc' },
@@ -1953,19 +1970,25 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         orderBy: { numeroOrdenTurno: 'asc' },
       });
 
-      // Desglose paso a paso del esperado.
-      const cobrosEfectivo = pagos.filter((p) => p.cuenta?.tipo === 'EFECTIVO');
+      // Desglose paso a paso del esperado. Cuentas con excluidaDeCierreCaja
+      // se consideran NO-efectivo aunque su tipo lo sea — caso "Efectivo
+      // acumulado" del dueño (cajas pasadas).
+      const afectaCierre = (
+        c: { tipo: string; excluidaDeCierreCaja?: boolean } | null | undefined,
+      ): boolean => !!c && c.tipo === 'EFECTIVO' && c.excluidaDeCierreCaja !== true;
+
+      const cobrosEfectivo = pagos.filter((p) => afectaCierre(p.cuenta));
       const totalCobrosEfectivo = cobrosEfectivo.reduce((acc, p) => acc + Number(p.monto), 0);
       const ingresosCaja = movs.filter(
         (m) =>
           (m.tipo === 'INGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
-          m.cuentaDestino?.tipo === 'EFECTIVO',
+          afectaCierre(m.cuentaDestino),
       );
       const totalIngresosCaja = ingresosCaja.reduce((acc, m) => acc + Number(m.monto), 0);
       const egresosCaja = movs.filter(
         (m) =>
           (m.tipo === 'EGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
-          m.cuentaOrigen?.tipo === 'EFECTIVO',
+          afectaCierre(m.cuentaOrigen),
       );
       const totalEgresosCaja = egresosCaja.reduce((acc, m) => acc + Number(m.monto), 0);
 
@@ -1974,13 +1997,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         existenciaInicial + totalCobrosEfectivo + totalIngresosCaja - totalEgresosCaja;
 
       // Pagos no-efectivo (info — no afectan caja física)
-      const pagosNoEfectivo = pagos.filter((p) => p.cuenta?.tipo !== 'EFECTIVO');
-      // Movimientos que NO afectan caja (egresos/ingresos contra banco, etc.)
-      const movsNoAfectanCaja = movs.filter((m) => {
-        const sale = m.cuentaOrigen?.tipo === 'EFECTIVO';
-        const entra = m.cuentaDestino?.tipo === 'EFECTIVO';
-        return !sale && !entra;
-      });
+      const pagosNoEfectivo = pagos.filter((p) => !afectaCierre(p.cuenta));
+      // Movimientos que NO afectan caja (egresos/ingresos contra banco o cuenta excluida).
+      const movsNoAfectanCaja = movs.filter(
+        (m) => !afectaCierre(m.cuentaOrigen) && !afectaCierre(m.cuentaDestino),
+      );
 
       // Agrupar pagos efectivo por método (info breakdown).
       const cobrosEfectivoPorMetodo = new Map<string, { monto: number; cantidad: number }>();

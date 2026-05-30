@@ -432,10 +432,30 @@ function SmtpSection() {
           `⚠ SMTP no configurado (modo Ethereal). El email NO llegó a Gmail.\n\nPreview: ${r.previewUrl}\n\nGuardá la config SMTP arriba antes de probar de nuevo.`,
         );
       } else {
-        alert(`✓ Email de prueba enviado a ${r.recipients.join(', ')}`);
+        alert(
+          `✓ Email de prueba enviado a ${r.recipients.join(', ')}\n\n` +
+            `Si no llega en ~1 minuto, chequear el spam del destinatario.\n` +
+            `Si tampoco está en spam, abrir el panel "Diagnóstico" abajo.`,
+        );
       }
     } catch (e) {
-      alert('✗ ' + (e instanceof Error ? e.message : 'Error desconocido'));
+      // El backend ahora devuelve detalles de error de nodemailer (code,
+      // command, response, responseCode) para que el admin sepa qué arreglar.
+      const errAny = e as { body?: Record<string, unknown>; message?: string };
+      const body = errAny?.body ?? {};
+      const partes: string[] = [];
+      partes.push('✗ ' + (errAny?.message ?? 'Error desconocido'));
+      if (body.code) partes.push(`Código: ${body.code}`);
+      if (body.command) partes.push(`Comando: ${body.command}`);
+      if (body.responseCode) partes.push(`Response: ${body.responseCode}`);
+      if (body.response) partes.push(`Server: ${body.response}`);
+      partes.push('');
+      partes.push('Pistas comunes:');
+      partes.push('• EAUTH = pass mal (regenerá el App Password de Gmail)');
+      partes.push('• ECONNECTION / ETIMEDOUT = no llega al servidor SMTP (firewall/red)');
+      partes.push('• 535 5.7.8 = usuario/pass inválido');
+      partes.push('• 550 = destinatario rechazado o bloqueado por Gmail');
+      alert(partes.join('\n'));
     }
   }
 

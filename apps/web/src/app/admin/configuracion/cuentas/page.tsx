@@ -17,6 +17,7 @@ interface Cuenta {
   metodoActualizacion: 'MANUAL' | 'API_MP' | 'BELVO' | 'IMPORT_EXTRACTO';
   comisionMensual: string | null;
   activa: boolean;
+  excluidaDeCierreCaja?: boolean;
 }
 
 interface CuentaACobrarRef {
@@ -110,6 +111,14 @@ export default function ConfigCuentasPage() {
                   <td className="px-4 py-3">
                     <div className="font-medium text-ink-900">{c.nombre}</div>
                     {c.banco && <div className="text-2xs text-ink-500">{c.banco}</div>}
+                    {c.excluidaDeCierreCaja && (
+                      <div
+                        className="text-2xs text-saffron-600 font-medium"
+                        title="Los movimientos contra esta cuenta NO afectan al esperado del cierre de caja."
+                      >
+                        ⓘ fuera del cierre de caja
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-ink-700 text-xs">
                     {c.tipo === 'EFECTIVO' ? '💵' : c.tipo === 'BANCO' ? '🏦' : '📱'}{' '}
@@ -284,6 +293,9 @@ function ModalCuenta({
   const [alias, setAlias] = useState(cuenta?.alias ?? '');
   const [comisionMensual, setComisionMensual] = useState(cuenta?.comisionMensual ?? '');
   const [activa, setActiva] = useState(cuenta?.activa ?? true);
+  const [excluidaDeCierreCaja, setExcluidaDeCierreCaja] = useState(
+    cuenta?.excluidaDeCierreCaja ?? false,
+  );
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -299,6 +311,7 @@ function ModalCuenta({
           alias: alias || null,
           comisionMensual: comisionMensual || null,
           activa,
+          excluidaDeCierreCaja,
         });
       } else {
         await api.post('/admin/configuracion/cuentas', {
@@ -308,6 +321,7 @@ function ModalCuenta({
           cbuCvu: cbuCvu || undefined,
           alias: alias || undefined,
           comisionMensual: comisionMensual || undefined,
+          excluidaDeCierreCaja: excluidaDeCierreCaja || undefined,
         });
       }
       onSaved();
@@ -401,6 +415,24 @@ function ModalCuenta({
                 className="w-4 h-4"
               />
               <span className="text-sm text-ink-700">Cuenta activa</span>
+            </label>
+          )}
+          {tipo === 'EFECTIVO' && (
+            <label className="flex items-start gap-2 cursor-pointer p-2 rounded bg-cream-100 border border-cream-300">
+              <input
+                type="checkbox"
+                checked={excluidaDeCierreCaja}
+                onChange={(e) => setExcluidaDeCierreCaja(e.target.checked)}
+                className="w-4 h-4 mt-0.5"
+              />
+              <span className="text-xs text-ink-700">
+                <strong>Excluir del cierre de caja</strong>
+                <div className="text-2xs text-ink-500 mt-0.5">
+                  Marcá esto para cuentas como "Efectivo acumulado" del dueño
+                  — los movimientos no afectan al esperado del turno actual,
+                  aunque sigan apareciendo en la lista de movimientos.
+                </div>
+              </span>
             </label>
           )}
         </div>

@@ -1192,7 +1192,20 @@ export default function CargarPedidoPage() {
                 ? cart.idExternoCanal.trim().length > 0
                 : cart.clienteNombre.trim().length > 0 &&
                   cart.direccionEntrega.trim().length > 0;
-              const expanded = panelDatosExpandido ?? !datosCompletos;
+              // ANTES: `expanded = panelDatosExpandido ?? !datosCompletos`.
+              // Bug: cuando la cajera tipeaba el primer carácter en dirección
+              // (con nombre ya cargado), `datosCompletos` pasaba a true y
+              // el panel se auto-colapsaba en medio del tipeo. Ahora, una
+              // vez tocado cualquier campo, expanded queda en true hasta
+              // que el usuario manualmente clickea el header.
+              const tocado =
+                cart.clienteNombre.trim().length > 0 ||
+                cart.clienteTelefono.trim().length > 0 ||
+                cart.direccionEntrega.trim().length > 0 ||
+                cart.indicacionesEntrega.trim().length > 0 ||
+                cart.idExternoCanal.trim().length > 0;
+              const expanded =
+                panelDatosExpandido ?? (tocado ? true : !datosCompletos);
               const summaryDelivery =
                 cart.clienteNombre.trim() ||
                 cart.clienteTelefono.trim() ||

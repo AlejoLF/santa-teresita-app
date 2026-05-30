@@ -1,7 +1,18 @@
 'use client';
 
-import { useAnalytics, Card, Cargando, ErrorBanner, fmtPesos, fmtNum, fmtPct, TablaSimple, type TabProps } from './_shared';
+import { useEffect, useState, useCallback } from 'react';
+import {
+  Card,
+  Cargando,
+  ErrorBanner,
+  fmtPesos,
+  fmtNum,
+  fmtPct,
+  TablaSimple,
+  type TabProps,
+} from './_shared';
 import { InfoTooltip } from './InfoTooltip';
+import { api } from '@/lib/api';
 
 interface ProductosData {
   top: Array<{ producto_id: string; nombre: string; cantidad: string; monto: string; ocurrencias: number }>;
@@ -23,14 +34,76 @@ interface ProductosData {
   }>;
 }
 
+interface CategoriaMini {
+  id: string;
+  nombre: string;
+  icono: string | null;
+}
+
 const CLASE_COLOR: Record<string, string> = {
   A: 'bg-basil-100 text-basil-600',
   B: 'bg-saffron-100 text-saffron-600',
   C: 'bg-cream-200 text-ink-700',
 };
 
+const TOP_INICIALES = 10;
+const ABC_INICIALES = 30;
+
 export function TabProductos(props: TabProps) {
-  const { data, error, cargando } = useAnalytics<ProductosData>('/admin/analytics/productos', props);
+  const [data, setData] = useState<ProductosData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [cargando, setCargando] = useState(false);
+  const [categorias, setCategorias] = useState<CategoriaMini[]>([]);
+  const [categoriaId, setCategoriaId] = useState<string | null>(null);
+  const [verTodosTop, setVerTodosTop] = useState(false);
+  const [verTodosAbc, setVerTodosAbc] = useState(false);
+
+  // Categorías para el filtro
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await api.getCached<{ categorias: CategoriaMini[] }>(
+          '/catalogo/categorias',
+          5 * 60_000,
+        );
+        setCategorias(r.categorias);
+      } catch {
+        // No bloqueante.
+      }
+    })();
+  }, []);
+
+  // Reset de "ver todos" cuando cambia el filtro o período (para no quedar
+  // mostrando 200 filas de la categoría anterior).
+  useEffect(() => {
+    setVerTodosTop(false);
+    setVerTodosAbc(false);
+  }, [categoriaId, props.periodo, props.customDesde, props.customHasta]);
+
+  const fetchData = useCallback(async () => {
+    setCargando(true);
+    try {
+      const params = new URLSearchParams({ periodo: props.periodo });
+      if (props.periodo === 'custom') {
+        params.set('desde', props.customDesde);
+        params.set('hasta', props.customHasta);
+      }
+      if (categoriaId) params.set('categoriaId', categoriaId);
+      const res = await api.get<ProductosData>(
+        `/admin/analytics/productos?${params.toString()}`,
+      );
+      setData(res);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al cargar');
+    } finally {
+      setCargando(false);
+    }
+  }, [props.periodo, props.customDesde, props.customHasta, categoriaId]);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
   if (cargando && !data) return <Cargando alto={500} />;
   if (error) return <ErrorBanner mensaje={error} />;
@@ -46,9 +119,49 @@ export function TabProductos(props: TabProps) {
     {},
   );
 
+  const topVisibles = verTodosTop ? data.top : data.top.slice(0, TOP_INICIALES);
+  const abcVisibles = verTodosAbc ? data.abc : data.abc.slice(0, ABC_INICIALES);
+
   return (
     <>
-      <Card titulo="Top 30 productos del período">
+      {/* Filtro por categoría — chips horizontales */}
+      <div className="card p-3">
+        <div className="text-2xs uppercase tracking-wider text-ink-500 mb-2">
+          Filtrar por categoría
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={() => setCategoriaId(null)}
+            className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+              categoriaId === null
+                ? 'bg-teresita-700 text-white border-teresita-700'
+                : 'bg-white text-ink-700 border-cream-300 hover:bg-cream-100'
+            }`}
+          >
+            Todas
+          </button>
+          {categorias.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setCategoriaId(c.id === categoriaId ? null : c.id)}
+              className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                categoriaId === c.id
+                  ? 'bg-teresita-700 text-white border-teresita-700'
+                  : 'bg-white text-ink-700 border-cream-300 hover:bg-cream-100'
+              }`}
+            >
+              {c.icono ? `${c.icono} ` : ''}
+              {c.nombre}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <Card
+        titulo={`Top productos del período (${data.top.length})`}
+      >
         <TablaSimple
           columnas={[
             { key: 'nombre', label: 'Producto' },
@@ -56,13 +169,26 @@ export function TabProductos(props: TabProps) {
             { key: 'ocurrencias', label: 'Ventas', align: 'right' },
             { key: 'monto', label: 'Total', align: 'right' },
           ]}
-          filas={data.top.map((p) => ({
+          filas={topVisibles.map((p) => ({
             nombre: p.nombre,
             cantidad: fmtNum(Number(p.cantidad)),
             ocurrencias: fmtNum(p.ocurrencias),
             monto: fmtPesos(p.monto),
           }))}
         />
+        {data.top.length > TOP_INICIALES && (
+          <div className="mt-2 text-center">
+            <button
+              type="button"
+              onClick={() => setVerTodosTop(!verTodosTop)}
+              className="text-xs text-teresita-700 hover:underline font-medium"
+            >
+              {verTodosTop
+                ? `▲ Ver sólo top ${TOP_INICIALES}`
+                : `▼ Ver todos (${data.top.length - TOP_INICIALES} más)`}
+            </button>
+          </div>
+        )}
       </Card>
 
       <Card
@@ -97,13 +223,26 @@ export function TabProductos(props: TabProps) {
             { key: 'monto', label: 'Total', align: 'right' },
             { key: 'pct_acum', label: '% acumulado', align: 'right' },
           ]}
-          filas={data.abc.slice(0, 30).map((p) => ({
+          filas={abcVisibles.map((p) => ({
             clase: <span className={`px-2 py-0.5 rounded text-2xs font-bold ${CLASE_COLOR[p.clase]}`}>{p.clase}</span>,
             nombre: p.nombre,
             monto: fmtPesos(p.monto),
             pct_acum: `${p.pct_acum.toFixed(1)}%`,
           }))}
         />
+        {data.abc.length > ABC_INICIALES && (
+          <div className="mt-2 text-center">
+            <button
+              type="button"
+              onClick={() => setVerTodosAbc(!verTodosAbc)}
+              className="text-xs text-teresita-700 hover:underline font-medium"
+            >
+              {verTodosAbc
+                ? `▲ Ver sólo top ${ABC_INICIALES}`
+                : `▼ Ver todos (${data.abc.length - ABC_INICIALES} más)`}
+            </button>
+          </div>
+        )}
       </Card>
 
       <Card

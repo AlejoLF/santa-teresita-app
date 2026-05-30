@@ -368,6 +368,82 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // POST /ventas/:id/envio — atajo para agregar el costo de envío como item.
+  // Lee el monto desde configuracion_sistema (envio_simple_monto /
+  // envio_doble_monto) y resuelve el producto por código (ENV01 / ENV02).
+  fastify.post(
+    '/ventas/:id/envio',
+    {
+      preHandler: fastify.requireAuth(),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({ tipo: z.enum(['SIMPLE', 'DOBLE']) }),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const body = req.body as { tipo: 'SIMPLE' | 'DOBLE' };
+      const venta = await prisma.venta.findUnique({ where: { id: params.id } });
+      if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (venta.estado !== EstadoVenta.PROCESADA) {
+        return reply.code(400).send({
+          error: 'Solo se pueden agregar envíos a ventas en estado PROCESADA',
+        });
+      }
+
+      const codigo = body.tipo === 'SIMPLE' ? 'ENV01' : 'ENV02';
+      const claveMonto = body.tipo === 'SIMPLE' ? 'envio_simple_monto' : 'envio_doble_monto';
+      const [producto, cfg] = await Promise.all([
+        prisma.producto.findUnique({ where: { codigo } }),
+        prisma.configuracionSistema.findUnique({ where: { clave: claveMonto } }),
+      ]);
+      if (!producto) {
+        return reply.code(500).send({
+          error: `Producto ${codigo} no encontrado — re-correr el seed.`,
+        });
+      }
+
+      // Si el config tiene un monto distinto al precio del producto, sincroniza
+      // — el config es la fuente de verdad ("cambia el precio desde admin sin
+      // tocar el catálogo"). El item se agrega después con el precio actualizado.
+      const montoCfg = cfg?.valor ? Number(cfg.valor) : null;
+      if (montoCfg != null && isFinite(montoCfg) && montoCfg > 0) {
+        if (Number(producto.precioBase) !== montoCfg) {
+          await prisma.producto.update({
+            where: { id: producto.id },
+            data: { precioBase: montoCfg.toFixed(2) },
+          });
+        }
+      }
+
+      const updated = await agregarItemsAVenta({
+        ventaId: venta.id,
+        items: [
+          {
+            productoId: producto.id,
+            cantidad: 1,
+            modificadores: [],
+          },
+        ],
+        usuarioId: req.usuario!.id,
+      });
+
+      await recordAudit({
+        tabla: 'ventas',
+        registroId: venta.id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorNuevo: {
+          envio: body.tipo,
+          monto: (montoCfg ?? Number(producto.precioBase)).toFixed(2),
+          totalNuevo: updated.total,
+        },
+      });
+
+      return reply.send(await getVentaCompleta(venta.id));
+    },
+  );
+
   // PATCH /ventas/:id/items/:itemId — editar campos del item (por ahora
   // sólo observacion). Solo permitido en ventas PROCESADAS.
   fastify.patch(

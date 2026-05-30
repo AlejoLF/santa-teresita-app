@@ -586,6 +586,11 @@ model Cuenta {
   ultimaConciliacion  DateTime?                 @map("ultima_conciliacion")
   comisionMensual     Decimal?                  @map("comision_mensual") @db.Decimal(18, 2)
   activa              Boolean                   @default(true)
+  /// Si true, los movimientos contra esta cuenta NO afectan al esperado del
+  /// cierre de caja. Caso típico: cuenta "Efectivo acumulado" del dueño —
+  /// efectivo de cajas previas que él guarda aparte y a veces usa para
+  /// pagar conceptos. Esos egresos no salen de la caja del turno actual.
+  excluidaDeCierreCaja Boolean                  @default(false) @map("excluida_de_cierre_caja")
 
   movimientosOrigen     Movimiento[]    @relation("MovOrigen")
   movimientosDestino    Movimiento[]    @relation("MovDestino")
