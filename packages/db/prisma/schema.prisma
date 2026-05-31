@@ -993,6 +993,23 @@ model DeliveryInfo {
   @@map("delivery_info")
 }
 
+// Empresas / repartidores de delivery configurables desde admin (sección
+// Delivery). Cada una con su comisión. `esInterno` marca el motoquero propio
+// del local (ej. Damián, comisión 0). La comisión por ahora es informativa
+// (se muestra y se guarda) — no descuenta automático en contabilidad todavía.
+model EmpresaDelivery {
+  id          String   @id @default(uuid()) @db.Uuid
+  nombre      String   @unique @db.VarChar(80)
+  comisionPct Decimal  @default(0) @map("comision_pct") @db.Decimal(7, 4)
+  esInterno   Boolean  @default(false) @map("es_interno")
+  orden       Int      @default(0)
+  activo      Boolean  @default(true)
+  creadoAt    DateTime @default(now()) @map("creado_at")
+
+  @@index([activo, orden])
+  @@map("empresas_delivery")
+}
+
 // ════════════════════════════════════════════════════════════════════════
 //   CONFIGURACION DEL SISTEMA (key-value para parámetros)
 // ════════════════════════════════════════════════════════════════════════

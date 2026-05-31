@@ -368,21 +368,32 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // POST /ventas/:id/envio — atajo para agregar el costo de envío como item.
-  // Lee el monto desde configuracion_sistema (envio_simple_monto /
-  // envio_doble_monto) y resuelve el producto por código (ENV01 / ENV02).
+  // POST /ventas/:id/envio — agrega un tipo de envío como item del pedido.
+  // Los tipos de envío son productos del tipoProducto "Envío" gestionados
+  // desde admin (sección Delivery). El precio es el precioBase del producto.
+  //
+  // Acepta:
+  //   { productoId } — id del producto de envío (forma nueva, dinámica), o
+  //   { tipo: SIMPLE|DOBLE } — compat: resuelve por código ENV01/ENV02.
   fastify.post(
     '/ventas/:id/envio',
     {
       preHandler: fastify.requireAuth(),
       schema: {
         params: z.object({ id: z.string().uuid() }),
-        body: z.object({ tipo: z.enum(['SIMPLE', 'DOBLE']) }),
+        body: z
+          .object({
+            productoId: z.string().uuid().optional(),
+            tipo: z.enum(['SIMPLE', 'DOBLE']).optional(),
+          })
+          .refine((b) => b.productoId || b.tipo, {
+            message: 'Falta productoId o tipo',
+          }),
       },
     },
     async (req, reply) => {
       const params = req.params as { id: string };
-      const body = req.body as { tipo: 'SIMPLE' | 'DOBLE' };
+      const body = req.body as { productoId?: string; tipo?: 'SIMPLE' | 'DOBLE' };
       const venta = await prisma.venta.findUnique({ where: { id: params.id } });
       if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
       if (venta.estado !== EstadoVenta.PROCESADA) {
@@ -391,40 +402,22 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const codigo = body.tipo === 'SIMPLE' ? 'ENV01' : 'ENV02';
-      const claveMonto = body.tipo === 'SIMPLE' ? 'envio_simple_monto' : 'envio_doble_monto';
-      const [producto, cfg] = await Promise.all([
-        prisma.producto.findUnique({ where: { codigo } }),
-        prisma.configuracionSistema.findUnique({ where: { clave: claveMonto } }),
-      ]);
-      if (!producto) {
-        return reply.code(500).send({
-          error: `Producto ${codigo} no encontrado — re-correr el seed.`,
-        });
-      }
-
-      // Si el config tiene un monto distinto al precio del producto, sincroniza
-      // — el config es la fuente de verdad ("cambia el precio desde admin sin
-      // tocar el catálogo"). El item se agrega después con el precio actualizado.
-      const montoCfg = cfg?.valor ? Number(cfg.valor) : null;
-      if (montoCfg != null && isFinite(montoCfg) && montoCfg > 0) {
-        if (Number(producto.precioBase) !== montoCfg) {
-          await prisma.producto.update({
-            where: { id: producto.id },
-            data: { precioBase: montoCfg.toFixed(2) },
+      // Resolver el producto de envío: por id (nuevo) o por código (compat).
+      const producto = body.productoId
+        ? await prisma.producto.findUnique({ where: { id: body.productoId } })
+        : await prisma.producto.findUnique({
+            where: { codigo: body.tipo === 'SIMPLE' ? 'ENV01' : 'ENV02' },
           });
-        }
+      if (!producto) {
+        return reply.code(404).send({ error: 'Tipo de envío no encontrado' });
+      }
+      if (!producto.activo) {
+        return reply.code(400).send({ error: 'Ese tipo de envío está desactivado' });
       }
 
       const updated = await agregarItemsAVenta({
         ventaId: venta.id,
-        items: [
-          {
-            productoId: producto.id,
-            cantidad: 1,
-            modificadores: [],
-          },
-        ],
+        items: [{ productoId: producto.id, cantidad: 1, modificadores: [] }],
         usuarioId: req.usuario!.id,
       });
 
@@ -434,8 +427,8 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
         accion: 'UPDATE',
         usuarioId: req.usuario!.id,
         valorNuevo: {
-          envio: body.tipo,
-          monto: (montoCfg ?? Number(producto.precioBase)).toFixed(2),
+          envio: producto.nombre,
+          monto: Number(producto.precioBase).toFixed(2),
           totalNuevo: updated.total,
         },
       });

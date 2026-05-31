@@ -1321,6 +1321,68 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // POST /admin/categorias-movimiento — crear una categoría nueva al vuelo
+  // desde el modal de "Nuevo movimiento". La encargada agrega conceptos que
+  // no estaban en la lista (recurrentes que quiere tener guardados).
+  fastify.post(
+    '/admin/categorias-movimiento',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z.object({
+          nombre: z.string().min(1).max(80),
+          tipo: z.enum(['INGRESO', 'EGRESO', 'TRANSFERENCIA', 'AMBOS']),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const body = req.body as {
+        nombre: string;
+        tipo: 'INGRESO' | 'EGRESO' | 'TRANSFERENCIA' | 'AMBOS';
+      };
+      const nombre = body.nombre.trim();
+      if (!nombre) return reply.code(400).send({ error: 'El nombre no puede estar vacío' });
+
+      // Si ya existe una con ese nombre (case-insensitive), la reusamos en
+      // lugar de fallar — así la encargada no se traba con "ya existe".
+      const existente = await prisma.categoriaMovimiento.findFirst({
+        where: { nombre: { equals: nombre, mode: 'insensitive' } },
+      });
+      if (existente) {
+        // Si estaba desactivada, la reactivamos. Devolvemos la existente.
+        if (!existente.activa) {
+          const reactivada = await prisma.categoriaMovimiento.update({
+            where: { id: existente.id },
+            data: { activa: true },
+          });
+          return reply.code(200).send(reactivada);
+        }
+        return reply.code(200).send(existente);
+      }
+
+      // Orden al final de la lista (después de las de sistema).
+      const max = await prisma.categoriaMovimiento.aggregate({ _max: { orden: true } });
+      const created = await prisma.categoriaMovimiento.create({
+        data: {
+          nombre,
+          tipo: body.tipo as never,
+          esSistema: false,
+          esOperativa: true,
+          orden: (max._max.orden ?? 0) + 1,
+          activa: true,
+        },
+      });
+      await recordAudit({
+        tabla: 'categorias_movimiento',
+        registroId: created.id,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { nombre: created.nombre, tipo: created.tipo },
+      });
+      return reply.code(201).send(created);
+    },
+  );
+
   // GET /admin/cuentas — listado con saldoActual + métricas de los últimos 30 días.
   // Sirve tanto para los selects como para la pantalla "Cuentas y saldos".
   fastify.get(

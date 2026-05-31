@@ -48,6 +48,40 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // GET /configuracion/envios — lista de tipos de envío activos para los
+  // botones de la pantalla de cobro. Cada uno es un producto del tipo "Envío".
+  // Cualquier usuario auth puede leerlo (lo usa el vendedor).
+  fastify.get(
+    '/configuracion/envios',
+    { preHandler: fastify.requireAuth() },
+    async () => {
+      const envios = await listarEnviosActivos();
+      return { envios };
+    },
+  );
+
+  // GET /configuracion/delivery-empresas — empresas activas para el selector
+  // de repartidor del vendedor. Cualquier usuario auth (no solo admin).
+  fastify.get(
+    '/configuracion/delivery-empresas',
+    { preHandler: fastify.requireAuth() },
+    async () => {
+      const empresas = await prisma.empresaDelivery.findMany({
+        where: { activo: true },
+        orderBy: [{ orden: 'asc' }, { nombre: 'asc' }],
+        select: { id: true, nombre: true, comisionPct: true, esInterno: true },
+      });
+      return {
+        empresas: empresas.map((e) => ({
+          id: e.id,
+          nombre: e.nombre,
+          comisionPct: e.comisionPct.toString(),
+          esInterno: e.esInterno,
+        })),
+      };
+    },
+  );
+
   // ──────────────────────────────────────────────────────────────────────
   //   USUARIOS
   // ──────────────────────────────────────────────────────────────────────
@@ -399,6 +433,296 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         valorNuevo: { nombre: updated.nombre, activa: updated.activa },
       });
       return updated;
+    },
+  );
+
+  // ──────────────────────────────────────────────────────────────────────
+  //   DELIVERY — empresas/repartidores con comisión (CRUD)
+  // ──────────────────────────────────────────────────────────────────────
+
+  // GET /admin/configuracion/delivery-empresas — listado (activas e inactivas)
+  fastify.get(
+    '/admin/configuracion/delivery-empresas',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const empresas = await prisma.empresaDelivery.findMany({
+        orderBy: [{ activo: 'desc' }, { orden: 'asc' }, { nombre: 'asc' }],
+      });
+      return { empresas };
+    },
+  );
+
+  // POST /admin/configuracion/delivery-empresas — crear
+  fastify.post(
+    '/admin/configuracion/delivery-empresas',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z.object({
+          nombre: z.string().min(1).max(80),
+          comisionPct: z.string().regex(/^\d+(\.\d{1,4})?$/).optional(),
+          esInterno: z.boolean().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const body = req.body as { nombre: string; comisionPct?: string; esInterno?: boolean };
+      const nombre = body.nombre.trim();
+      const existente = await prisma.empresaDelivery.findFirst({
+        where: { nombre: { equals: nombre, mode: 'insensitive' } },
+      });
+      if (existente) {
+        if (!existente.activo) {
+          const reactivada = await prisma.empresaDelivery.update({
+            where: { id: existente.id },
+            data: { activo: true },
+          });
+          return reply.code(200).send(reactivada);
+        }
+        return reply.code(409).send({ error: 'Ya existe una empresa con ese nombre' });
+      }
+      const max = await prisma.empresaDelivery.aggregate({ _max: { orden: true } });
+      const created = await prisma.empresaDelivery.create({
+        data: {
+          nombre,
+          comisionPct: body.comisionPct ?? '0',
+          esInterno: body.esInterno ?? false,
+          orden: (max._max.orden ?? 0) + 1,
+        },
+      });
+      await recordAudit({
+        tabla: 'empresas_delivery',
+        registroId: created.id,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { nombre: created.nombre, comisionPct: created.comisionPct.toString() },
+      });
+      return reply.code(201).send(created);
+    },
+  );
+
+  // PATCH /admin/configuracion/delivery-empresas/:id — editar
+  fastify.patch(
+    '/admin/configuracion/delivery-empresas/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          nombre: z.string().min(1).max(80).optional(),
+          comisionPct: z.string().regex(/^\d+(\.\d{1,4})?$/).optional(),
+          esInterno: z.boolean().optional(),
+          activo: z.boolean().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const before = await prisma.empresaDelivery.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Empresa no encontrada' });
+      const updated = await prisma.empresaDelivery.update({
+        where: { id: params.id },
+        data: req.body as Record<string, unknown>,
+      });
+      await recordAudit({
+        tabla: 'empresas_delivery',
+        registroId: updated.id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: before.nombre, comisionPct: before.comisionPct.toString(), activo: before.activo },
+        valorNuevo: { nombre: updated.nombre, comisionPct: updated.comisionPct.toString(), activo: updated.activo },
+      });
+      return updated;
+    },
+  );
+
+  // DELETE /admin/configuracion/delivery-empresas/:id — soft delete (activo=false)
+  fastify.delete(
+    '/admin/configuracion/delivery-empresas/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const before = await prisma.empresaDelivery.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Empresa no encontrada' });
+      await prisma.empresaDelivery.update({
+        where: { id: params.id },
+        data: { activo: false },
+      });
+      await recordAudit({
+        tabla: 'empresas_delivery',
+        registroId: params.id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: before.nombre },
+      });
+      return { ok: true };
+    },
+  );
+
+  // ──────────────────────────────────────────────────────────────────────
+  //   ENVÍOS — tipos de envío con nombre + precio (CRUD)
+  //   Cada tipo de envío es un producto del tipoProducto "Envío". El precio
+  //   es el precioBase del producto (fuente de verdad). El botón en cobrar
+  //   se genera dinámicamente desde esta lista.
+  // ──────────────────────────────────────────────────────────────────────
+
+  // GET /admin/configuracion/envios — listado (activos e inactivos)
+  fastify.get(
+    '/admin/configuracion/envios',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const tipoEnvio = await getTipoEnvioId();
+      if (!tipoEnvio) return { envios: [] };
+      const productos = await prisma.producto.findMany({
+        where: { tipoProductoId: tipoEnvio },
+        orderBy: [{ activo: 'desc' }, { nombre: 'asc' }],
+        select: { id: true, codigo: true, nombre: true, precioBase: true, activo: true },
+      });
+      return {
+        envios: productos.map((p) => ({
+          id: p.id,
+          codigo: p.codigo,
+          nombre: p.nombre,
+          monto: p.precioBase.toString(),
+          activo: p.activo,
+        })),
+      };
+    },
+  );
+
+  // POST /admin/configuracion/envios — crear tipo de envío
+  fastify.post(
+    '/admin/configuracion/envios',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z.object({
+          nombre: z.string().min(1).max(80),
+          monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const body = req.body as { nombre: string; monto: string };
+      const tipoEnvio = await getOrCreateTipoEnvio();
+      // Código autogenerado ENVxx incremental para no chocar con ENV01/ENV02.
+      const ultimo = await prisma.producto.findFirst({
+        where: { codigo: { startsWith: 'ENV' } },
+        orderBy: { codigo: 'desc' },
+        select: { codigo: true },
+      });
+      const n = ultimo?.codigo ? parseInt(ultimo.codigo.replace('ENV', ''), 10) + 1 : 1;
+      const codigo = `ENV${String(n).padStart(2, '0')}`;
+      const created = await prisma.producto.create({
+        data: {
+          codigo,
+          tipoProductoId: tipoEnvio,
+          nombre: body.nombre.trim(),
+          formaVenta: 'UNIDAD',
+          unidadPrecio: 'POR_UNIDAD',
+          precioBase: body.monto,
+        },
+        select: { id: true, codigo: true, nombre: true, precioBase: true, activo: true },
+      });
+      await recordAudit({
+        tabla: 'productos',
+        registroId: created.id,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { tipo: 'envio', nombre: created.nombre, monto: created.precioBase.toString() },
+      });
+      return reply.code(201).send({
+        id: created.id,
+        codigo: created.codigo,
+        nombre: created.nombre,
+        monto: created.precioBase.toString(),
+        activo: created.activo,
+      });
+    },
+  );
+
+  // PATCH /admin/configuracion/envios/:id — editar nombre/monto/activo
+  fastify.patch(
+    '/admin/configuracion/envios/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          nombre: z.string().min(1).max(80).optional(),
+          monto: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+          activo: z.boolean().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const body = req.body as { nombre?: string; monto?: string; activo?: boolean };
+      const before = await prisma.producto.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Envío no encontrado' });
+      const updated = await prisma.producto.update({
+        where: { id: params.id },
+        data: {
+          ...(body.nombre !== undefined && { nombre: body.nombre.trim() }),
+          ...(body.monto !== undefined && { precioBase: body.monto }),
+          ...(body.activo !== undefined && { activo: body.activo }),
+        },
+        select: { id: true, codigo: true, nombre: true, precioBase: true, activo: true },
+      });
+      // Mantener sincronizadas las viejas config keys por compatibilidad
+      // (si alguien todavía lee envio_simple_monto/doble).
+      if (before.codigo === 'ENV01' && body.monto) {
+        await prisma.configuracionSistema.updateMany({
+          where: { clave: 'envio_simple_monto' },
+          data: { valor: body.monto },
+        });
+      } else if (before.codigo === 'ENV02' && body.monto) {
+        await prisma.configuracionSistema.updateMany({
+          where: { clave: 'envio_doble_monto' },
+          data: { valor: body.monto },
+        });
+      }
+      await recordAudit({
+        tabla: 'productos',
+        registroId: updated.id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: before.nombre, monto: before.precioBase.toString() },
+        valorNuevo: { nombre: updated.nombre, monto: updated.precioBase.toString() },
+      });
+      return {
+        id: updated.id,
+        codigo: updated.codigo,
+        nombre: updated.nombre,
+        monto: updated.precioBase.toString(),
+        activo: updated.activo,
+      };
+    },
+  );
+
+  // DELETE /admin/configuracion/envios/:id — soft delete (activo=false)
+  fastify.delete(
+    '/admin/configuracion/envios/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const before = await prisma.producto.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Envío no encontrado' });
+      await prisma.producto.update({ where: { id: params.id }, data: { activo: false } });
+      await recordAudit({
+        tabla: 'productos',
+        registroId: params.id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { tipo: 'envio', nombre: before.nombre },
+      });
+      return { ok: true };
     },
   );
 
@@ -871,4 +1195,56 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
       return { ok: true, config: body };
     },
   );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Helpers de envíos (productos del tipoProducto "Envío")
+// ────────────────────────────────────────────────────────────────────────
+
+/** Devuelve el id del tipoProducto "Envío" (o null si no existe todavía). */
+async function getTipoEnvioId(): Promise<string | null> {
+  const tipo = await prisma.tipoProducto.findFirst({
+    where: { nombre: 'Envío' },
+    select: { id: true },
+  });
+  return tipo?.id ?? null;
+}
+
+/** Como getTipoEnvioId pero lo crea si falta (categoría Servicios + tipo Envío). */
+async function getOrCreateTipoEnvio(): Promise<string> {
+  const existente = await getTipoEnvioId();
+  if (existente) return existente;
+  const catServicios = await prisma.categoria.upsert({
+    where: { nombre: 'Servicios' },
+    create: { nombre: 'Servicios', orden: 999, icono: '🛵', color: '#9CA3AF' },
+    update: {},
+  });
+  const tipo = await prisma.tipoProducto.create({
+    data: {
+      categoriaId: catServicios.id,
+      nombre: 'Envío',
+      cocinaInterviene: false,
+      descripcion: 'Costo de envío del pedido (no interviene cocina).',
+    },
+  });
+  return tipo.id;
+}
+
+/** Lista de tipos de envío activos para los botones de cobro. */
+async function listarEnviosActivos(): Promise<
+  Array<{ id: string; codigo: string | null; nombre: string; monto: string }>
+> {
+  const tipoEnvio = await getTipoEnvioId();
+  if (!tipoEnvio) return [];
+  const productos = await prisma.producto.findMany({
+    where: { tipoProductoId: tipoEnvio, activo: true },
+    orderBy: { nombre: 'asc' },
+    select: { id: true, codigo: true, nombre: true, precioBase: true },
+  });
+  return productos.map((p) => ({
+    id: p.id,
+    codigo: p.codigo,
+    nombre: p.nombre,
+    monto: p.precioBase.toString(),
+  }));
 }

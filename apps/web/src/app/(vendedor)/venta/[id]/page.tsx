@@ -812,6 +812,13 @@ const METODOS_SPLIT: Array<{ value: PagoLinea['metodo']; label: string; icon: st
 //   Panel "Agregar envío" — atajo para sumar ENV01/ENV02 al pedido
 // ────────────────────────────────────────────────────────────────────────
 
+interface EnvioOpcion {
+  id: string;
+  codigo: string | null;
+  nombre: string;
+  monto: string;
+}
+
 function AgregarEnvioPanel({
   ventaId,
   onAgregado,
@@ -819,32 +826,26 @@ function AgregarEnvioPanel({
   ventaId: string;
   onAgregado: () => Promise<void>;
 }) {
-  const [agregando, setAgregando] = useState<'SIMPLE' | 'DOBLE' | null>(null);
+  const [agregando, setAgregando] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [montos, setMontos] = useState<{ simple: string; doble: string } | null>(null);
+  const [envios, setEnvios] = useState<EnvioOpcion[] | null>(null);
 
   useEffect(() => {
     void (async () => {
       try {
-        const r = await api.get<{ envio_simple_monto?: string; envio_doble_monto?: string }>(
-          '/configuracion/publico',
-        );
-        setMontos({
-          simple: r.envio_simple_monto ?? '3800',
-          doble: r.envio_doble_monto ?? '5400',
-        });
+        const r = await api.get<{ envios: EnvioOpcion[] }>('/configuracion/envios');
+        setEnvios(r.envios);
       } catch {
-        // Si falla, los botones igual funcionan — el backend tiene fallback.
-        setMontos({ simple: '3800', doble: '5400' });
+        setEnvios([]);
       }
     })();
   }, []);
 
-  async function agregar(tipo: 'SIMPLE' | 'DOBLE') {
-    setAgregando(tipo);
+  async function agregar(envio: EnvioOpcion) {
+    setAgregando(envio.id);
     setError(null);
     try {
-      await api.post(`/ventas/${ventaId}/envio`, { tipo });
+      await api.post(`/ventas/${ventaId}/envio`, { productoId: envio.id });
       await onAgregado();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo agregar el envío');
@@ -853,30 +854,33 @@ function AgregarEnvioPanel({
     }
   }
 
+  // Si todavía no cargó, o no hay envíos configurados, no mostramos el panel.
+  if (envios !== null && envios.length === 0) return null;
+
   return (
     <div className="bg-saffron-100/40 border border-saffron-200 px-3 py-2 rounded mb-3">
       <div className="text-2xs text-saffron-600 font-medium uppercase tracking-wider mb-1.5">
         Agregar envío
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          disabled={agregando !== null}
-          onClick={() => agregar('SIMPLE')}
-          className="px-3 py-2 rounded border border-saffron-300 bg-white hover:bg-saffron-100 text-sm font-medium disabled:opacity-50 transition-colors"
-        >
-          🛵 Envío simple
-          <div className="text-2xs text-ink-500 font-mono">${montos?.simple ?? '...'}</div>
-        </button>
-        <button
-          type="button"
-          disabled={agregando !== null}
-          onClick={() => agregar('DOBLE')}
-          className="px-3 py-2 rounded border border-saffron-300 bg-white hover:bg-saffron-100 text-sm font-medium disabled:opacity-50 transition-colors"
-        >
-          🛵🛵 Envío doble
-          <div className="text-2xs text-ink-500 font-mono">${montos?.doble ?? '...'}</div>
-        </button>
+        {envios === null ? (
+          <div className="text-2xs text-ink-500 col-span-2">Cargando…</div>
+        ) : (
+          envios.map((envio) => (
+            <button
+              key={envio.id}
+              type="button"
+              disabled={agregando !== null}
+              onClick={() => agregar(envio)}
+              className="px-3 py-2 rounded border border-saffron-300 bg-white hover:bg-saffron-100 text-sm font-medium disabled:opacity-50 transition-colors text-left"
+            >
+              🛵 {envio.nombre}
+              <div className="text-2xs text-ink-500 font-mono">
+                ${Number(envio.monto).toLocaleString('es-AR')}
+              </div>
+            </button>
+          ))
+        )}
       </div>
       {error && <p className="text-2xs text-pomodoro-600 mt-1">⚠ {error}</p>}
     </div>
@@ -889,6 +893,13 @@ function AgregarEnvioPanel({
 
 type RepartidorOpcion = 'DAMIAN' | 'DELIVERATE' | 'OTRO_EMPLEADO' | 'PLATAFORMA';
 
+interface EmpresaDeliveryLite {
+  id: string;
+  nombre: string;
+  comisionPct: string;
+  esInterno: boolean;
+}
+
 function DeliveryPanel({
   venta,
   editable,
@@ -899,7 +910,6 @@ function DeliveryPanel({
   onUpdated: () => Promise<void>;
 }) {
   const snap = (venta.deliveryInfo?.direccionSnapshot ?? {}) as Record<string, unknown>;
-  const repartidorActual = (snap._repartidor as RepartidorOpcion | undefined) ?? null;
   const empleadoActual = (snap._empleadoNombre as string | null | undefined) ?? null;
   const empresaActual = venta.deliveryInfo?.empresaExterna ?? null;
   const clienteNombreActual =
@@ -911,7 +921,6 @@ function DeliveryPanel({
     typeof snap.indicaciones === 'string' ? snap.indicaciones : '';
 
   const [editando, setEditando] = useState(false);
-  const [repartidor, setRepartidor] = useState<RepartidorOpcion | null>(repartidorActual);
   const [empleadoNombre, setEmpleadoNombre] = useState(empleadoActual ?? '');
   const [observaciones, setObservaciones] = useState(venta.deliveryInfo?.observaciones ?? '');
   const [clienteNombre, setClienteNombre] = useState(clienteNombreActual);
@@ -921,10 +930,40 @@ function DeliveryPanel({
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Empresas de delivery configuradas (sección admin Delivery). Alimentan los
+  // botones de "¿Quién entrega?". `empresaSel` guarda el id elegido, o el
+  // sentinel '__otro__' para escribir un nombre a mano.
+  const [empresas, setEmpresas] = useState<EmpresaDeliveryLite[]>([]);
+  const [empresaSel, setEmpresaSel] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await api.get<{ empresas: EmpresaDeliveryLite[] }>('/configuracion/delivery-empresas');
+        setEmpresas(r.empresas);
+      } catch {
+        setEmpresas([]);
+      }
+    })();
+  }, []);
+
+  // Pre-seleccionar la empresa según lo ya guardado (match por nombre con la
+  // lista). Si había un nombre que no matchea ninguna empresa → '__otro__'.
+  useEffect(() => {
+    if (empresaSel !== null || empresas.length === 0) return;
+    const nombreGuardado = empleadoActual ?? empresaActual ?? null;
+    if (!nombreGuardado) return;
+    const match = empresas.find(
+      (e) => e.nombre.toLowerCase() === nombreGuardado.toLowerCase(),
+    );
+    setEmpresaSel(match ? match.id : '__otro__');
+    if (!match) setEmpleadoNombre(nombreGuardado);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [empresas]);
+
   // Re-sincronizar campos cuando la venta se refresca (después de un PATCH
   // de canal/modalidad por ejemplo).
   useEffect(() => {
-    setRepartidor(repartidorActual);
     setEmpleadoNombre(empleadoActual ?? '');
     setObservaciones(venta.deliveryInfo?.observaciones ?? '');
     setClienteNombre(clienteNombreActual);
@@ -934,27 +973,48 @@ function DeliveryPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venta.id, venta.deliveryInfo?.observaciones]);
 
-  // Si el canal viene de plataforma, sugerimos PLATAFORMA por default
+  // Si el canal viene de plataforma, sugerimos esa empresa por default.
   useEffect(() => {
-    if (repartidor !== null) return;
-    if (
-      venta.canal === 'PEDIDOS_YA' ||
-      venta.canal === 'RAPPI' ||
-      venta.canal === 'MERCADO_LIBRE'
-    ) {
-      setRepartidor('PLATAFORMA');
-    }
+    if (empresaSel !== null || empresas.length === 0) return;
+    const porCanal: Record<string, string> = {
+      PEDIDOS_YA: 'pedidos ya',
+      RAPPI: 'rappi',
+      MERCADO_LIBRE: 'mercado libre',
+    };
+    const buscar = porCanal[venta.canal];
+    if (!buscar) return;
+    const match = empresas.find((e) => e.nombre.toLowerCase() === buscar);
+    if (match) setEmpresaSel(match.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [venta.canal]);
+  }, [venta.canal, empresas]);
 
   async function guardar() {
-    if (!repartidor) return setError('Elegí quién entrega');
-    if (repartidor === 'OTRO_EMPLEADO' && !empleadoNombre.trim()) {
-      return setError('Falta el nombre del empleado');
+    if (!empresaSel) return setError('Elegí quién entrega');
+    const empresaElegida = empresas.find((e) => e.id === empresaSel);
+    if (empresaSel === '__otro__' && !empleadoNombre.trim()) {
+      return setError('Escribí el nombre de quién entrega');
     }
     setGuardando(true);
     setError(null);
     try {
+      // Mapeamos la empresa elegida al contrato del endpoint:
+      //  - interna (motoquero propio) → OTRO_EMPLEADO con empleadoNombre
+      //  - externa (plataforma/empresa) → PLATAFORMA con empresaExterna
+      //  - '__otro__' → OTRO_EMPLEADO con el nombre escrito a mano
+      let repartidor: RepartidorOpcion;
+      let empleadoNombreFinal: string | undefined;
+      let empresaExternaFinal: string | undefined;
+      if (empresaSel === '__otro__') {
+        repartidor = 'OTRO_EMPLEADO';
+        empleadoNombreFinal = empleadoNombre.trim();
+      } else if (empresaElegida?.esInterno) {
+        repartidor = 'OTRO_EMPLEADO';
+        empleadoNombreFinal = empresaElegida.nombre;
+      } else {
+        repartidor = 'PLATAFORMA';
+        empresaExternaFinal = empresaElegida?.nombre ?? venta.canal;
+      }
+
       // Construimos el snapshot fresh con los datos del cliente + markers
       // del repartidor. El backend hace MERGE con el existente para que no
       // se pisen datos que el caller no envía.
@@ -967,8 +1027,8 @@ function DeliveryPanel({
       };
       await api.put(`/ventas/${venta.id}/delivery`, {
         repartidor,
-        empleadoNombre: empleadoNombre || undefined,
-        empresaExterna: repartidor === 'PLATAFORMA' ? venta.canal : undefined,
+        empleadoNombre: empleadoNombreFinal,
+        empresaExterna: empresaExternaFinal,
         observaciones: observaciones || undefined,
         direccionSnapshot: nuevoSnap,
       });
@@ -1080,35 +1140,48 @@ function DeliveryPanel({
               ¿Quién entrega?
             </label>
             <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  { v: 'DAMIAN', label: '🛵 Damián', desc: 'Delivery propio' },
-                  { v: 'DELIVERATE', label: '🛵 DELIVERATE', desc: 'Empresa tercerizada' },
-                  { v: 'OTRO_EMPLEADO', label: '🛵 Otro empleado', desc: 'A definir' },
-                  { v: 'PLATAFORMA', label: '🛵 Plataforma', desc: 'RAPPI / PYA / MELI' },
-                ] as Array<{ v: RepartidorOpcion; label: string; desc: string }>
-              ).map((opt) => (
+              {empresas.map((emp) => (
                 <button
-                  key={opt.v}
-                  onClick={() => setRepartidor(opt.v)}
+                  key={emp.id}
+                  onClick={() => setEmpresaSel(emp.id)}
                   className={cn(
                     'p-3 rounded-md border text-left text-sm transition-colors',
-                    repartidor === opt.v
+                    empresaSel === emp.id
                       ? 'bg-teresita-50 border-teresita-700'
                       : 'bg-white border-cream-300 hover:bg-cream-50',
                   )}
                 >
-                  <div className="font-medium">{opt.label}</div>
-                  <div className="text-2xs text-ink-500">{opt.desc}</div>
+                  <div className="font-medium">🛵 {emp.nombre}</div>
+                  <div className="text-2xs text-ink-500">
+                    {emp.esInterno ? 'Delivery propio' : 'Empresa / plataforma'}
+                    {Number(emp.comisionPct) > 0 && ` · ${Number(emp.comisionPct).toFixed(0)}%`}
+                  </div>
                 </button>
               ))}
+              <button
+                onClick={() => setEmpresaSel('__otro__')}
+                className={cn(
+                  'p-3 rounded-md border text-left text-sm transition-colors',
+                  empresaSel === '__otro__'
+                    ? 'bg-teresita-50 border-teresita-700'
+                    : 'bg-white border-cream-300 hover:bg-cream-50',
+                )}
+              >
+                <div className="font-medium">🛵 Otro</div>
+                <div className="text-2xs text-ink-500">Escribir a mano</div>
+              </button>
             </div>
+            {empresas.length === 0 && (
+              <p className="text-2xs text-ink-500 mt-1">
+                No hay empresas de delivery configuradas. Agregalas en Administración → Delivery.
+              </p>
+            )}
           </div>
 
-          {repartidor === 'OTRO_EMPLEADO' && (
+          {empresaSel === '__otro__' && (
             <div>
               <label className="block text-2xs font-medium text-ink-700 mb-1">
-                Nombre del empleado
+                Nombre de quién entrega
               </label>
               <input
                 type="text"

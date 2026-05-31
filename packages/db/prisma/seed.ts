@@ -1536,6 +1536,29 @@ async function seedEnvios() {
   console.log('  ✓ ENV01 (Envío Simple) + ENV02 (Envío Doble)');
 }
 
+// Empresas / repartidores de delivery configurables. Damián = motoquero propio
+// (interno, comisión 0). Las plataformas arrancan con comisión 0 (TBD — la
+// encargada las completa cuando lleguen las credenciales partner).
+async function seedEmpresasDelivery() {
+  console.log('▸ Seeding empresas de delivery...');
+  const empresas: Array<[string, number, boolean, number]> = [
+    // [nombre, comisionPct, esInterno, orden]
+    ['Damián', 0, true, 0],
+    ['DELIVERATE', 0, false, 1],
+    ['RAPPI', 0, false, 2],
+    ['Pedidos YA', 0, false, 3],
+    ['Mercado Libre', 0, false, 4],
+  ];
+  for (const [nombre, comisionPct, esInterno, orden] of empresas) {
+    await prisma.empresaDelivery.upsert({
+      where: { nombre },
+      create: { nombre, comisionPct: comisionPct.toFixed(4), esInterno, orden },
+      update: {}, // no pisar comisiones que la encargada ya editó
+    });
+  }
+  console.log(`  ✓ ${empresas.length} empresas de delivery`);
+}
+
 async function seedEmpleados() {
   console.log('▸ Seeding empleados...');
   const empleados: Array<{
@@ -1579,6 +1602,7 @@ async function main() {
   await seedEmpleados();
   await seedConfiguracion();
   await seedEnvios();
+  await seedEmpresasDelivery();
   await seedPosnets();
 
   console.log('\n═══════════════════════════════════════════════════════════');

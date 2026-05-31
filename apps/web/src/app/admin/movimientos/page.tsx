@@ -101,20 +101,27 @@ export default function AdminMovimientosPage() {
     void fetchMovimientos();
   }, [fetchMovimientos]);
 
+  const refetchCategorias = useCallback(async (): Promise<Categoria[]> => {
+    try {
+      const cat = await api.get<{ categorias: Categoria[] }>('/admin/categorias-movimiento');
+      setCategorias(cat.categorias);
+      return cat.categorias;
+    } catch {
+      return [];
+    }
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
-        const [c, cat] = await Promise.all([
-          api.get<{ cuentas: Cuenta[] }>('/admin/cuentas'),
-          api.get<{ categorias: Categoria[] }>('/admin/categorias-movimiento'),
-        ]);
+        const c = await api.get<{ cuentas: Cuenta[] }>('/admin/cuentas');
         setCuentas(c.cuentas);
-        setCategorias(cat.categorias);
+        await refetchCategorias();
       } catch {
         /* silencioso */
       }
     })();
-  }, []);
+  }, [refetchCategorias]);
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
@@ -375,6 +382,7 @@ export default function AdminMovimientosPage() {
         <FormNuevoMovimiento
           cuentas={cuentas}
           categorias={categorias}
+          onCategoriasChange={refetchCategorias}
           onClose={() => setShowForm(false)}
           onCreated={() => {
             setShowForm(false);
@@ -445,17 +453,25 @@ interface CuentaLinea {
 function FormNuevoMovimiento({
   cuentas,
   categorias,
+  onCategoriasChange,
   onClose,
   onCreated,
 }: {
   cuentas: Cuenta[];
   categorias: Categoria[];
+  onCategoriasChange: () => Promise<Categoria[]>;
   onClose: () => void;
   onCreated: () => void;
 }) {
   const [tipo, setTipo] = useState<'INGRESO' | 'EGRESO' | 'TRANSFERENCIA_INTERNA'>('EGRESO');
   const [monto, setMonto] = useState('');
   const [categoriaId, setCategoriaId] = useState('');
+  // Crear categoría nueva al vuelo (la encargada agrega conceptos recurrentes
+  // que no están en la lista). Cuando agregaCat=true mostramos el input inline.
+  const [agregaCat, setAgregaCat] = useState(false);
+  const [nuevaCatNombre, setNuevaCatNombre] = useState('');
+  const [creandoCat, setCreandoCat] = useState(false);
+  const [errorCat, setErrorCat] = useState<string | null>(null);
   // Multi-cuenta para INGRESO / EGRESO. Para TRANSFERENCIA_INTERNA usamos un origen y un destino únicos.
   const [cuentasLineas, setCuentasLineas] = useState<CuentaLinea[]>([
     { cuentaId: '', monto: '' },
@@ -546,6 +562,34 @@ function FormNuevoMovimiento({
       setCategoriaId('');
     }
   }, [tipo, categoriaId, categoriasFiltradas]);
+
+  // Crear categoría nueva con tipo AMBOS: queda disponible tanto en ingresos
+  // como en egresos (y transferencias), así la encargada la encuentra siempre
+  // sin importar desde qué tipo de movimiento la creó. Tras crear, refrescamos
+  // la lista del padre y la dejamos seleccionada.
+  async function crearCategoria() {
+    const nombre = nuevaCatNombre.trim();
+    if (!nombre) {
+      setErrorCat('Escribí un nombre');
+      return;
+    }
+    setCreandoCat(true);
+    setErrorCat(null);
+    try {
+      const creada = await api.post<{ id: string }>('/admin/categorias-movimiento', {
+        nombre,
+        tipo: 'AMBOS',
+      });
+      await onCategoriasChange();
+      setCategoriaId(creada.id);
+      setAgregaCat(false);
+      setNuevaCatNombre('');
+    } catch (e) {
+      setErrorCat(e instanceof Error ? e.message : 'No se pudo crear la categoría');
+    } finally {
+      setCreandoCat(false);
+    }
+  }
 
   function setConcepto(idx: number, patch: Partial<ConceptoLinea>) {
     setConceptos((arr) => arr.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
@@ -790,19 +834,82 @@ function FormNuevoMovimiento({
           {/* Categoría */}
           <div>
             <label className="block text-sm font-medium text-ink-700 mb-1">Categoría</label>
-            <select
-              value={categoriaId}
-              onChange={(e) => setCategoriaId(e.target.value)}
-              className="input"
-            >
-              <option value="">Elegí categoría...</option>
-              {categoriasFiltradas.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.nombre}
-                  {!c.esOperativa && ' · no operativa'}
-                </option>
-              ))}
-            </select>
+            {!agregaCat ? (
+              <>
+                <select
+                  value={categoriaId}
+                  onChange={(e) => {
+                    if (e.target.value === '__nueva__') {
+                      setAgregaCat(true);
+                      setErrorCat(null);
+                      return;
+                    }
+                    setCategoriaId(e.target.value);
+                  }}
+                  className="input"
+                >
+                  <option value="">Elegí categoría...</option>
+                  {categoriasFiltradas.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nombre}
+                      {!c.esOperativa && ' · no operativa'}
+                    </option>
+                  ))}
+                  <option value="__nueva__">➕ Agregar categoría nueva…</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAgregaCat(true);
+                    setErrorCat(null);
+                  }}
+                  className="mt-1 text-xs text-teresita-700 hover:underline"
+                >
+                  ➕ Agregar una categoría que no está en la lista
+                </button>
+              </>
+            ) : (
+              <div className="rounded-md border border-teresita-700/40 bg-teresita-50/50 p-3 space-y-2">
+                <div className="text-2xs uppercase tracking-wider text-teresita-700 font-semibold">
+                  Nueva categoría
+                </div>
+                <input
+                  type="text"
+                  value={nuevaCatNombre}
+                  onChange={(e) => setNuevaCatNombre(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void crearCategoria();
+                    }
+                  }}
+                  placeholder="Ej: Alquiler, Limpieza, Reparación heladera…"
+                  className="input w-full"
+                  maxLength={80}
+                  autoFocus
+                />
+                {errorCat && <p className="text-2xs text-pomodoro-600">{errorCat}</p>}
+                <p className="text-2xs text-ink-500">
+                  Queda guardada para usarla siempre. Aparece tanto en ingresos como en egresos.
+                </p>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={crearCategoria} disabled={creandoCat}>
+                    {creandoCat ? 'Guardando…' : 'Guardar categoría'}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      setAgregaCat(false);
+                      setNuevaCatNombre('');
+                      setErrorCat(null);
+                    }}
+                  >
+                    Cancelar
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Sub-form para Insumos / Pago a proveedor */}
