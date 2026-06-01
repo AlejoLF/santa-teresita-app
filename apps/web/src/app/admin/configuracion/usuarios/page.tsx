@@ -344,6 +344,7 @@ interface SmtpConfig {
   secure: boolean;
   user: string;
   passConfigurado: boolean;
+  passLength: number;
   from: string;
   autoEnvioCierre: boolean;
   status: {
@@ -362,6 +363,7 @@ function SmtpSection() {
   const [secure, setSecure] = useState(false);
   const [user, setUser] = useState('');
   const [pass, setPass] = useState('');
+  const [verPass, setVerPass] = useState(false);
   const [from, setFrom] = useState('');
   const [autoEnvio, setAutoEnvio] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -404,10 +406,13 @@ function SmtpSection() {
         autoEnvioCierre: autoEnvio,
       };
       // Sólo enviamos pass si la encargada escribió uno nuevo. Vacío =
-      // mantener el actual. '__CLEAR__' = borrar el guardado.
-      if (pass.trim()) body.pass = pass.trim();
+      // mantener el actual. Stripeamos espacios porque Gmail muestra el App
+      // Password como "xxxx xxxx xxxx xxxx" pero se envía sin espacios.
+      const passLimpio = pass.replace(/\s+/g, '');
+      if (passLimpio) body.pass = passLimpio;
       await api.put('/admin/configuracion/smtp', body);
       setPass('');
+      setVerPass(false);
       setSavedFlash('✓ Guardado');
       setTimeout(() => setSavedFlash(null), 3000);
       void reload();
@@ -539,21 +544,47 @@ function SmtpSection() {
             className="input w-full"
           />
         </label>
-        <label className="space-y-1">
+        <div className="space-y-1">
           <div className="text-2xs uppercase text-ink-500">
             Password{' '}
             {cfg?.passConfigurado && (
               <span className="text-basil-600 normal-case">(ya configurado — dejá vacío para conservar)</span>
             )}
           </div>
-          <input
-            type="password"
-            value={pass}
-            onChange={(e) => setPass(e.target.value)}
-            placeholder={cfg?.passConfigurado ? '••••••••' : 'App Password de 16 chars'}
-            className="input w-full"
-          />
-        </label>
+          <div className="relative">
+            <input
+              type={verPass ? 'text' : 'password'}
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              placeholder={cfg?.passConfigurado ? 'Dejá vacío para conservar la actual' : 'App Password de 16 caracteres'}
+              className="input w-full pr-16"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              onClick={() => setVerPass((v) => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-2xs text-teresita-700 hover:underline"
+              title={verPass ? 'Ocultar' : 'Mostrar'}
+            >
+              {verPass ? '🙈 ocultar' : '👁 mostrar'}
+            </button>
+          </div>
+          {/* Feedback de longitud: mientras tipea muestra cuántos lleva; si ya
+              hay una guardada y el campo está vacío, confirma su longitud para
+              que se vea que NO se truncó. */}
+          {pass.length > 0 ? (
+            <p className="text-2xs text-ink-500">
+              Escribiendo: {pass.replace(/\s+/g, '').length} caracteres
+              {pass.replace(/\s+/g, '').length === 16 && ' ✓'}
+            </p>
+          ) : cfg?.passConfigurado ? (
+            <p className="text-2xs text-basil-600">
+              🔒 Contraseña guardada ({cfg.passLength} caracteres)
+              {cfg.passLength === 16 && ' ✓'}
+            </p>
+          ) : null}
+        </div>
         <label className="space-y-1 col-span-2">
           <div className="text-2xs uppercase text-ink-500">
             Remitente (cómo aparece en el email)

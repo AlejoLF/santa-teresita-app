@@ -1095,8 +1095,11 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         port: map.smtp_port ?? '587',
         secure: map.smtp_secure === 'true',
         user: map.smtp_user ?? '',
-        // Enmascaramos el pass: si está seteado mostramos sólo si tiene algo.
+        // Enmascaramos el pass: nunca devolvemos el valor. Pero sí su LONGITUD
+        // (sin espacios) para que la UI muestre "guardada (16 caracteres)" y se
+        // vea que quedó completa — un App Password de Gmail son 16.
         passConfigurado: !!(map.smtp_pass && map.smtp_pass.length > 0),
+        passLength: map.smtp_pass ? map.smtp_pass.replace(/\s+/g, '').length : 0,
         from: map.smtp_from ?? '',
         autoEnvioCierre: map.email_auto_envio_cierre === 'true',
         // Estado actual del mailer (incluye fallback al .env si la DB no tiene).
