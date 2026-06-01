@@ -569,14 +569,11 @@ function SmtpSection() {
             Si dejás <code>&lt;&gt;</code> vacío, se usa el usuario. Ej: <code>"Santa Teresita Pastas &lt;&gt;"</code>.
           </p>
         </label>
-        <label className="col-span-2 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={secure}
-            onChange={(e) => setSecure(e.target.checked)}
-          />
-          <span>Conexión TLS implícita (sólo si usás puerto 465)</span>
-        </label>
+        <p className="col-span-2 text-2xs text-ink-500 bg-cream-100 rounded p-2">
+          🔒 El tipo de cifrado se detecta solo según el puerto:{' '}
+          <strong>587</strong> usa STARTTLS y <strong>465</strong> TLS directo. No tenés
+          que configurar nada — para Gmail dejá el puerto en 587.
+        </p>
         <label className="col-span-2 flex items-center gap-2 text-sm p-2 rounded bg-cream-100">
           <input
             type="checkbox"

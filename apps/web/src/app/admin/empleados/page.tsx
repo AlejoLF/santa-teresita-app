@@ -64,6 +64,18 @@ export default function EmpleadosListPage() {
     void fetchData();
   }, [fetchData]);
 
+  async function eliminarEmpleado(id: string, nombre: string) {
+    if (!confirm(`¿Eliminar al empleado "${nombre}"? Se oculta de los listados (sus pagos históricos se conservan).`)) {
+      return;
+    }
+    try {
+      await api.delete(`/admin/empleados/${id}`);
+      void fetchData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo eliminar el empleado');
+    }
+  }
+
   const totalPagadoMes = empleados.reduce(
     (acc, e) =>
       acc +
@@ -216,10 +228,16 @@ export default function EmpleadosListPage() {
                     </button>
                     <Link
                       href={`/admin/empleados/${e.id}`}
-                      className="text-2xs text-ink-500 hover:text-teresita-700"
+                      className="text-2xs text-ink-500 hover:text-teresita-700 mr-2"
                     >
                       ver →
                     </Link>
+                    <button
+                      onClick={() => eliminarEmpleado(e.id, e.nombre)}
+                      className="text-2xs text-pomodoro-600 hover:underline"
+                    >
+                      eliminar
+                    </button>
                   </td>
                 </tr>
               );

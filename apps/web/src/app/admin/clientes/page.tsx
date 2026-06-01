@@ -70,6 +70,16 @@ export default function ClientesListPage() {
     void fetchData();
   }, [fetchData]);
 
+  async function eliminarCliente(id: string, nombre: string) {
+    if (!confirm(`¿Eliminar el cliente "${nombre}"? No se borran sus ventas históricas.`)) return;
+    try {
+      await api.delete(`/admin/clientes/${id}`);
+      void fetchData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo eliminar el cliente');
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
@@ -201,10 +211,19 @@ export default function ClientesListPage() {
                       <span className="text-ink-300">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3">
-                    <Link href={`/admin/clientes/${c.id}`} className="text-ink-300 hover:text-teresita-700">
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <Link
+                      href={`/admin/clientes/${c.id}`}
+                      className="text-ink-300 hover:text-teresita-700 mr-3"
+                    >
                       →
                     </Link>
+                    <button
+                      onClick={() => eliminarCliente(c.id, `${c.nombre}${c.apellido ? ' ' + c.apellido : ''}`)}
+                      className="text-2xs text-pomodoro-600 hover:underline"
+                    >
+                      eliminar
+                    </button>
                   </td>
                 </tr>
               );

@@ -1383,6 +1383,46 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // DELETE /admin/categorias-movimiento/:id — eliminar una categoría de
+  // movimiento. Las de sistema (esSistema=true) no se borran. Si tiene
+  // movimientos vinculados, soft-delete (activa=false) para no romper el
+  // histórico; si está vacía, hard delete.
+  fastify.delete(
+    '/admin/categorias-movimiento/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const cat = await prisma.categoriaMovimiento.findUnique({
+        where: { id: params.id },
+        include: { _count: { select: { movimientos: true } } },
+      });
+      if (!cat) return reply.code(404).send({ error: 'Categoría no encontrada' });
+      if (cat.esSistema) {
+        return reply.code(400).send({ error: 'No se pueden eliminar las categorías del sistema' });
+      }
+      let modo: 'hard' | 'soft';
+      if (cat._count.movimientos === 0) {
+        await prisma.categoriaMovimiento.delete({ where: { id: params.id } });
+        modo = 'hard';
+      } else {
+        await prisma.categoriaMovimiento.update({ where: { id: params.id }, data: { activa: false } });
+        modo = 'soft';
+      }
+      await recordAudit({
+        tabla: 'categorias_movimiento',
+        registroId: params.id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: cat.nombre },
+        contexto: { modo },
+      });
+      return { ok: true, modo };
+    },
+  );
+
   // GET /admin/cuentas — listado con saldoActual + métricas de los últimos 30 días.
   // Sirve tanto para los selects como para la pantalla "Cuentas y saldos".
   fastify.get(
@@ -3365,6 +3405,78 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         valorNuevo: { nombre: cat.nombre, icono: cat.icono, orden: cat.orden },
       });
       return { categoria: cat };
+    },
+  );
+
+  // PATCH /admin/categorias/:id — editar nombre/icono/color/orden
+  fastify.patch(
+    '/admin/categorias/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          nombre: z.string().min(1).max(80).optional(),
+          icono: z.string().max(8).nullable().optional(),
+          color: z.string().max(20).nullable().optional(),
+          orden: z.coerce.number().int().min(0).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const before = await prisma.categoria.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Categoría no encontrada' });
+      const cat = await prisma.categoria.update({
+        where: { id: params.id },
+        data: req.body as Record<string, unknown>,
+      });
+      await recordAudit({
+        tabla: 'categorias',
+        registroId: cat.id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: before.nombre },
+        valorNuevo: { nombre: cat.nombre },
+      });
+      return { categoria: cat };
+    },
+  );
+
+  // DELETE /admin/categorias/:id — eliminar categoría de producto.
+  // Si tiene tipos/productos vinculados, hard delete viola FK → soft-delete
+  // (activa=false). Si está vacía, hard delete real.
+  fastify.delete(
+    '/admin/categorias/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const cat = await prisma.categoria.findUnique({
+        where: { id: params.id },
+        include: { _count: { select: { tipos: true } } },
+      });
+      if (!cat) return reply.code(404).send({ error: 'Categoría no encontrada' });
+
+      let modo: 'hard' | 'soft';
+      if (cat._count.tipos === 0) {
+        await prisma.categoria.delete({ where: { id: params.id } });
+        modo = 'hard';
+      } else {
+        await prisma.categoria.update({ where: { id: params.id }, data: { activa: false } });
+        modo = 'soft';
+      }
+      await recordAudit({
+        tabla: 'categorias',
+        registroId: params.id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: cat.nombre },
+        contexto: { modo },
+      });
+      return { ok: true, modo };
     },
   );
 

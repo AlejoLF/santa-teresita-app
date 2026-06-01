@@ -143,6 +143,18 @@ function ProveedoresTab() {
     void fetchData();
   }, [fetchData]);
 
+  async function eliminarProveedor(id: string, nombre: string) {
+    if (!confirm(`¿Eliminar el proveedor "${nombre}"? Se oculta de los listados (las facturas históricas se conservan).`)) {
+      return;
+    }
+    try {
+      await api.delete(`/admin/proveedores/${id}`);
+      void fetchData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo eliminar el proveedor');
+    }
+  }
+
   const totalAdeudado = proveedores.reduce((acc, p) => acc + Number(p.saldoAdeudado), 0);
   const conSaldo = proveedores.filter((p) => Number(p.saldoAdeudado) > 0);
 
@@ -268,6 +280,13 @@ function ProveedoresTab() {
                       title="Editar datos del proveedor"
                     >
                       ✎
+                    </button>
+                    <button
+                      onClick={() => eliminarProveedor(p.id, p.nombre)}
+                      className="text-xs text-pomodoro-600 hover:underline mr-2"
+                      title="Eliminar proveedor"
+                    >
+                      🗑
                     </button>
                     <Link href={`/admin/insumos/${p.id}`} className="hover:text-teresita-700">
                       →

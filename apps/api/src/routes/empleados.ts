@@ -301,6 +301,30 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // DELETE /admin/empleados/:id — soft delete (activo=false). Los movimientos
+  // (sueldos/adelantos) históricos lo siguen referenciando.
+  fastify.delete(
+    '/admin/empleados/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const before = await prisma.empleado.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Empleado no encontrado' });
+      await prisma.empleado.update({ where: { id: params.id }, data: { activo: false } });
+      await recordAudit({
+        tabla: 'empleados',
+        registroId: params.id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: before.nombre },
+      });
+      return { ok: true };
+    },
+  );
+
   // POST /admin/empleados/:id/movimientos — cargar pago / adelanto / comisión
   fastify.post(
     '/admin/empleados/:id/movimientos',

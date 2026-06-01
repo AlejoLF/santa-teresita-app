@@ -252,6 +252,30 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // DELETE /admin/proveedores/:id — soft delete (activo=false). No borramos
+  // físico para no romper facturas/movimientos históricos que lo referencian.
+  fastify.delete(
+    '/admin/proveedores/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const before = await prisma.proveedor.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Proveedor no encontrado' });
+      await prisma.proveedor.update({ where: { id: params.id }, data: { activo: false } });
+      await recordAudit({
+        tabla: 'proveedores',
+        registroId: params.id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: before.nombre },
+      });
+      return { ok: true };
+    },
+  );
+
   // ──────────────────────────────────────────────────────────────────────
   //   FACTURAS RECIBIDAS
   // ──────────────────────────────────────────────────────────────────────

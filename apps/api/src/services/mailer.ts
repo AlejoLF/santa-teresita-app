@@ -67,9 +67,16 @@ async function loadSmtpConfig(): Promise<SmtpDbConfig | null> {
   const fromConf = get('smtp_from') || process.env.SMTP_FROM || '';
   // Si el from viene con <> vacío, usamos smtp_user adentro de los <>.
   const from = fromConf.replace('<>', `<${user}>`) || `"Santa Teresita Pastas" <${user || 'no-reply@santateresita.local'}>`;
-  const secure = (get('smtp_secure') || process.env.SMTP_SECURE || 'false') === 'true';
+  const port = Number(portRaw) || 587;
+  // `secure` se DERIVA del puerto, no del flag guardado. Es el footgun más
+  // común: marcar "TLS implícito" con puerto 587 (o no marcarlo con 465) deja
+  // la conexión rota y el mail no sale sin error claro. La regla es fija:
+  //   465 → TLS implícito (secure=true)
+  //   587 / 25 / otros → STARTTLS (secure=false)
+  // Así la casilla de la UI no puede romper el envío.
+  const secure = port === 465;
 
-  return { host, port: Number(portRaw) || 587, user, pass, from, secure };
+  return { host, port, user, pass, from, secure };
 }
 
 async function buildTransporter(): Promise<{

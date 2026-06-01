@@ -436,6 +436,67 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // POST /admin/configuracion/cuentas/:id/reset-saldo — pone el saldo en 0
+  // (o en un valor dado). Útil para bypassear errores de saldo arrastrados
+  // hasta que entre la conciliación automática. Queda auditado.
+  fastify.post(
+    '/admin/configuracion/cuentas/:id/reset-saldo',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z
+          .object({ saldo: z.string().regex(/^-?\d+(\.\d{1,2})?$/).optional() })
+          .optional(),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const body = (req.body ?? {}) as { saldo?: string };
+      const before = await prisma.cuenta.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Cuenta no encontrada' });
+      const nuevoSaldo = body.saldo ?? '0';
+      const updated = await prisma.cuenta.update({
+        where: { id: params.id },
+        data: { saldoActual: nuevoSaldo },
+      });
+      await recordAudit({
+        tabla: 'cuentas',
+        registroId: updated.id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { saldoActual: before.saldoActual.toString() },
+        valorNuevo: { saldoActual: updated.saldoActual.toString() },
+        contexto: { accion: 'reset-saldo' },
+      });
+      return updated;
+    },
+  );
+
+  // DELETE /admin/configuracion/cuentas/:id — soft delete (activa=false).
+  // No borramos físico: los movimientos/pagos históricos la referencian.
+  fastify.delete(
+    '/admin/configuracion/cuentas/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const before = await prisma.cuenta.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Cuenta no encontrada' });
+      await prisma.cuenta.update({ where: { id: params.id }, data: { activa: false } });
+      await recordAudit({
+        tabla: 'cuentas',
+        registroId: params.id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: before.nombre },
+      });
+      return { ok: true };
+    },
+  );
+
   // ──────────────────────────────────────────────────────────────────────
   //   DELIVERY — empresas/repartidores con comisión (CRUD)
   // ──────────────────────────────────────────────────────────────────────
@@ -847,6 +908,29 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         valorNuevo: { nombre: updated.nombre, activo: updated.activo },
       });
       return updated;
+    },
+  );
+
+  // DELETE /admin/configuracion/posnets/:id — soft delete (activo=false).
+  fastify.delete(
+    '/admin/configuracion/posnets/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const before = await prisma.posnet.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Posnet no encontrado' });
+      await prisma.posnet.update({ where: { id: params.id }, data: { activo: false } });
+      await recordAudit({
+        tabla: 'posnets',
+        registroId: params.id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: before.nombre },
+      });
+      return { ok: true };
     },
   );
 

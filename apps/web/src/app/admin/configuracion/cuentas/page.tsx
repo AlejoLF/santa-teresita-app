@@ -74,6 +74,40 @@ export default function ConfigCuentasPage() {
     void fetchData();
   }, [fetchData]);
 
+  async function resetSaldo(c: Cuenta) {
+    if (!confirm(`¿Poner el saldo de "${c.nombre}" en $0? Esto corrige saldos arrastrados por error.`)) {
+      return;
+    }
+    try {
+      await api.post(`/admin/configuracion/cuentas/${c.id}/reset-saldo`, { saldo: '0' });
+      void fetchData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo resetear el saldo');
+    }
+  }
+
+  async function eliminarCuenta(c: Cuenta) {
+    if (!confirm(`¿Eliminar la cuenta "${c.nombre}"? Se oculta de los listados (los movimientos históricos se conservan).`)) {
+      return;
+    }
+    try {
+      await api.delete(`/admin/configuracion/cuentas/${c.id}`);
+      void fetchData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo eliminar la cuenta');
+    }
+  }
+
+  async function eliminarPosnet(p: Posnet) {
+    if (!confirm(`¿Eliminar el posnet "${p.nombre}"?`)) return;
+    try {
+      await api.delete(`/admin/configuracion/posnets/${p.id}`);
+      void fetchData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo eliminar el posnet');
+    }
+  }
+
   return (
     <div className="space-y-6">
       {error && (
@@ -146,13 +180,28 @@ export default function ConfigCuentasPage() {
                       <span className="text-ink-500">inactiva</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
                     <button
                       onClick={() => setEditingCuenta(c)}
-                      className="text-teresita-700 hover:underline text-xs"
+                      className="text-teresita-700 hover:underline text-xs mr-3"
                     >
                       Editar
                     </button>
+                    <button
+                      onClick={() => resetSaldo(c)}
+                      className="text-saffron-600 hover:underline text-xs mr-3"
+                      title="Poner el saldo en $0"
+                    >
+                      Reset saldo
+                    </button>
+                    {c.activa && (
+                      <button
+                        onClick={() => eliminarCuenta(c)}
+                        className="text-pomodoro-600 hover:underline text-xs"
+                      >
+                        Eliminar
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -222,13 +271,21 @@ export default function ConfigCuentasPage() {
                       <span className="text-ink-500">inactivo</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
                     <button
                       onClick={() => setEditingPosnet(p)}
-                      className="text-teresita-700 hover:underline text-xs"
+                      className="text-teresita-700 hover:underline text-xs mr-3"
                     >
                       Editar
                     </button>
+                    {p.activo && (
+                      <button
+                        onClick={() => eliminarPosnet(p)}
+                        className="text-pomodoro-600 hover:underline text-xs"
+                      >
+                        Eliminar
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

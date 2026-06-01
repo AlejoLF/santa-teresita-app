@@ -189,6 +189,16 @@ function ProductosTab() {
   // Dropdown "Añadir" con opciones de creación
   const [addOpen, setAddOpen] = useState(false);
   const [addTipo, setAddTipo] = useState<null | 'producto' | 'subcategoria' | 'categoria'>(null);
+  const [gestionCat, setGestionCat] = useState(false);
+
+  async function refrescarCategorias() {
+    try {
+      const res = await api.get<{ categorias: Categoria[] }>('/catalogo/categorias');
+      setCategorias(res.categorias);
+    } catch {
+      /* silencioso */
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -270,6 +280,17 @@ function ProductosTab() {
         />
       )}
 
+      {gestionCat && (
+        <GestionarCategoriasModal
+          categorias={categorias}
+          onClose={() => setGestionCat(false)}
+          onChanged={() => {
+            void refrescarCategorias();
+            void fetchProductos();
+          }}
+        />
+      )}
+
       {/* Filtros */}
       <section className="card p-4 flex flex-wrap items-center gap-3">
         <input
@@ -297,6 +318,13 @@ function ProductosTab() {
             </option>
           ))}
         </select>
+        <button
+          type="button"
+          onClick={() => setGestionCat(true)}
+          className="text-xs text-teresita-700 hover:underline"
+        >
+          ⚙ Gestionar categorías
+        </button>
         <label className="flex items-center gap-2 text-sm text-ink-700 cursor-pointer">
           <input
             type="checkbox"
@@ -2057,6 +2085,135 @@ function FormProducto({
         <Button onClick={() => void submit()} disabled={guardando || !nombre.trim() || !categoriaId || !tipoProductoId || !precioBase}>
           {guardando ? 'Creando...' : 'Crear producto'}
         </Button>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Modal: gestionar categorías de producto (renombrar / eliminar)
+// ────────────────────────────────────────────────────────────────────────
+
+function GestionarCategoriasModal({
+  categorias,
+  onClose,
+  onChanged,
+}: {
+  categorias: Categoria[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [editId, setEditId] = useState<string | null>(null);
+  const [nombreEdit, setNombreEdit] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function guardarNombre(id: string) {
+    if (!nombreEdit.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.patch(`/admin/categorias/${id}`, { nombre: nombreEdit.trim() });
+      setEditId(null);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo renombrar');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function eliminar(id: string, nombre: string) {
+    if (!confirm(`¿Eliminar la categoría "${nombre}"? Si tiene productos, se ocultan junto con ella.`)) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.delete(`/admin/categorias/${id}`);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo eliminar');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-ink-900/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[80vh] overflow-auto">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-cream-200">
+          <h2 className="font-display text-md text-ink-900">Gestionar categorías</h2>
+          <button onClick={onClose} className="text-ink-400 hover:text-ink-700 text-xl leading-none">
+            ×
+          </button>
+        </div>
+        <div className="p-4 space-y-1">
+          {error && (
+            <div className="bg-pomodoro-100 text-pomodoro-600 px-3 py-2 rounded text-sm mb-2">
+              {error}
+            </div>
+          )}
+          {categorias.length === 0 && (
+            <p className="text-ink-500 text-sm italic">No hay categorías.</p>
+          )}
+          {categorias.map((c) => (
+            <div
+              key={c.id}
+              className="flex items-center justify-between gap-2 py-1.5 border-b border-cream-200"
+            >
+              {editId === c.id ? (
+                <>
+                  <input
+                    type="text"
+                    value={nombreEdit}
+                    onChange={(e) => setNombreEdit(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && guardarNombre(c.id)}
+                    className="input text-sm flex-1"
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => guardarNombre(c.id)}
+                    disabled={busy}
+                    className="text-2xs text-teresita-700 hover:underline"
+                  >
+                    guardar
+                  </button>
+                  <button
+                    onClick={() => setEditId(null)}
+                    className="text-2xs text-ink-500 hover:underline"
+                  >
+                    cancelar
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="text-sm text-ink-900">
+                    {c.icono} {c.nombre}
+                  </span>
+                  <div className="whitespace-nowrap">
+                    <button
+                      onClick={() => {
+                        setEditId(c.id);
+                        setNombreEdit(c.nombre);
+                      }}
+                      className="text-2xs text-teresita-700 hover:underline mr-3"
+                    >
+                      renombrar
+                    </button>
+                    <button
+                      onClick={() => eliminar(c.id, c.nombre)}
+                      disabled={busy}
+                      className="text-2xs text-pomodoro-600 hover:underline"
+                    >
+                      eliminar
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

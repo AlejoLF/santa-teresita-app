@@ -18,6 +18,7 @@ interface Categoria {
   nombre: string;
   tipo: 'INGRESO' | 'EGRESO' | 'TRANSFERENCIA' | 'AMBOS';
   esOperativa: boolean;
+  esSistema?: boolean;
 }
 interface Movimiento {
   id: string;
@@ -591,6 +592,20 @@ function FormNuevoMovimiento({
     }
   }
 
+  // Eliminar la categoría seleccionada (sólo las que no son de sistema).
+  async function eliminarCategoria() {
+    if (!categoriaActual) return;
+    if (!confirm(`¿Eliminar la categoría "${categoriaActual.nombre}"?`)) return;
+    setErrorCat(null);
+    try {
+      await api.delete(`/admin/categorias-movimiento/${categoriaActual.id}`);
+      setCategoriaId('');
+      await onCategoriasChange();
+    } catch (e) {
+      setErrorCat(e instanceof Error ? e.message : 'No se pudo eliminar la categoría');
+    }
+  }
+
   function setConcepto(idx: number, patch: Partial<ConceptoLinea>) {
     setConceptos((arr) => arr.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
   }
@@ -857,16 +872,30 @@ function FormNuevoMovimiento({
                   ))}
                   <option value="__nueva__">➕ Agregar categoría nueva…</option>
                 </select>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAgregaCat(true);
-                    setErrorCat(null);
-                  }}
-                  className="mt-1 text-xs text-teresita-700 hover:underline"
-                >
-                  ➕ Agregar una categoría que no está en la lista
-                </button>
+                <div className="mt-1 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAgregaCat(true);
+                      setErrorCat(null);
+                    }}
+                    className="text-xs text-teresita-700 hover:underline"
+                  >
+                    ➕ Agregar una categoría que no está en la lista
+                  </button>
+                  {categoriaActual && !categoriaActual.esSistema && (
+                    <button
+                      type="button"
+                      onClick={eliminarCategoria}
+                      className="text-xs text-pomodoro-600 hover:underline"
+                    >
+                      🗑 Eliminar "{categoriaActual.nombre}"
+                    </button>
+                  )}
+                </div>
+                {errorCat && !agregaCat && (
+                  <p className="text-2xs text-pomodoro-600 mt-1">{errorCat}</p>
+                )}
               </>
             ) : (
               <div className="rounded-md border border-teresita-700/40 bg-teresita-50/50 p-3 space-y-2">
