@@ -24,6 +24,7 @@ import syncRoutes from './routes/sync.js';
 import { startOutboxFlusher } from './services/outbox-flusher.js';
 import { startReplicator } from './services/replicator.js';
 import { runCatchUp } from './services/catch-up.js';
+import { runMirrorSyncOnce } from './services/mirror-sync.js';
 import { startDbRouter, dbRouterEnabled, dbState } from './services/db-router.js';
 import proveedoresRoutes from './routes/proveedores.js';
 import empleadosRoutes from './routes/empleados.js';
@@ -260,6 +261,18 @@ export async function buildServer() {
 // desde tests sin auto-arrancar, agregar guard tipo `if (process.env.SKIP_LISTEN !== '1')`).
 const app = await buildServer();
 try {
+  // Mirror-sync nube → local (espejo de solo lectura). Corre ANTES del listen
+  // para que al abrir el .exe ya se vean los datos frescos. Con timeout: si la
+  // nube no responde, no cuelga el arranque — sigue con el último espejo local.
+  // Solo activo si STA_MIRROR_SOURCE_URL está seteado (la máquina del dueño).
+  if (config.STA_MIRROR_SOURCE_URL) {
+    const TIMEOUT_MS = 60_000;
+    await Promise.race([
+      runMirrorSyncOnce(),
+      new Promise((resolve) => setTimeout(resolve, TIMEOUT_MS)),
+    ]);
+  }
+
   await app.listen({ host: config.API_HOST, port: config.API_PORT });
   app.log.info(
     `🍝 API Santa Teresita escuchando en http://${config.API_HOST}:${config.API_PORT}`,

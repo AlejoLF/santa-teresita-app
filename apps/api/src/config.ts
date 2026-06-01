@@ -39,6 +39,11 @@ const ConfigSchema = z.object({
   STA_FALLBACK_DB_URL: z.string().optional(),
   // STA_DB_HEALTHCHECK_MS: cada cuánto el db-router pinguea el LAN.
   STA_DB_HEALTHCHECK_MS: z.coerce.number().default(10_000),
+  // STA_MIRROR_SOURCE_URL: si está seteado, al arrancar el API baja una vez
+  //   los datos de esa nube (Supabase) a DATABASE_URL (local) — espejo de
+  //   solo lectura. Lo usa la máquina del dueño para ver producción en local
+  //   sin fetchear todo el tiempo. En las cajas reales NO se setea.
+  STA_MIRROR_SOURCE_URL: z.string().optional(),
 });
 
 const parsed = ConfigSchema.safeParse(process.env);

@@ -264,6 +264,52 @@ function leerLanDbUrl() {
   }
 }
 
+/**
+ * URL de origen del ESPEJO de solo lectura (nube → local). Solo aplica en la
+ * máquina del dueño que corre contra una DB local pero quiere ver producción.
+ * Se activa con `mirrorFromCloud: true` en userData/config.json. El origen es
+ * `mirrorSourceUrl` (si está) o la Supabase del bundle (cloud-config.json).
+ * En las cajas reales no se setea `mirrorFromCloud` → no hay espejo.
+ */
+function leerMirrorSourceUrl() {
+  const userConfigPath = path.join(app.getPath('userData'), 'config.json');
+  let cfg = {};
+  if (fs.existsSync(userConfigPath)) {
+    try {
+      cfg = JSON.parse(fs.readFileSync(userConfigPath, 'utf8'));
+    } catch {
+      return null;
+    }
+  }
+  if (cfg.mirrorFromCloud !== true) return null;
+  // Origen explícito, o la Supabase real del bundle.
+  if (typeof cfg.mirrorSourceUrl === 'string' && cfg.mirrorSourceUrl) {
+    return aplicarFlagsPooler(cfg.mirrorSourceUrl);
+  }
+  const bundleConfigPath = path.join(resourcesDir(), 'cloud-config.json');
+  if (fs.existsSync(bundleConfigPath)) {
+    try {
+      const bundle = JSON.parse(fs.readFileSync(bundleConfigPath, 'utf8'));
+      if (typeof bundle.cloudDbUrl === 'string' && bundle.cloudDbUrl) {
+        return aplicarFlagsPooler(bundle.cloudDbUrl);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
+/** Agrega flags de pgbouncer si es el pooler de Supabase (idéntico a leerCloudDbUrl). */
+function aplicarFlagsPooler(raw) {
+  const hasFlags = raw.includes('pgbouncer=') || raw.includes('connection_limit=');
+  if (raw.includes('.pooler.supabase.com') && !hasFlags) {
+    const sep = raw.includes('?') ? '&' : '?';
+    return `${raw}${sep}pgbouncer=true&connection_limit=1`;
+  }
+  return raw;
+}
+
 async function runSeed() {
   log('Ejecutando seed...');
   const seedPath = path.join(resourcesDir(), 'seed', 'seed.mjs');
@@ -309,6 +355,15 @@ function startApi(cloudDbUrl) {
     log('API → cloud DB (Supabase) — sin server LAN configurado');
   }
 
+  // Espejo de solo lectura: si está activado y la DB primaria es LOCAL
+  // (no la propia Supabase), bajamos producción a local al arrancar.
+  const mirrorSourceUrl = leerMirrorSourceUrl();
+  const espejaActivo =
+    mirrorSourceUrl && dbUrlPrimaria && dbUrlPrimaria !== mirrorSourceUrl;
+  if (espejaActivo) {
+    log('Espejo nube → local ACTIVO (baja lo último al arrancar)');
+  }
+
   apiProcess = spawn(process.execPath, [apiEntry], {
     env: {
       ...process.env,
@@ -325,6 +380,7 @@ function startApi(cloudDbUrl) {
       // Supabase read-only). STA_ROLE=caja: nunca arranca el replicator.
       DATABASE_URL: dbUrlPrimaria,
       ...(lanDbUrl ? { STA_FALLBACK_DB_URL: cloudDbUrl } : {}),
+      ...(espejaActivo ? { STA_MIRROR_SOURCE_URL: mirrorSourceUrl } : {}),
       STA_ROLE: 'caja',
       API_HOST: '127.0.0.1',
       API_PORT: String(API_PORT),
