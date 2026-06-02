@@ -5,6 +5,7 @@ import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { PinInput } from '@/components/ui/PinInput';
 import { Numpad } from '@/components/ui/Numpad';
+import { usePrompt } from '@/components/ui/usePrompt';
 import { cn } from '@/lib/cn';
 
 interface Usuario {
@@ -370,6 +371,7 @@ function SmtpSection() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
+  const { prompt, promptModal } = usePrompt();
 
   async function reload() {
     try {
@@ -424,7 +426,12 @@ function SmtpSection() {
   }
 
   async function probar() {
-    const to = prompt('Email destinatario para el test:', cfg?.status.destinatarios[0] ?? '');
+    const to = await prompt({
+      title: 'Probar SMTP',
+      message: 'Email destinatario para el test:',
+      defaultValue: cfg?.status.destinatarios[0] ?? '',
+      placeholder: 'nombre@dominio.com',
+    });
     if (!to) return;
     try {
       const r = await api.post<{
@@ -470,6 +477,7 @@ function SmtpSection() {
 
   return (
     <section className="card p-4">
+      {promptModal}
       <header className="mb-3">
         <h2 className="font-display text-md text-ink-900">
           ⚙️ Servidor SMTP (envío de email)

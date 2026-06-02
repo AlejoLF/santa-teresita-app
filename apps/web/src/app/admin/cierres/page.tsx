@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
+import { usePrompt } from '@/components/ui/usePrompt';
 import { cn } from '@/lib/cn';
 
 interface SesionCierre {
@@ -44,6 +45,7 @@ export default function AdminCierresPage() {
     mensaje: string;
     tone: 'success' | 'danger';
   } | null>(null);
+  const { prompt, promptModal } = usePrompt();
 
   async function fetchData() {
     setLoading(true);
@@ -73,10 +75,11 @@ export default function AdminCierresPage() {
   }
 
   async function enviarPorEmail(id: string) {
-    const customTo = prompt(
-      'Email destinatario (vacío = usa ADMIN_EMAIL_RECIPIENTS del .env):',
-      '',
-    );
+    const customTo = await prompt({
+      title: 'Enviar cierre por email',
+      message: 'Email destinatario (vacío = usa ADMIN_EMAIL_RECIPIENTS del .env):',
+      placeholder: 'nombre@dominio.com (o varios separados por coma)',
+    });
     if (customTo === null) return; // canceló
     setEnviandoEmail(id);
     setResultadoEmail(null);
@@ -140,7 +143,12 @@ export default function AdminCierresPage() {
   }
 
   async function probarSmtp() {
-    const to = prompt('Email destinatario para el test:', 'alejolafalce@gmail.com');
+    const to = await prompt({
+      title: 'Probar SMTP',
+      message: 'Email destinatario para el test:',
+      defaultValue: 'alejolafalce@gmail.com',
+      placeholder: 'nombre@dominio.com',
+    });
     if (!to) return;
     try {
       const res = await api.post<{
@@ -161,6 +169,7 @@ export default function AdminCierresPage() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-4">
+      {promptModal}
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="font-display text-xl text-ink-900">Cierres de caja</h1>

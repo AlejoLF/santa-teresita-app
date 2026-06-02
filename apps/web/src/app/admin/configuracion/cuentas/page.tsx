@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
+import { usePrompt } from '@/components/ui/usePrompt';
 import { cn } from '@/lib/cn';
 
 interface Cuenta {
@@ -53,6 +54,7 @@ export default function ConfigCuentasPage() {
   const [showNuevaCuenta, setShowNuevaCuenta] = useState(false);
   const [editingPosnet, setEditingPosnet] = useState<Posnet | 'new' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { prompt, promptModal } = usePrompt();
 
   const fetchData = useCallback(async () => {
     try {
@@ -76,11 +78,13 @@ export default function ConfigCuentasPage() {
 
   async function ajustarSaldo(c: Cuenta) {
     const actual = Number(c.saldoActual).toFixed(2);
-    const ingresado = prompt(
-      `Ajustar saldo de "${c.nombre}" (conciliación manual).\n` +
+    const ingresado = await prompt({
+      title: 'Ajustar saldo',
+      message:
+        `Ajustar saldo de "${c.nombre}" (conciliación manual).\n` +
         `Escribí el saldo real de la cuenta. Saldo actual en el sistema: $${actual}`,
-      actual,
-    );
+      defaultValue: actual,
+    });
     if (ingresado === null) return; // canceló
     const limpio = ingresado.trim().replace(/\s/g, '').replace(',', '.');
     if (!/^-?\d+(\.\d{1,2})?$/.test(limpio)) {
@@ -119,6 +123,7 @@ export default function ConfigCuentasPage() {
 
   return (
     <div className="space-y-6">
+      {promptModal}
       {error && (
         <div className="bg-pomodoro-100 text-pomodoro-600 px-4 py-2 rounded text-sm">{error}</div>
       )}
