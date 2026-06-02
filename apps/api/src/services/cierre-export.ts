@@ -96,7 +96,7 @@ export function categorizarCobros(opts: {
     const esMostrador = p.canal === 'MOSTRADOR';
     const esDeliveryLocal =
       p.canal === 'TELEFONO' || p.canal === 'WHATSAPP' || p.canal === 'WEB';
-    const esDeliverate = p.canal === 'DELIVERATE';
+    const esDeliverate = p.canal === 'DELIVERATE' || p.modalidad === 'DELIVERY_DELIVERATE';
     const esPlataforma =
       p.canal === 'RAPPI' || p.canal === 'PEDIDOS_YA' || p.canal === 'MERCADO_LIBRE';
 

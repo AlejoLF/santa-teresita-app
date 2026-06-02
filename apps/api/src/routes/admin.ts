@@ -105,8 +105,22 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   // GET /admin/dashboard — KPIs principales (Wireframe 06).
   fastify.get(
     '/admin/dashboard',
-    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
-    async () => {
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        querystring: z.object({
+          periodo: z.enum(['sesion_actual', 'dia', 'semana', 'custom']).default('dia'),
+          desde: z.string().optional(), // ISO datetime, solo para custom
+          hasta: z.string().optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const q = req.query as {
+        periodo: 'sesion_actual' | 'dia' | 'semana' | 'custom';
+        desde?: string;
+        hasta?: string;
+      };
       const ahora = new Date();
       const inicioHoy = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate());
       const inicioAyer = new Date(inicioHoy);
@@ -114,6 +128,31 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const finAyer = new Date(inicioHoy);
       const en20Dias = new Date(inicioHoy);
       en20Dias.setDate(en20Dias.getDate() + 20);
+
+      // Rango del período para los KPIs de ventas/pagos/movimientos. Las vistas
+      // forward-looking (próximos depósitos, vencimientos) NO dependen de esto.
+      let rangoDesde: Date = inicioHoy;
+      let rangoHasta: Date = ahora;
+      let rangoLabel = 'Hoy';
+      if (q.periodo === 'sesion_actual') {
+        const { sesion } = await getSesionActualReadOnly();
+        if (sesion) {
+          rangoDesde = sesion.horarioApertura;
+          rangoHasta = ahora;
+          rangoLabel = 'Sesión actual';
+        } else {
+          rangoLabel = 'Hoy (sin sesión abierta)';
+        }
+      } else if (q.periodo === 'semana') {
+        rangoDesde = new Date(inicioHoy);
+        rangoDesde.setDate(rangoDesde.getDate() - 6);
+        rangoHasta = ahora;
+        rangoLabel = 'Últimos 7 días';
+      } else if (q.periodo === 'custom' && q.desde && q.hasta) {
+        rangoDesde = new Date(q.desde);
+        rangoHasta = new Date(q.hasta);
+        rangoLabel = 'Personalizado';
+      }
 
       // BATCH 1 — todas las queries independientes corren en paralelo.
       // Pasamos de ~15 round-trips secuenciales a Supabase a 2 batches paralelos.
@@ -139,7 +178,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           _count: { _all: true },
           where: {
             estado: EstadoVenta.FINALIZADA,
-            fechaFinalizacion: { gte: inicioHoy },
+            fechaFinalizacion: { gte: rangoDesde, lte: rangoHasta },
           },
         }),
         prisma.venta.aggregate({
@@ -156,7 +195,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             estado: 'CONFIRMADO',
             venta: {
               estado: EstadoVenta.FINALIZADA,
-              fechaFinalizacion: { gte: inicioHoy },
+              fechaFinalizacion: { gte: rangoDesde, lte: rangoHasta },
             },
           },
           select: {
@@ -172,7 +211,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           where: {
             tipo: 'INGRESO',
             estado: EstadoMovimiento.CONFIRMADO,
-            fechaComputo: { gte: inicioHoy },
+            fechaComputo: { gte: rangoDesde, lte: rangoHasta },
           },
         }),
         prisma.movimiento.groupBy({
@@ -182,7 +221,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           where: {
             tipo: 'EGRESO',
             estado: EstadoMovimiento.CONFIRMADO,
-            fechaComputo: { gte: inicioHoy },
+            fechaComputo: { gte: rangoDesde, lte: rangoHasta },
           },
         }),
         prisma.venta.groupBy({
@@ -191,7 +230,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           _count: { _all: true },
           where: {
             estado: EstadoVenta.FINALIZADA,
-            fechaFinalizacion: { gte: inicioHoy },
+            fechaFinalizacion: { gte: rangoDesde, lte: rangoHasta },
           },
         }),
         prisma.liquidacionPendiente.groupBy({
@@ -348,6 +387,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           : null;
 
       return {
+        periodo: {
+          tipo: q.periodo,
+          label: rangoLabel,
+          desde: rangoDesde.toISOString(),
+          hasta: rangoHasta.toISOString(),
+        },
         kpis: {
           ventasHoy: {
             monto: totalVentasHoy.toFixed(2),
@@ -1679,6 +1724,35 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // GET /admin/caja/sesiones-abiertas — TODAS las sesiones ABIERTA. Sirve para
+  // que el cierre muestre las viejas colgadas (de días/turnos anteriores que
+  // el auto-lock dejó abiertas) y la encargada las pueda cerrar puntualmente,
+  // en vez de que el server resuelva una sola y agarre la equivocada.
+  fastify.get(
+    '/admin/caja/sesiones-abiertas',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const sesiones = await prisma.sesionCaja.findMany({
+        where: { estado: 'ABIERTA' },
+        orderBy: [{ fecha: 'asc' }, { horarioApertura: 'asc' }],
+        include: { usuarioApertura: { select: { nombre: true } } },
+      });
+      // Para distinguir cuál es la del slot vigente (la "normal" de hoy) vs las
+      // colgadas, devolvemos la resolución actual.
+      const { sesion: actual } = await getSesionActualReadOnly();
+      return {
+        sesiones: sesiones.map((s) => ({
+          id: s.id,
+          fecha: s.fecha,
+          turno: s.turno,
+          horarioApertura: s.horarioApertura,
+          abiertaPor: s.usuarioApertura?.nombre ?? null,
+          esActual: actual?.id === s.id,
+        })),
+      };
+    },
+  );
+
   // POST /admin/caja/sesion-actual/cerrar — cierra la sesión con conteo físico.
   //
   // El flag `anticipado` (opcional) lo marca como CIERRE ANTICIPADO: el
@@ -1694,6 +1768,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           existenciaFinal: z.string().regex(/^\d+(\.\d{1,2})?$/),
           observaciones: z.string().max(500).optional(),
           anticipado: z.boolean().optional().default(false),
+          // Id explícito de la sesión a cerrar. La UI manda SIEMPRE el id de la
+          // sesión que está mostrando → se cierra exactamente esa, sin que el
+          // server re-resuelva y agarre otra (incidente: "toma una sesión
+          // anterior al cerrarla", por sesiones viejas colgadas). Si no viene,
+          // cae al resolver legacy.
+          sesionId: z.string().uuid().optional(),
         }),
       },
     },
@@ -1702,16 +1782,21 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         existenciaFinal: string;
         observaciones?: string;
         anticipado?: boolean;
+        sesionId?: string;
       };
       const ahora = new Date();
 
-      // La sesión "actual" se resuelve igual que GET /admin/caja/sesion-actual
-      // — primero el slot vigente, luego cualquier sesión ABIERTA si estamos
-      // fuera de horario y la encargada cierra tarde.
-      const { sesion: sesionResolved } = await getSesionActualReadOnly();
-      const sesion = sesionResolved
-        ? await prisma.sesionCaja.findUnique({ where: { id: sesionResolved.id } })
-        : null;
+      // Si la UI mandó el id explícito, cerramos ESA sesión. Sino, resolvemos
+      // como antes (slot vigente / última abierta).
+      let sesion;
+      if (body.sesionId) {
+        sesion = await prisma.sesionCaja.findUnique({ where: { id: body.sesionId } });
+      } else {
+        const { sesion: sesionResolved } = await getSesionActualReadOnly();
+        sesion = sesionResolved
+          ? await prisma.sesionCaja.findUnique({ where: { id: sesionResolved.id } })
+          : null;
+      }
       if (!sesion) return reply.code(404).send({ error: 'Sesión no encontrada' });
       if (sesion.estado !== 'ABIERTA') {
         return reply.code(400).send({ error: `La sesión está ${sesion.estado}` });

@@ -13,6 +13,7 @@ interface DesgloseEntry {
 }
 
 interface Dashboard {
+  periodo?: { tipo: string; label: string; desde: string; hasta: string };
   kpis: {
     ventasHoy: {
       monto: string;
@@ -75,17 +76,29 @@ interface VentasPorHora {
   horas: Array<{ hora: number; cantidad: number; total: number }>;
 }
 
+type PeriodoTipo = 'sesion_actual' | 'dia' | 'semana' | 'custom';
+
 export default function AdminDashboard() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [grafico, setGrafico] = useState<VentasPorHora | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drillDown, setDrillDown] = useState<DrillDownTipo>(null);
+  const [periodo, setPeriodo] = useState<PeriodoTipo>('dia');
+  // Rango custom (datetime-local). Solo se aplica al tocar "Aplicar".
+  const [customDesde, setCustomDesde] = useState('');
+  const [customHasta, setCustomHasta] = useState('');
 
   useEffect(() => {
     (async () => {
       try {
+        const params = new URLSearchParams({ periodo });
+        if (periodo === 'custom') {
+          if (!customDesde || !customHasta) return; // esperar a que complete
+          params.set('desde', new Date(customDesde).toISOString());
+          params.set('hasta', new Date(customHasta).toISOString());
+        }
         const [d, g] = await Promise.all([
-          api.get<Dashboard>('/admin/dashboard'),
+          api.get<Dashboard>(`/admin/dashboard?${params.toString()}`),
           api.get<VentasPorHora>('/admin/ventas-por-hora'),
         ]);
         setData(d);
@@ -96,7 +109,7 @@ export default function AdminDashboard() {
         }
       }
     })();
-  }, []);
+  }, [periodo, customDesde, customHasta]);
 
   if (error) return <div className="text-pomodoro-600">{error}</div>;
   if (!data) return <div className="text-ink-500">Cargando dashboard...</div>;
@@ -130,11 +143,59 @@ export default function AdminDashboard() {
         </span>
       </header>
 
+      {/* Filtro de período para los KPIs de ventas/cobros/movimientos */}
+      <section className="card p-3 flex flex-wrap items-center gap-2">
+        <span className="text-2xs uppercase tracking-wider text-ink-500 mr-1">Ver:</span>
+        {(
+          [
+            { v: 'sesion_actual', label: 'Sesión actual' },
+            { v: 'dia', label: 'Hoy' },
+            { v: 'semana', label: 'Semana' },
+            { v: 'custom', label: 'Personalizado' },
+          ] as Array<{ v: PeriodoTipo; label: string }>
+        ).map((opt) => (
+          <button
+            key={opt.v}
+            onClick={() => setPeriodo(opt.v)}
+            className={cn(
+              'px-3 py-1 rounded text-sm font-medium border transition-colors',
+              periodo === opt.v
+                ? 'bg-teresita-700 text-cream-50 border-teresita-700'
+                : 'bg-white border-cream-300 text-ink-700 hover:bg-cream-50',
+            )}
+          >
+            {opt.label}
+          </button>
+        ))}
+        {periodo === 'custom' && (
+          <div className="flex flex-wrap items-center gap-2 ml-2">
+            <input
+              type="datetime-local"
+              value={customDesde}
+              onChange={(e) => setCustomDesde(e.target.value)}
+              className="input text-xs py-1"
+            />
+            <span className="text-ink-500 text-xs">a</span>
+            <input
+              type="datetime-local"
+              value={customHasta}
+              onChange={(e) => setCustomHasta(e.target.value)}
+              className="input text-xs py-1"
+            />
+          </div>
+        )}
+        {data.periodo && (
+          <span className="ml-auto text-2xs text-ink-500">
+            Mostrando: <strong className="text-ink-700">{data.periodo.label}</strong>
+          </span>
+        )}
+      </section>
+
       {/* KPIs */}
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
         <button onClick={() => setDrillDown('ventas')} className="text-left">
           <KpiCard
-            label="Ventas hoy"
+            label="Ventas"
             value={v.monto}
             trend={trend}
             hint={`${v.cantidad} ventas · click para desglose`}
@@ -165,7 +226,7 @@ export default function AdminDashboard() {
         </button>
         <button onClick={() => setDrillDown('egresos')} className="text-left">
           <KpiCard
-            label="Egresos hoy"
+            label="Egresos"
             value={data.kpis.egresosHoy.monto}
             hint={`${data.kpis.egresosHoy.cantidad} movimientos`}
             accent="danger"

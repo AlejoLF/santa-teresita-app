@@ -869,9 +869,11 @@ export default function CargarPedidoPage() {
           <select
             value={cart.canal}
             onChange={(e) => {
-              const c = e.target.value as 'MOSTRADOR' | 'TELEFONO' | 'WHATSAPP' | 'PEDIDOS_YA' | 'RAPPI' | 'MERCADO_LIBRE' | 'DELIVERATE';
+              const c = e.target.value as 'MOSTRADOR' | 'TELEFONO' | 'WHATSAPP' | 'PEDIDOS_YA' | 'RAPPI' | 'MERCADO_LIBRE';
               cart.setCanal(c);
               // Mapear canal → modalidad por defecto. La encargada lo puede sobreescribir.
+              // DELIVERATE ya no es canal: se asigna como repartidor desde el
+              // panel de Delivery (entra por mostrador/teléfono/whatsapp).
               if (c === 'MOSTRADOR') {
                 cart.setModalidad('TAKE_AWAY');
                 // Limpiar datos del cliente delivery al pasar a Mostrador para
@@ -884,8 +886,7 @@ export default function CargarPedidoPage() {
               } else if (c === 'TELEFONO' || c === 'WHATSAPP') {
                 cart.setModalidad('DELIVERY_PROPIO');
                 cart.setIdExternoCanal(''); // delivery propio no tiene id externo
-              } else if (c === 'DELIVERATE') cart.setModalidad('DELIVERY_DELIVERATE');
-              else cart.setModalidad('DELIVERY_PLATAFORMA');
+              } else cart.setModalidad('DELIVERY_PLATAFORMA');
             }}
             className={cn(
               'px-3 py-1 rounded text-sm font-medium border-2',
@@ -894,7 +895,6 @@ export default function CargarPedidoPage() {
               cart.canal === 'PEDIDOS_YA' && 'bg-pomodoro-600 text-white border-pomodoro-700',
               cart.canal === 'RAPPI' && 'bg-pomodoro-700 text-white border-pomodoro-700',
               cart.canal === 'MERCADO_LIBRE' && 'bg-saffron-600 text-white border-saffron-600',
-              cart.canal === 'DELIVERATE' && 'bg-ocean-600 text-white border-ocean-600',
             )}
           >
             <option value="MOSTRADOR">🏪 Mostrador</option>
@@ -903,7 +903,6 @@ export default function CargarPedidoPage() {
             <option value="PEDIDOS_YA">🛵 Pedidos YA</option>
             <option value="RAPPI">🛵 RAPPI</option>
             <option value="MERCADO_LIBRE">🛵 MELI</option>
-            <option value="DELIVERATE">🛵 DELIVERATE</option>
           </select>
           <Button
             variant="ghost"

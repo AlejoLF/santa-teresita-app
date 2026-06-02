@@ -6,6 +6,15 @@ import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { cn } from '@/lib/cn';
 
+interface SesionAbierta {
+  id: string;
+  fecha: string;
+  turno: string;
+  horarioApertura: string;
+  abiertaPor: string | null;
+  esActual: boolean;
+}
+
 interface SesionData {
   sesion: {
     id: string;
@@ -73,11 +82,19 @@ export default function SesionActualPage() {
   // 'anticipado' = cerrá antes del horario configurado y el slot no se
   // reabre por el resto del día.
   const [showCierre, setShowCierre] = useState<'normal' | 'anticipado' | null>(null);
+  // Sesiones viejas colgadas (de días/turnos anteriores sin cerrar).
+  const [abiertas, setAbiertas] = useState<SesionAbierta[]>([]);
+  // Cierre puntual de una sesión vieja (id explícito).
+  const [cerrarVieja, setCerrarVieja] = useState<SesionAbierta | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
       const res = await api.get<SesionData>('/admin/caja/sesion-actual');
       setData(res);
+      const ab = await api
+        .get<{ sesiones: SesionAbierta[] }>('/admin/caja/sesiones-abiertas')
+        .catch(() => ({ sesiones: [] as SesionAbierta[] }));
+      setAbiertas(ab.sesiones);
     } catch (e) {
       if (!(e instanceof ApiError) || e.status !== 401) {
         setError('No se pudo cargar la sesión');
@@ -139,8 +156,35 @@ export default function SesionActualPage() {
   const enGrace = r?.tipo === 'EN_HORARIO' && r.slot.estado === 'GRACE';
   const fueraDeHorario = r?.tipo === 'CERRADO';
 
+  const viejasSinCerrar = abiertas.filter((s) => !s.esActual);
+
   return (
     <div className="max-w-4xl mx-auto space-y-4">
+      {viejasSinCerrar.length > 0 && (
+        <div className="card p-3 bg-saffron-100 border-l-4 border-saffron-600">
+          <div className="text-sm text-saffron-700 font-medium mb-2">
+            ⚠ Hay {viejasSinCerrar.length} sesión{viejasSinCerrar.length > 1 ? 'es' : ''} de
+            turnos anteriores sin cerrar. Cerralas para que no se mezclen con la de hoy.
+          </div>
+          <div className="space-y-1">
+            {viejasSinCerrar.map((s) => (
+              <div key={s.id} className="flex items-center justify-between text-xs bg-white/60 rounded px-2 py-1">
+                <span className="text-ink-700">
+                  {new Date(s.fecha).toLocaleDateString('es-AR', { weekday: 'short', day: '2-digit', month: 'short' })}
+                  {' · '}{s.turno === 'MANANA' ? 'Mañana' : 'Tarde'}
+                  {s.abiertaPor && <span className="text-ink-500"> · abrió {s.abiertaPor}</span>}
+                </span>
+                <button
+                  onClick={() => setCerrarVieja(s)}
+                  className="text-2xs font-medium text-pomodoro-600 hover:underline"
+                >
+                  Cerrar esta
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {enGrace && r.tipo === 'EN_HORARIO' && (
         <div className="card p-3 bg-saffron-100 text-saffron-600 text-sm flex items-center gap-2">
           ⏳ Ventana de cierre — quedan {r.slot.minutosRestantes} min para cargar ventas tardías
@@ -342,9 +386,24 @@ export default function SesionActualPage() {
         <ModalCerrarSesion
           esperada={data.recaudacionEsperadaEfectivo}
           modo={showCierre}
+          sesionId={data.sesion.id}
           onClose={() => setShowCierre(null)}
           onCerrada={() => {
             setShowCierre(null);
+            void fetchData();
+          }}
+        />
+      )}
+
+      {cerrarVieja && (
+        <ModalCerrarSesion
+          esperada={null}
+          modo="normal"
+          sesionId={cerrarVieja.id}
+          tituloExtra={`${new Date(cerrarVieja.fecha).toLocaleDateString('es-AR')} · ${cerrarVieja.turno}`}
+          onClose={() => setCerrarVieja(null)}
+          onCerrada={() => {
+            setCerrarVieja(null);
             void fetchData();
           }}
         />
@@ -356,11 +415,17 @@ export default function SesionActualPage() {
 function ModalCerrarSesion({
   esperada,
   modo,
+  sesionId,
+  tituloExtra,
   onClose,
   onCerrada,
 }: {
-  esperada: string;
+  // null = no conocemos el esperado de antemano (sesión vieja); el server lo
+  // calcula al cerrar. En ese caso no mostramos preview de diferencia.
+  esperada: string | null;
   modo: 'normal' | 'anticipado';
+  sesionId: string;
+  tituloExtra?: string;
   onClose: () => void;
   onCerrada: () => void;
 }) {
@@ -369,7 +434,8 @@ function ModalCerrarSesion({
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const diferencia = contado ? Number(contado) - Number(esperada) : null;
+  const diferencia =
+    contado && esperada != null ? Number(contado) - Number(esperada) : null;
   const esAnticipado = modo === 'anticipado';
 
   async function submit() {
@@ -380,6 +446,9 @@ function ModalCerrarSesion({
         existenciaFinal: contado,
         observaciones: observaciones || undefined,
         anticipado: esAnticipado,
+        // Cerramos EXACTAMENTE la sesión que la pantalla está mostrando — no
+        // dejamos que el server re-resuelva y agarre una sesión vieja.
+        sesionId,
       });
       onCerrada();
     } catch (e) {
@@ -394,6 +463,11 @@ function ModalCerrarSesion({
       <div className="card w-full max-w-md p-5 shadow-modal">
         <h2 className="font-display text-lg text-teresita-700 mb-3">
           {esAnticipado ? '⏱ Cierre anticipado de turno' : 'Contar caja física'}
+          {tituloExtra && (
+            <span className="block text-xs font-normal text-ink-500 mt-0.5">
+              Sesión vieja sin cerrar · {tituloExtra}
+            </span>
+          )}
         </h2>
         {esAnticipado && (
           <div className="mb-3 p-3 rounded bg-saffron-100 text-saffron-600 text-xs">
@@ -403,8 +477,15 @@ function ModalCerrarSesion({
           </div>
         )}
         <p className="text-sm text-ink-500 mb-4">
-          El sistema espera <MoneyAmount value={esperada} className="font-medium text-ink-900" /> en
-          efectivo. Contá lo que hay en la caja y cargalo abajo.
+          {esperada != null ? (
+            <>
+              El sistema espera{' '}
+              <MoneyAmount value={esperada} className="font-medium text-ink-900" /> en efectivo.
+              Contá lo que hay en la caja y cargalo abajo.
+            </>
+          ) : (
+            <>Contá lo que hay en la caja y cargalo abajo. El sistema calcula la diferencia al cerrar.</>
+          )}
         </p>
 
         <div className="space-y-3">

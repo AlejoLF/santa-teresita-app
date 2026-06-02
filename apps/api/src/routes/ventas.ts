@@ -306,6 +306,21 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           },
         });
         if (cambiaRepartidor) {
+          // Sincronizar la modalidad de la venta con el repartidor elegido,
+          // así la lógica de caja/cierre keya por modalidad sin depender del
+          // canal. DELIVERATE → DELIVERY_DELIVERATE (rinde semanal, fuera de
+          // caja). Otra empresa externa → DELIVERY_PLATAFORMA. Empleado propio
+          // → DELIVERY_PROPIO. (No tocamos si no se asignó nadie.)
+          let modalidadNueva: string | null = null;
+          if (empresaExternaFinal === 'DELIVERATE') modalidadNueva = 'DELIVERY_DELIVERATE';
+          else if (empresaExternaFinal) modalidadNueva = 'DELIVERY_PLATAFORMA';
+          else if (empleadoNombreFinal) modalidadNueva = 'DELIVERY_PROPIO';
+          if (modalidadNueva) {
+            await tx.venta.update({
+              where: { id: params.id },
+              data: { modalidad: modalidadNueva as never },
+            });
+          }
           await encolarComandasParaVenta(params.id, tx);
         }
         return u;
@@ -689,8 +704,7 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       }
 
       // Pagos confirmados de la venta (sólo si está finalizada — las PROCESADAS
-      // no tienen pagos todavía). Hay que revertir cada uno: decrementar la
-      // cuenta correspondiente y marcar el pago como ANULADO.
+      // no tienen pagos todavía). Los marcamos ANULADO.
       const pagosAReversar =
         venta.estado === EstadoVenta.FINALIZADA
           ? await prisma.pago.findMany({
@@ -699,12 +713,13 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           : [];
 
       const anulada = await prisma.$transaction(async (tx) => {
-        // 1. Revertir cada pago: decrementar la cuenta y marcar el pago ANULADO
+        // 1. Marcar cada pago como ANULADO.
+        //
+        // NO tocamos saldoActual: las ventas NO acreditan saldo a las cuentas
+        // (los saldos se llevan por conciliación manual, ver Cuentas y saldos).
+        // Antes esto DECREMENTABA la cuenta al anular, dejándola en negativo
+        // porque la venta nunca la había acreditado. Bug corregido.
         for (const pago of pagosAReversar) {
-          await tx.cuenta.update({
-            where: { id: pago.cuentaId },
-            data: { saldoActual: { decrement: Number(pago.monto) } },
-          });
           await tx.pago.update({
             where: { id: pago.id },
             data: { estado: EstadoPago.ANULADO },

@@ -7,6 +7,33 @@ import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { cn } from '@/lib/cn';
 
+// Conceptos de pago a empleado. Sueldo/Jornada/Horas extra/Feriado/Vacaciones/
+// Aguinaldo son tipos de sueldo (categoría "Sueldos"); Adelanto y Comisión van
+// a sus categorías; Otro es extraordinario. (Paso previo a hacerlos lista
+// configurable — ver patrón de "listas blandas".)
+type EmpConcepto =
+  | 'SUELDO'
+  | 'JORNADA'
+  | 'HORAS_EXTRA'
+  | 'FERIADO'
+  | 'VACACIONES'
+  | 'AGUINALDO'
+  | 'ADELANTO'
+  | 'COMISION'
+  | 'OTRO';
+
+const EMP_CONCEPTOS: Array<{ value: EmpConcepto; label: string }> = [
+  { value: 'SUELDO', label: 'Sueldo' },
+  { value: 'JORNADA', label: 'Jornada' },
+  { value: 'HORAS_EXTRA', label: 'Horas extra' },
+  { value: 'FERIADO', label: 'Feriado' },
+  { value: 'VACACIONES', label: 'Vacaciones' },
+  { value: 'AGUINALDO', label: 'Aguinaldo' },
+  { value: 'ADELANTO', label: 'Adelanto' },
+  { value: 'COMISION', label: 'Comisión' },
+  { value: 'OTRO', label: 'Otro' },
+];
+
 interface Empleado {
   id: string;
   nombre: string;
@@ -72,9 +99,7 @@ export default function EmpleadoDetallePage({
   const [error, setError] = useState<string | null>(null);
   const [showPagar, setShowPagar] = useState(false);
   const [showEditar, setShowEditar] = useState(false);
-  const [tipoConcepto, setTipoConcepto] = useState<'SUELDO' | 'ADELANTO' | 'COMISION' | 'OTRO'>(
-    'SUELDO',
-  );
+  const [tipoConcepto, setTipoConcepto] = useState<EmpConcepto>('SUELDO');
 
   const fetchData = useCallback(async () => {
     try {
@@ -283,12 +308,11 @@ function ModalCargarPago({
   onCreated,
 }: {
   empleadoId: string;
-  tipoInicial: 'SUELDO' | 'ADELANTO' | 'COMISION' | 'OTRO';
+  tipoInicial: EmpConcepto;
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [tipoConcepto, setTipoConcepto] =
-    useState<'SUELDO' | 'ADELANTO' | 'COMISION' | 'OTRO'>(tipoInicial);
+  const [tipoConcepto, setTipoConcepto] = useState<EmpConcepto>(tipoInicial);
   const [monto, setMonto] = useState('');
   const [cuentaId, setCuentaId] = useState('');
   const [metodo, setMetodo] = useState<
@@ -343,32 +367,20 @@ function ModalCargarPago({
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-ink-700 mb-1">Concepto</label>
-            <div className="grid grid-cols-2 gap-2">
-              {(['SUELDO', 'ADELANTO', 'COMISION', 'OTRO'] as const).map((t) => (
+            <div className="grid grid-cols-3 gap-2">
+              {EMP_CONCEPTOS.map((c) => (
                 <button
-                  key={t}
+                  key={c.value}
                   type="button"
-                  onClick={() => setTipoConcepto(t)}
+                  onClick={() => setTipoConcepto(c.value)}
                   className={cn(
-                    'py-2 px-3 rounded-md text-sm font-medium border transition-colors',
-                    tipoConcepto === t
-                      ? t === 'SUELDO'
-                        ? 'bg-basil-600 text-white border-basil-600'
-                        : t === 'ADELANTO'
-                          ? 'bg-saffron-600 text-white border-saffron-600'
-                          : t === 'COMISION'
-                            ? 'bg-ocean-600 text-white border-ocean-600'
-                            : 'bg-ink-700 text-white border-ink-700'
+                    'py-2 px-2 rounded-md text-xs font-medium border transition-colors',
+                    tipoConcepto === c.value
+                      ? 'bg-basil-600 text-white border-basil-600'
                       : 'bg-white border-cream-300 text-ink-700 hover:bg-cream-50',
                   )}
                 >
-                  {t === 'SUELDO'
-                    ? 'Sueldo'
-                    : t === 'ADELANTO'
-                      ? 'Adelanto'
-                      : t === 'COMISION'
-                        ? 'Comisión'
-                        : 'Otro'}
+                  {c.label}
                 </button>
               ))}
             </div>

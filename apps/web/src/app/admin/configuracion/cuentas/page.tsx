@@ -74,15 +74,24 @@ export default function ConfigCuentasPage() {
     void fetchData();
   }, [fetchData]);
 
-  async function resetSaldo(c: Cuenta) {
-    if (!confirm(`¿Poner el saldo de "${c.nombre}" en $0? Esto corrige saldos arrastrados por error.`)) {
+  async function ajustarSaldo(c: Cuenta) {
+    const actual = Number(c.saldoActual).toFixed(2);
+    const ingresado = prompt(
+      `Ajustar saldo de "${c.nombre}" (conciliación manual).\n` +
+        `Escribí el saldo real de la cuenta. Saldo actual en el sistema: $${actual}`,
+      actual,
+    );
+    if (ingresado === null) return; // canceló
+    const limpio = ingresado.trim().replace(/\s/g, '').replace(',', '.');
+    if (!/^-?\d+(\.\d{1,2})?$/.test(limpio)) {
+      setError('Saldo inválido. Usá solo números (ej. 150000.50).');
       return;
     }
     try {
-      await api.post(`/admin/configuracion/cuentas/${c.id}/reset-saldo`, { saldo: '0' });
+      await api.post(`/admin/configuracion/cuentas/${c.id}/reset-saldo`, { saldo: limpio });
       void fetchData();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo resetear el saldo');
+      setError(e instanceof Error ? e.message : 'No se pudo ajustar el saldo');
     }
   }
 
@@ -188,11 +197,11 @@ export default function ConfigCuentasPage() {
                       Editar
                     </button>
                     <button
-                      onClick={() => resetSaldo(c)}
+                      onClick={() => ajustarSaldo(c)}
                       className="text-saffron-600 hover:underline text-xs mr-3"
-                      title="Poner el saldo en $0"
+                      title="Poner el saldo real de la cuenta (conciliación manual)"
                     >
-                      Reset saldo
+                      Ajustar saldo
                     </button>
                     {c.activa && (
                       <button

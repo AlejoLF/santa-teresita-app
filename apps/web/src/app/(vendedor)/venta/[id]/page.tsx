@@ -1231,6 +1231,8 @@ function DeliveryPanel({
 //   Editor de tipo de pedido (canal + modalidad)
 // ────────────────────────────────────────────────────────────────────────
 
+// DELIVERATE ya no es canal de ingesta: es un tipo de entrega que se asigna
+// como repartidor (panel de Delivery). El pedido entra por su canal real.
 const CANALES = [
   'MOSTRADOR',
   'TELEFONO',
@@ -1239,7 +1241,6 @@ const CANALES = [
   'RAPPI',
   'PEDIDOS_YA',
   'MERCADO_LIBRE',
-  'DELIVERATE',
 ] as const;
 const MODALIDADES = [
   'TAKE_AWAY',

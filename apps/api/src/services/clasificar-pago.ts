@@ -19,8 +19,13 @@ export function clasificarCanalBucket(
   canal: string | null | undefined,
   modalidad?: string | null,
 ): CanalBucket {
+  // DELIVERATE ya no es un canal de ingesta: es un tipo de entrega. La venta
+  // entra por su canal real (mostrador/teléfono/whatsapp) y se marca como
+  // DELIVERATE vía modalidad=DELIVERY_DELIVERATE (repartidor=DELIVERATE).
+  // Su plata rinde semanal → NO suma a la caja del día. Mantenemos también el
+  // chequeo de canal por compatibilidad con ventas viejas.
+  if (modalidad === 'DELIVERY_DELIVERATE' || canal === 'DELIVERATE') return 'deliverate';
   if (!canal || canal === 'MOSTRADOR') return 'mostrador';
-  if (canal === 'DELIVERATE') return 'deliverate';
   if (canal === 'RAPPI' || canal === 'PEDIDOS_YA' || canal === 'MERCADO_LIBRE') {
     return 'plataforma';
   }
