@@ -60,6 +60,181 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // ────────────────────────────────────────────────────────────────────
+  //   LISTAS Y OPCIONES — listas blandas configurables (patrón genérico)
+  //   dominio + etiqueta + atributos. Reglas duras (métodos de pago, canales,
+  //   tipos de cuenta) NO van acá — viven cableadas en el código.
+  // ────────────────────────────────────────────────────────────────────
+
+  // Dominios "de sistema" conocidos (la UI los lista siempre). Las listas
+  // propias que cree la encargada se registran como filas del dominio meta
+  // `_listas_propias_` y sus ítems viven en dominio `propia:<slug>`.
+  const DOMINIO_RE = /^[a-z0-9_]+(:[a-z0-9_-]+)?$/;
+
+  // GET /configuracion/opciones/:dominio — opciones ACTIVAS de un dominio.
+  // Cualquier usuario auth (lo consumen el vendedor/encargada en los modales).
+  fastify.get(
+    '/configuracion/opciones/:dominio',
+    {
+      preHandler: fastify.requireAuth(),
+      schema: { params: z.object({ dominio: z.string().min(1).max(80) }) },
+    },
+    async (req) => {
+      const { dominio } = req.params as { dominio: string };
+      const opciones = await prisma.opcionConfigurable.findMany({
+        where: { dominio, activo: true },
+        orderBy: [{ orden: 'asc' }, { etiqueta: 'asc' }],
+      });
+      return {
+        opciones: opciones.map((o) => ({
+          id: o.id,
+          etiqueta: o.etiqueta,
+          valor: o.valor,
+          atributos: o.atributos,
+        })),
+      };
+    },
+  );
+
+  // GET /admin/opciones/:dominio — todas (activas e inactivas) para el ABM.
+  fastify.get(
+    '/admin/opciones/:dominio',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ dominio: z.string().min(1).max(80) }) },
+    },
+    async (req) => {
+      const { dominio } = req.params as { dominio: string };
+      const opciones = await prisma.opcionConfigurable.findMany({
+        where: { dominio },
+        orderBy: [{ orden: 'asc' }, { etiqueta: 'asc' }],
+      });
+      return { opciones };
+    },
+  );
+
+  // POST /admin/opciones/:dominio — crear opción
+  fastify.post(
+    '/admin/opciones/:dominio',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ dominio: z.string().min(1).max(80) }),
+        body: z.object({
+          etiqueta: z.string().min(1).max(120),
+          valor: z.string().max(120).optional(),
+          atributos: z.record(z.unknown()).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { dominio } = req.params as { dominio: string };
+      if (!DOMINIO_RE.test(dominio)) {
+        return reply.code(400).send({ error: 'Dominio inválido' });
+      }
+      const body = req.body as { etiqueta: string; valor?: string; atributos?: Record<string, unknown> };
+      const etiqueta = body.etiqueta.trim();
+      const existente = await prisma.opcionConfigurable.findFirst({
+        where: { dominio, etiqueta: { equals: etiqueta, mode: 'insensitive' } },
+      });
+      if (existente) {
+        if (!existente.activo) {
+          const r = await prisma.opcionConfigurable.update({
+            where: { id: existente.id },
+            data: { activo: true },
+          });
+          return reply.code(200).send(r);
+        }
+        return reply.code(409).send({ error: 'Ya existe esa opción en la lista' });
+      }
+      const max = await prisma.opcionConfigurable.aggregate({
+        where: { dominio },
+        _max: { orden: true },
+      });
+      const created = await prisma.opcionConfigurable.create({
+        data: {
+          dominio,
+          etiqueta,
+          valor: body.valor ?? null,
+          atributos: (body.atributos ?? undefined) as never,
+          orden: (max._max.orden ?? -1) + 1,
+        },
+      });
+      await recordAudit({
+        tabla: 'opciones_configurables',
+        registroId: created.id,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { dominio, etiqueta },
+      });
+      return reply.code(201).send(created);
+    },
+  );
+
+  // PATCH /admin/opciones/:id — editar etiqueta/valor/atributos/orden/activo
+  fastify.patch(
+    '/admin/opciones/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          etiqueta: z.string().min(1).max(120).optional(),
+          valor: z.string().max(120).nullable().optional(),
+          atributos: z.record(z.unknown()).nullable().optional(),
+          orden: z.number().int().optional(),
+          activo: z.boolean().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const before = await prisma.opcionConfigurable.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Opción no encontrada' });
+      const updated = await prisma.opcionConfigurable.update({
+        where: { id: params.id },
+        data: req.body as Record<string, unknown>,
+      });
+      await recordAudit({
+        tabla: 'opciones_configurables',
+        registroId: updated.id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { etiqueta: before.etiqueta },
+        valorNuevo: { etiqueta: updated.etiqueta, activo: updated.activo },
+      });
+      return updated;
+    },
+  );
+
+  // DELETE /admin/opciones/:id — eliminar. Las de sistema se desactivan (soft);
+  // las propias se borran de verdad.
+  fastify.delete(
+    '/admin/opciones/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const before = await prisma.opcionConfigurable.findUnique({ where: { id: params.id } });
+      if (!before) return reply.code(404).send({ error: 'Opción no encontrada' });
+      if (before.esSistema) {
+        await prisma.opcionConfigurable.update({ where: { id: params.id }, data: { activo: false } });
+      } else {
+        await prisma.opcionConfigurable.delete({ where: { id: params.id } });
+      }
+      await recordAudit({
+        tabla: 'opciones_configurables',
+        registroId: params.id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { dominio: before.dominio, etiqueta: before.etiqueta },
+      });
+      return { ok: true };
+    },
+  );
+
   // GET /configuracion/delivery-empresas — empresas activas para el selector
   // de repartidor del vendedor. Cualquier usuario auth (no solo admin).
   fastify.get(

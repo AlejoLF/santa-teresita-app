@@ -99,7 +99,8 @@ export default function EmpleadoDetallePage({
   const [error, setError] = useState<string | null>(null);
   const [showPagar, setShowPagar] = useState(false);
   const [showEditar, setShowEditar] = useState(false);
-  const [tipoConcepto, setTipoConcepto] = useState<EmpConcepto>('SUELDO');
+  // Etiqueta del concepto con la que se abre el modal (de la lista configurable).
+  const [tipoConcepto, setTipoConcepto] = useState<string>('Sueldo');
 
   const fetchData = useCallback(async () => {
     try {
@@ -279,17 +280,17 @@ export default function EmpleadoDetallePage({
 
       {/* Acceso rápido para cargar distintos conceptos */}
       <div className="flex gap-2 pt-2">
-        {(['SUELDO', 'ADELANTO', 'COMISION', 'OTRO'] as const).map((t) => (
+        {(['Sueldo', 'Adelanto', 'Comisión', 'Otro'] as const).map((et) => (
           <Button
-            key={t}
+            key={et}
             variant="secondary"
             size="sm"
             onClick={() => {
-              setTipoConcepto(t);
+              setTipoConcepto(et);
               setShowPagar(true);
             }}
           >
-            + {t === 'SUELDO' ? 'Pago de sueldo' : t === 'ADELANTO' ? 'Adelanto' : t === 'COMISION' ? 'Comisión' : 'Otro pago'}
+            + {et === 'Sueldo' ? 'Pago de sueldo' : et}
           </Button>
         ))}
       </div>
@@ -308,11 +309,13 @@ function ModalCargarPago({
   onCreated,
 }: {
   empleadoId: string;
-  tipoInicial: EmpConcepto;
+  tipoInicial: string;
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [tipoConcepto, setTipoConcepto] = useState<EmpConcepto>(tipoInicial);
+  // Concepto = etiqueta de la lista configurable `concepto_pago_empleado`.
+  const [concepto, setConcepto] = useState<string>(tipoInicial);
+  const [conceptos, setConceptos] = useState<string[]>(EMP_CONCEPTOS.map((c) => c.label));
   const [monto, setMonto] = useState('');
   const [cuentaId, setCuentaId] = useState('');
   const [metodo, setMetodo] = useState<
@@ -327,8 +330,16 @@ function ModalCargarPago({
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get<{ cuentas: Cuenta[] }>('/admin/cuentas');
-        setCuentas(res.cuentas);
+        const [c, ops] = await Promise.all([
+          api.get<{ cuentas: Cuenta[] }>('/admin/cuentas'),
+          api
+            .get<{ opciones: Array<{ etiqueta: string }> }>(
+              '/configuracion/opciones/concepto_pago_empleado',
+            )
+            .catch(() => ({ opciones: [] as Array<{ etiqueta: string }> })),
+        ]);
+        setCuentas(c.cuentas);
+        if (ops.opciones.length > 0) setConceptos(ops.opciones.map((o) => o.etiqueta));
       } catch {
         /* silencioso */
       }
@@ -342,7 +353,7 @@ function ModalCargarPago({
     setGuardando(true);
     try {
       await api.post(`/admin/empleados/${empleadoId}/movimientos`, {
-        tipoConcepto,
+        conceptoEtiqueta: concepto,
         monto,
         cuentaOrigenId: cuentaId,
         metodo,
@@ -368,22 +379,25 @@ function ModalCargarPago({
           <div>
             <label className="block text-xs font-medium text-ink-700 mb-1">Concepto</label>
             <div className="grid grid-cols-3 gap-2">
-              {EMP_CONCEPTOS.map((c) => (
+              {conceptos.map((et) => (
                 <button
-                  key={c.value}
+                  key={et}
                   type="button"
-                  onClick={() => setTipoConcepto(c.value)}
+                  onClick={() => setConcepto(et)}
                   className={cn(
                     'py-2 px-2 rounded-md text-xs font-medium border transition-colors',
-                    tipoConcepto === c.value
+                    concepto === et
                       ? 'bg-basil-600 text-white border-basil-600'
                       : 'bg-white border-cream-300 text-ink-700 hover:bg-cream-50',
                   )}
                 >
-                  {c.label}
+                  {et}
                 </button>
               ))}
             </div>
+            <p className="text-2xs text-ink-500 mt-1">
+              ¿Falta un concepto? Agregalo en Configuración → Listas y opciones.
+            </p>
           </div>
 
           <div>

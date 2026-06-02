@@ -333,17 +333,12 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
       schema: {
         params: z.object({ id: z.string().uuid() }),
         body: z.object({
-          tipoConcepto: z.enum([
-            'SUELDO',
-            'JORNADA',
-            'HORAS_EXTRA',
-            'FERIADO',
-            'VACACIONES',
-            'AGUINALDO',
-            'ADELANTO',
-            'COMISION',
-            'OTRO',
-          ]),
+          // Concepto como ETIQUETA libre (viene de la lista configurable
+          // `concepto_pago_empleado`). Se acepta cualquier string para soportar
+          // conceptos que la encargada agregue. `tipoConcepto` (enum viejo) se
+          // mantiene opcional por compatibilidad.
+          conceptoEtiqueta: z.string().min(1).max(120).optional(),
+          tipoConcepto: z.string().max(40).optional(),
           monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
           cuentaOrigenId: z.string().uuid(),
           metodo: z
@@ -365,16 +360,8 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
     async (req, reply) => {
       const params = req.params as { id: string };
       const body = req.body as {
-        tipoConcepto:
-          | 'SUELDO'
-          | 'JORNADA'
-          | 'HORAS_EXTRA'
-          | 'FERIADO'
-          | 'VACACIONES'
-          | 'AGUINALDO'
-          | 'ADELANTO'
-          | 'COMISION'
-          | 'OTRO';
+        conceptoEtiqueta?: string;
+        tipoConcepto?: string;
         monto: string;
         cuentaOrigenId: string;
         metodo: 'EFECTIVO' | 'TRANSFERENCIA' | 'DEPOSITO' | 'CHEQUE' | 'MERCADOPAGO_QR' | 'OTRO';
@@ -386,21 +373,8 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
       const empleado = await prisma.empleado.findUnique({ where: { id: params.id } });
       if (!empleado) return reply.code(404).send({ error: 'Empleado no encontrado' });
 
-      // Mapear concepto → categoría del sistema. Jornada/Horas extra/Feriado/
-      // Vacaciones/Aguinaldo son tipos de pago de sueldo → categoría "Sueldos";
-      // el tipo puntual queda en la observación para distinguirlos.
-      const categoriaPorConcepto: Record<typeof body.tipoConcepto, string> = {
-        SUELDO: 'Sueldos',
-        JORNADA: 'Sueldos',
-        HORAS_EXTRA: 'Sueldos',
-        FERIADO: 'Sueldos',
-        VACACIONES: 'Sueldos',
-        AGUINALDO: 'Sueldos',
-        ADELANTO: 'Adelanto a empleado',
-        COMISION: 'Comisiones',
-        OTRO: 'Extraordinario / Sin categoría',
-      };
-      const etiquetaConcepto: Record<typeof body.tipoConcepto, string> = {
+      // Compat enum viejo (UPPERCASE) → etiqueta de la lista.
+      const codeToEtiqueta: Record<string, string> = {
         SUELDO: 'Sueldo',
         JORNADA: 'Jornada',
         HORAS_EXTRA: 'Horas extra',
@@ -411,8 +385,31 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
         COMISION: 'Comisión',
         OTRO: 'Otro',
       };
+      const etiqueta =
+        body.conceptoEtiqueta?.trim() ||
+        (body.tipoConcepto ? codeToEtiqueta[body.tipoConcepto] ?? body.tipoConcepto : '') ||
+        'Otro';
+
+      // Resolver la categoría contable destino desde la lista configurable.
+      // Fallback: mapa conocido por etiqueta, sino "Extraordinario / Sin categoría".
+      const opcion = await prisma.opcionConfigurable.findFirst({
+        where: { dominio: 'concepto_pago_empleado', etiqueta: { equals: etiqueta, mode: 'insensitive' } },
+      });
+      const fallbackCat: Record<string, string> = {
+        Sueldo: 'Sueldos',
+        Jornada: 'Sueldos',
+        'Horas extra': 'Sueldos',
+        Feriado: 'Sueldos',
+        Vacaciones: 'Sueldos',
+        Aguinaldo: 'Sueldos',
+        Adelanto: 'Adelanto a empleado',
+        Comisión: 'Comisiones',
+      };
+      const atributos = (opcion?.atributos as { categoria?: string } | null) ?? null;
+      const categoriaNombre =
+        atributos?.categoria ?? fallbackCat[etiqueta] ?? 'Extraordinario / Sin categoría';
       const categoria = await prisma.categoriaMovimiento.findUnique({
-        where: { nombre: categoriaPorConcepto[body.tipoConcepto] },
+        where: { nombre: categoriaNombre },
       });
       if (!categoria) {
         return reply.code(500).send({ error: 'Categoría del sistema no encontrada' });
@@ -420,13 +417,13 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
 
       const fecha = body.fechaComputo ? new Date(body.fechaComputo) : new Date();
       const monto = Number(body.monto);
-      // Anteponer el tipo de concepto a la observación cuando aporta info
-      // (los sub-tipos de sueldo comparten categoría "Sueldos").
-      const obsConConcepto = ['JORNADA', 'HORAS_EXTRA', 'FERIADO', 'VACACIONES', 'AGUINALDO'].includes(
-        body.tipoConcepto,
-      )
-        ? `${etiquetaConcepto[body.tipoConcepto]}${body.observacion ? ' · ' + body.observacion : ''}`
-        : body.observacion;
+      // Anteponer la etiqueta del concepto a la observación cuando aporta info
+      // (los conceptos que comparten la categoría "Sueldos", o cualquiera que
+      // no sea el plano "Sueldo"). Así queda trazable qué tipo de pago fue.
+      const obsConConcepto =
+        categoriaNombre === 'Sueldos' && etiqueta.toLowerCase() !== 'sueldo'
+          ? `${etiqueta}${body.observacion ? ' · ' + body.observacion : ''}`
+          : body.observacion;
 
       const created = await prisma.$transaction(async (tx) => {
         const mov = await tx.movimiento.create({

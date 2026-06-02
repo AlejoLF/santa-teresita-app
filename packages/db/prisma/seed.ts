@@ -1559,6 +1559,59 @@ async function seedEmpresasDelivery() {
   console.log(`  ✓ ${empresas.length} empresas de delivery`);
 }
 
+// Listas blandas configurables (dominios base). Idempotente por (dominio,
+// etiqueta). esSistema=true en las base → no se borran, pero sí se pueden
+// editar/desactivar y agregar nuevas.
+async function seedOpcionesConfigurables() {
+  console.log('▸ Seeding listas configurables (opciones)...');
+  type Op = { etiqueta: string; valor?: string; atributos?: unknown; orden: number };
+  const dominios: Record<string, Op[]> = {
+    // categoria = nombre de la CategoriaMovimiento destino del pago.
+    concepto_pago_empleado: [
+      { etiqueta: 'Sueldo', atributos: { categoria: 'Sueldos' }, orden: 0 },
+      { etiqueta: 'Jornada', atributos: { categoria: 'Sueldos' }, orden: 1 },
+      { etiqueta: 'Horas extra', atributos: { categoria: 'Sueldos' }, orden: 2 },
+      { etiqueta: 'Feriado', atributos: { categoria: 'Sueldos' }, orden: 3 },
+      { etiqueta: 'Vacaciones', atributos: { categoria: 'Sueldos' }, orden: 4 },
+      { etiqueta: 'Aguinaldo', atributos: { categoria: 'Sueldos' }, orden: 5 },
+      { etiqueta: 'Adelanto', atributos: { categoria: 'Adelanto a empleado' }, orden: 6 },
+      { etiqueta: 'Comisión', atributos: { categoria: 'Comisiones' }, orden: 7 },
+      { etiqueta: 'Otro', atributos: { categoria: 'Extraordinario / Sin categoría' }, orden: 8 },
+    ],
+    motivo_anulacion: [
+      { etiqueta: 'Error de carga', orden: 0 },
+      { etiqueta: 'Cliente canceló', orden: 1 },
+      { etiqueta: 'Producto sin stock', orden: 2 },
+      { etiqueta: 'Pedido duplicado', orden: 3 },
+      { etiqueta: 'Otro', orden: 4 },
+    ],
+    etiqueta_cliente: [
+      { etiqueta: 'Frecuente', orden: 0 },
+      { etiqueta: 'Mayorista', orden: 1 },
+      { etiqueta: 'Empresa', orden: 2 },
+    ],
+  };
+  let total = 0;
+  for (const [dominio, ops] of Object.entries(dominios)) {
+    for (const op of ops) {
+      await prisma.opcionConfigurable.upsert({
+        where: { dominio_etiqueta: { dominio, etiqueta: op.etiqueta } },
+        create: {
+          dominio,
+          etiqueta: op.etiqueta,
+          valor: op.valor ?? null,
+          atributos: (op.atributos ?? undefined) as never,
+          orden: op.orden,
+          esSistema: true,
+        },
+        update: {}, // no pisar ediciones de la encargada
+      });
+      total += 1;
+    }
+  }
+  console.log(`  ✓ ${total} opciones en ${Object.keys(dominios).length} dominios`);
+}
+
 async function seedEmpleados() {
   console.log('▸ Seeding empleados...');
   const empleados: Array<{
@@ -1603,6 +1656,7 @@ async function main() {
   await seedConfiguracion();
   await seedEnvios();
   await seedEmpresasDelivery();
+  await seedOpcionesConfigurables();
   await seedPosnets();
 
   console.log('\n═══════════════════════════════════════════════════════════');

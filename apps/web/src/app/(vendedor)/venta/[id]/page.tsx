@@ -64,6 +64,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
   const [procesando, setProcesando] = useState(false);
   const [confirmaAnular, setConfirmaAnular] = useState(false);
   const [motivoAnular, setMotivoAnular] = useState('');
+  const [motivosSugeridos, setMotivosSugeridos] = useState<string[]>([]);
   const motivoAnularRef = useRef<HTMLTextAreaElement | null>(null);
   const [mostrarCobro, setMostrarCobro] = useState(cobrarAutomatico);
   const [efectivoRecibido, setEfectivoRecibido] = useState('');
@@ -145,8 +146,16 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
           motivoAnularRef.current?.focus();
         });
       });
+      // Motivos sugeridos (lista configurable). Si falla, quedan los chips vacíos
+      // y el cajero igual puede escribir el motivo a mano.
+      if (motivosSugeridos.length === 0) {
+        api
+          .get<{ opciones: Array<{ etiqueta: string }> }>('/configuracion/opciones/motivo_anulacion')
+          .then((r) => setMotivosSugeridos(r.opciones.map((o) => o.etiqueta)))
+          .catch(() => {});
+      }
     }
-  }, [confirmaAnular]);
+  }, [confirmaAnular, motivosSugeridos.length]);
 
   // Detectar combos automáticos cuando la venta carga / cambia de items.
   // Solo si la venta está en estado PROCESADA (editable).
@@ -759,6 +768,25 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
             <label htmlFor="motivo-anular" className="text-sm font-medium text-ink-700 mb-1 block">
               Motivo
             </label>
+            {motivosSugeridos.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {motivosSugeridos.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setMotivoAnular(m)}
+                    className={cn(
+                      'px-2 py-1 rounded text-2xs border transition-colors',
+                      motivoAnular === m
+                        ? 'bg-teresita-700 text-cream-50 border-teresita-700'
+                        : 'bg-white border-cream-300 text-ink-700 hover:bg-cream-50',
+                    )}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            )}
             <textarea
               id="motivo-anular"
               ref={motivoAnularRef}

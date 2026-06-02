@@ -993,6 +993,30 @@ model DeliveryInfo {
   @@map("delivery_info")
 }
 
+// Listas blandas configurables por la encargada ("listas y opciones"). Cada
+// fila es una opción de un `dominio`. Sirve para conceptos de pago a empleado,
+// motivos de anulación, etiquetas de cliente, y listas propias que la encargada
+// cree (dominio = "propia:<slug>"). Las listas propias se registran como filas
+// del dominio meta "_listas_propias_" (etiqueta = nombre, valor = slug).
+// `atributos` lleva metadata específica del dominio (ej. { categoria: 'Sueldos' }
+// para conceptos de pago). NO se usa para reglas duras (métodos de pago,
+// canales, tipos de cuenta) que viven cableadas en el código.
+model OpcionConfigurable {
+  id        String   @id @default(uuid()) @db.Uuid
+  dominio   String   @db.VarChar(80)
+  etiqueta  String   @db.VarChar(120)
+  valor     String?  @db.VarChar(120)
+  atributos Json?
+  orden     Int      @default(0)
+  activo    Boolean  @default(true)
+  esSistema Boolean  @default(false) @map("es_sistema")
+  creadoAt  DateTime @default(now()) @map("creado_at")
+
+  @@unique([dominio, etiqueta])
+  @@index([dominio, activo, orden])
+  @@map("opciones_configurables")
+}
+
 // Empresas / repartidores de delivery configurables desde admin (sección
 // Delivery). Cada una con su comisión. `esInterno` marca el motoquero propio
 // del local (ej. Damián, comisión 0). La comisión por ahora es informativa
