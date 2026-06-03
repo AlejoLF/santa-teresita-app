@@ -80,6 +80,21 @@ export function ListasPreciosManager() {
     void fetchListas();
   }, [fetchListas]);
 
+  async function eliminarLista(l: ListaRow) {
+    if (
+      !confirm(
+        `¿Eliminar la lista "${l.nombre}"? Los productos no se borran — solo se quita la lista.`,
+      )
+    )
+      return;
+    try {
+      await api.delete(`/admin/listas/${l.id}`);
+      void fetchListas();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo eliminar la lista');
+    }
+  }
+
   if (verListaId) {
     return (
       <DetalleLista
@@ -130,7 +145,15 @@ export function ListasPreciosManager() {
                   {l.tipo === 'PUBLICA' ? '—' : `${Number(l.ajustePctDefault).toFixed(0)}%`}
                 </td>
                 <td className="px-4 py-3 text-right text-ink-700">{l.productos}</td>
-                <td className="px-4 py-3 text-right">
+                <td className="px-4 py-3 text-right whitespace-nowrap">
+                  {l.tipo === 'CUSTOM' && l.activa && (
+                    <button
+                      onClick={() => eliminarLista(l)}
+                      className="text-pomodoro-600 hover:underline text-xs mr-3"
+                    >
+                      Eliminar
+                    </button>
+                  )}
                   <button
                     onClick={() => setVerListaId(l.id)}
                     className="text-teresita-700 hover:underline text-xs"
@@ -173,6 +196,9 @@ function DetalleLista({ listaId, onBack }: { listaId: string; onBack: () => void
   const [colapsadas, setColapsadas] = useState<Record<string, boolean>>({});
   // Aumento global
   const [globalPct, setGlobalPct] = useState('');
+  // Rename
+  const [renombrando, setRenombrando] = useState(false);
+  const [nuevoNombre, setNuevoNombre] = useState('');
 
   const fetchDetalle = useCallback(async () => {
     try {
@@ -223,6 +249,26 @@ function DetalleLista({ listaId, onBack }: { listaId: string; onBack: () => void
     });
   }
 
+  async function renombrar() {
+    if (!nuevoNombre.trim()) return;
+    try {
+      await api.patch(`/admin/listas/${listaId}`, { nombre: nuevoNombre.trim() });
+      setRenombrando(false);
+      await fetchDetalle();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo renombrar');
+    }
+  }
+
+  async function agregarCategoria(categoriaId: string) {
+    try {
+      await api.post(`/admin/listas/${listaId}/agregar-categoria`, { categoriaId });
+      await fetchDetalle();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo agregar la categoría');
+    }
+  }
+
   async function guardar() {
     setGuardando(true);
     setError(null);
@@ -264,12 +310,42 @@ function DetalleLista({ listaId, onBack }: { listaId: string; onBack: () => void
           <button onClick={onBack} className="text-sm text-ink-500 hover:underline">
             ← Volver a listas
           </button>
-          <h2 className="font-display text-lg text-ink-900 mt-1">
-            {lista.nombre}{' '}
-            <span className={cn('text-2xs font-medium px-2 py-0.5 rounded align-middle', TIPO_COLOR[lista.tipo])}>
-              {TIPO_LABEL[lista.tipo]}
-            </span>
-          </h2>
+          {renombrando ? (
+            <div className="flex items-center gap-2 mt-1">
+              <input
+                value={nuevoNombre}
+                onChange={(e) => setNuevoNombre(e.target.value)}
+                className="input w-64"
+                autoFocus
+                onKeyDown={(e) => e.key === 'Enter' && void renombrar()}
+              />
+              <Button size="sm" onClick={() => void renombrar()}>
+                Guardar
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setRenombrando(false)}>
+                ✕
+              </Button>
+            </div>
+          ) : (
+            <h2 className="font-display text-lg text-ink-900 mt-1 flex items-center gap-2">
+              {lista.nombre}
+              <span
+                className={cn('text-2xs font-medium px-2 py-0.5 rounded', TIPO_COLOR[lista.tipo])}
+              >
+                {TIPO_LABEL[lista.tipo]}
+              </span>
+              <button
+                onClick={() => {
+                  setNuevoNombre(lista.nombre);
+                  setRenombrando(true);
+                }}
+                className="text-xs text-ink-400 hover:text-teresita-700"
+                title="Renombrar lista"
+              >
+                ✏
+              </button>
+            </h2>
+          )}
           {lista.tipo === 'CANAL' && (
             <p className="text-xs text-ink-500 mt-0.5">
               Precios derivados del público + {Number(lista.ajustePctDefault).toFixed(0)}%. Se
@@ -350,18 +426,29 @@ function DetalleLista({ listaId, onBack }: { listaId: string; onBack: () => void
           const colapsada = colapsadas[cat.id];
           return (
             <div key={cat.id} className="card overflow-hidden">
-              <button
-                onClick={() => setColapsadas((c) => ({ ...c, [cat.id]: !c[cat.id] }))}
-                className="w-full flex items-center justify-between px-4 py-2 bg-surface-sunken text-left"
-              >
-                <span className="font-display text-md text-ink-900">
-                  {cat.nombre}{' '}
-                  <span className="text-2xs text-ink-500 font-normal">
-                    ({lista.tipo === 'CUSTOM' ? cat.productos.filter((p) => p.enLista).length : cat.productos.length})
+              <div className="flex items-center justify-between px-4 py-2 bg-surface-sunken">
+                <button
+                  onClick={() => setColapsadas((c) => ({ ...c, [cat.id]: !c[cat.id] }))}
+                  className="flex-1 flex items-center gap-2 text-left"
+                >
+                  <span className="text-ink-500">{colapsada ? '▸' : '▾'}</span>
+                  <span className="font-display text-md text-ink-900">
+                    {cat.nombre}{' '}
+                    <span className="text-2xs text-ink-500 font-normal">
+                      ({lista.tipo === 'CUSTOM' ? cat.productos.filter((p) => p.enLista).length : cat.productos.length})
+                    </span>
                   </span>
-                </span>
-                <span className="text-ink-500">{colapsada ? '▸' : '▾'}</span>
-              </button>
+                </button>
+                {editando && lista.tipo === 'CUSTOM' && (
+                  <button
+                    onClick={() => void agregarCategoria(cat.id)}
+                    className="text-2xs text-teresita-700 hover:underline whitespace-nowrap"
+                    title="Agregar todos los productos de esta categoría a la lista"
+                  >
+                    + toda la categoría
+                  </button>
+                )}
+              </div>
               {!colapsada && (
                 <table className="w-full text-sm">
                   <tbody className="divide-y divide-cream-200">
