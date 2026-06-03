@@ -84,7 +84,7 @@ export default function AdminDashboard() {
   const [grafico, setGrafico] = useState<VentasPorHora | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drillDown, setDrillDown] = useState<DrillDownTipo>(null);
-  const [periodo, setPeriodo] = useState<PeriodoTipo>('dia');
+  const [periodo, setPeriodo] = useState<PeriodoTipo>('sesion_actual');
   // Rango custom (datetime-local). Solo se aplica al tocar "Aplicar".
   const [customDesde, setCustomDesde] = useState('');
   const [customHasta, setCustomHasta] = useState('');
@@ -138,7 +138,11 @@ export default function AdminDashboard() {
       {(data.pendientes.sesionesAbiertasViejas > 0 ||
         data.pendientes.sesionesSinAprobar > 0) && (
         <Link
-          href="/admin/cierres"
+          href={
+            data.pendientes.sesionesAbiertasViejas > 0
+              ? '/admin/sesion-actual'
+              : '/admin/cierres'
+          }
           className="block rounded-lg bg-pomodoro-600 hover:bg-pomodoro-700 text-white px-5 py-4 shadow-modal transition-colors"
         >
           <div className="flex items-start gap-3">
@@ -151,18 +155,26 @@ export default function AdminDashboard() {
               <div className="text-sm text-white/90 mt-0.5">
                 {data.pendientes.sesionesAbiertasViejas > 0 && (
                   <>
-                    Hay {data.pendientes.sesionesAbiertasViejas} caja
-                    {data.pendientes.sesionesAbiertasViejas > 1 ? 's' : ''} abierta
-                    {data.pendientes.sesionesAbiertasViejas > 1 ? 's' : ''} sin cerrar.{' '}
+                    Hay {data.pendientes.sesionesAbiertasViejas} sesión
+                    {data.pendientes.sesionesAbiertasViejas > 1 ? 'es' : ''} de turnos
+                    anteriores <strong>abierta{data.pendientes.sesionesAbiertasViejas > 1 ? 's' : ''} sin cerrar</strong>.{' '}
+                    Andá a <span className="underline">Sesión actual</span> para contar la caja y cerrarla
+                    {data.pendientes.sesionesAbiertasViejas > 1 ? 's' : ''}.{' '}
                   </>
                 )}
                 {data.pendientes.sesionesSinAprobar > 0 && (
                   <>
                     Hay {data.pendientes.sesionesSinAprobar} cierre
-                    {data.pendientes.sesionesSinAprobar > 1 ? 's' : ''} sin aprobar.{' '}
+                    {data.pendientes.sesionesSinAprobar > 1 ? 's' : ''} <strong>sin aprobar</strong>
+                    {data.pendientes.sesionesAbiertasViejas === 0 && (
+                      <>
+                        . Andá a <span className="underline">Cierres</span> para aprobar
+                      </>
+                    )}
+                    .{' '}
                   </>
                 )}
-                Cerrá y aprobá la caja anterior antes de empezar la siguiente. →
+                →
               </div>
             </div>
           </div>
@@ -313,7 +325,7 @@ export default function AdminDashboard() {
                 show={data.pendientes.sesionesAbiertasViejas > 0}
                 label={`${data.pendientes.sesionesAbiertasViejas} caja(s) abierta(s) sin cerrar`}
                 icon="🔓"
-                href="/admin/cierres"
+                href="/admin/sesion-actual"
                 accent="danger"
               />
               <PendienteRow
