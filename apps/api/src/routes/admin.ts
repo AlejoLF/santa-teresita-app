@@ -81,6 +81,49 @@ async function enviarEmailDeCierreSiCorresponde(sesionId: string): Promise<void>
 }
 
 /**
+ * Sincroniza la membresía de un producto en las listas CUSTOM (mayoristas).
+ * Las listas pública y de canal incluyen a todos los productos implícitamente,
+ * así que sólo se gestiona la pertenencia a las listas custom (PrecioPorLista).
+ * Agrega las nuevas (al precio base × ajuste de la lista) y quita las
+ * desmarcadas. `listaIds` es el set final de listas custom marcadas.
+ */
+async function syncListasCustomDeProducto(
+  productoId: string,
+  precioBase: string,
+  listaIds: string[],
+): Promise<void> {
+  const custom = await prisma.listaPrecios.findMany({
+    where: { canalDefault: 'MAYORISTA', activa: true },
+    select: { id: true, ajustePctDefault: true },
+  });
+  const customIds = new Set(custom.map((c) => c.id));
+  const ajuste = new Map(custom.map((c) => [c.id, Number(c.ajustePctDefault)]));
+  const target = listaIds.filter((id) => customIds.has(id));
+  const existentes = await prisma.precioPorLista.findMany({
+    where: { productoId, listaId: { in: [...customIds] } },
+    select: { listaId: true },
+  });
+  const existSet = new Set(existentes.map((e) => e.listaId));
+  const base = Number(precioBase);
+  for (const lid of target) {
+    if (!existSet.has(lid)) {
+      await prisma.precioPorLista.create({
+        data: {
+          productoId,
+          listaId: lid,
+          precioEfectivo: (base * (1 + (ajuste.get(lid) ?? 0) / 100)).toFixed(2),
+          vigenciaDesde: new Date(),
+        },
+      });
+    }
+  }
+  const remove = [...existSet].filter((id) => !target.includes(id));
+  if (remove.length > 0) {
+    await prisma.precioPorLista.deleteMany({ where: { productoId, listaId: { in: remove } } });
+  }
+}
+
+/**
  * Endpoints exclusivos del rol Admin. Devuelven KPIs agregados para los dashboards.
  * Todas las queries usan agregaciones de Postgres (no fetch + sum en app) para que escale.
  */
@@ -641,6 +684,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             tipoProductoId: z.string().uuid().optional(),
             formaVentaLabel: z.string().max(40).nullable().optional(),
             unidadPrecioLabel: z.string().max(40).nullable().optional(),
+            listasCustom: z.array(z.string().uuid()).optional(),
           })
           .refine(
             (d) =>
@@ -653,7 +697,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               d.descripcion !== undefined ||
               d.tipoProductoId !== undefined ||
               d.formaVentaLabel !== undefined ||
-              d.unidadPrecioLabel !== undefined,
+              d.unidadPrecioLabel !== undefined ||
+              d.listasCustom !== undefined,
             { message: 'Hay que enviar al menos un campo a cambiar' },
           ),
       },
@@ -672,6 +717,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         tipoProductoId?: string;
         formaVentaLabel?: string | null;
         unidadPrecioLabel?: string | null;
+        listasCustom?: string[];
       };
 
       const before = await prisma.producto.findUnique({ where: { id: params.id } });
@@ -710,6 +756,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         }
         return u;
       });
+
+      if (body.listasCustom !== undefined) {
+        await syncListasCustomDeProducto(
+          updated.id,
+          updated.precioBase.toString(),
+          body.listasCustom,
+        );
+      }
 
       await recordAudit({
         tabla: 'productos',
@@ -3777,6 +3831,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           unidadPrecioLabel: z.string().max(40).nullable().optional(),
           cantidadDefault: z.string().nullable().optional(),
           descripcion: z.string().nullable().optional(),
+          // Listas custom (mayoristas) a las que se agrega el producto. La
+          // pública y las de canal lo incluyen siempre.
+          listasCustom: z.array(z.string().uuid()).optional(),
         }),
       },
     },
@@ -3800,6 +3857,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         unidadPrecioLabel?: string | null;
         cantidadDefault?: string | null;
         descripcion?: string | null;
+        listasCustom?: string[];
       };
       const tipo = await prisma.tipoProducto.findUnique({ where: { id: body.tipoProductoId } });
       if (!tipo) return reply.code(404).send({ error: 'Tipo de producto no existe' });
@@ -3825,6 +3883,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           activo: true,
         },
       });
+      if (body.listasCustom && body.listasCustom.length > 0) {
+        await syncListasCustomDeProducto(producto.id, body.precioBase, body.listasCustom);
+      }
       await recordAudit({
         tabla: 'productos',
         registroId: producto.id,

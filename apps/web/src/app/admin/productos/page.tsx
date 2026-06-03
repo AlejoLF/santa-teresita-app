@@ -539,6 +539,8 @@ function ProductoEditModal({
   const [motivo, setMotivo] = useState('');
   const [historial, setHistorial] = useState<HistorialPrecio[]>([]);
   const [tiposProducto, setTiposProducto] = useState<TipoProducto[]>([]);
+  const [listasCustom, setListasCustom] = useState<Array<{ id: string; nombre: string; enLista: boolean }>>([]);
+  const [seleccionListas, setSeleccionListas] = useState<Record<string, boolean>>({});
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -558,6 +560,15 @@ function ProductoEditModal({
       } catch {
         /* silencioso */
       }
+      try {
+        const lc = await api.get<{ listas: Array<{ id: string; nombre: string; enLista: boolean }> }>(
+          `/admin/listas/custom?productoId=${producto.id}`,
+        );
+        setListasCustom(lc.listas);
+        setSeleccionListas(Object.fromEntries(lc.listas.map((l) => [l.id, l.enLista])));
+      } catch {
+        /* silencioso */
+      }
     })();
   }, [producto.id]);
 
@@ -565,12 +576,14 @@ function ProductoEditModal({
   const cambiaMarca = marca !== (producto.marca ?? '');
   const cambiaPresentacion = presentacion !== (producto.presentacion ?? '');
   const cambiaTipo = tipoProductoId !== producto.tipoProducto.id;
+  const cambiaListas = listasCustom.some((l) => !!seleccionListas[l.id] !== l.enLista);
   const cambia =
     nombre !== producto.nombre ||
     cambiaPrecio ||
     cambiaMarca ||
     cambiaPresentacion ||
     cambiaTipo ||
+    cambiaListas ||
     activo !== producto.activo;
 
   async function submit() {
@@ -589,6 +602,9 @@ function ProductoEditModal({
         activo: activo !== producto.activo ? activo : undefined,
         tipoProductoId: cambiaTipo ? tipoProductoId : undefined,
         motivoCambioPrecio: cambiaPrecio ? motivo : undefined,
+        listasCustom: cambiaListas
+          ? listasCustom.filter((l) => seleccionListas[l.id]).map((l) => l.id)
+          : undefined,
       });
       onSaved(updated);
     } catch (e) {
@@ -758,6 +774,35 @@ function ProductoEditModal({
                 />
                 <span className="text-sm text-ink-700">Producto activo</span>
               </label>
+
+              <div className="border-t border-cream-200 pt-3">
+                <label className="block text-sm font-medium text-ink-700 mb-1">
+                  Listas mayoristas
+                </label>
+                <p className="text-2xs text-ink-500 mb-2">
+                  Siempre está en la lista pública y en las de canal. Marcá las listas mayoristas
+                  donde también se vende (toma el precio de esa lista).
+                </p>
+                {listasCustom.length === 0 ? (
+                  <p className="text-xs text-ink-400">No hay listas mayoristas creadas todavía.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {listasCustom.map((l) => (
+                      <label key={l.id} className="flex items-center gap-2 cursor-pointer text-sm">
+                        <input
+                          type="checkbox"
+                          checked={!!seleccionListas[l.id]}
+                          onChange={(e) =>
+                            setSeleccionListas((s) => ({ ...s, [l.id]: e.target.checked }))
+                          }
+                          className="w-4 h-4"
+                        />
+                        <span className="text-ink-700">{l.nombre}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div>
@@ -1706,6 +1751,12 @@ function FormProducto({
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
 
+  // Listas mayoristas (membresía opcional). La pública/canal son implícitas.
+  const [listasCustom, setListasCustom] = useState<Array<{ id: string; nombre: string }>>([]);
+  const [seleccionListas, setSeleccionListas] = useState<Record<string, boolean>>({});
+  const [nuevaListaOpen, setNuevaListaOpen] = useState(false);
+  const [nuevaListaNombre, setNuevaListaNombre] = useState('');
+
   // Quick-create inline para Categoría / Sub-categoría
   const [crearCatOpen, setCrearCatOpen] = useState(false);
   const [nuevaCatNombre, setNuevaCatNombre] = useState('');
@@ -1730,9 +1781,35 @@ function FormProducto({
     } catch { /* silencioso */ }
   }
 
+  async function refreshListasCustom() {
+    try {
+      const r = await api.get<{ listas: Array<{ id: string; nombre: string }> }>('/admin/listas/custom');
+      setListasCustom(r.listas);
+    } catch {
+      /* silencioso */
+    }
+  }
+
   useEffect(() => {
     void refreshTipos();
+    void refreshListasCustom();
   }, []);
+
+  async function crearListaInline() {
+    if (!nuevaListaNombre.trim()) return;
+    try {
+      const r = await api.post<{ id: string }>('/admin/listas', {
+        nombre: nuevaListaNombre.trim(),
+        ajustePctDefault: 0,
+      });
+      await refreshListasCustom();
+      setSeleccionListas((s) => ({ ...s, [r.id]: true }));
+      setNuevaListaNombre('');
+      setNuevaListaOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo crear la lista');
+    }
+  }
 
   // Sub-categorías filtradas por la categoría elegida
   const subcatsDeCategoria = useMemo(() => {
@@ -1812,6 +1889,7 @@ function FormProducto({
         unidadPrecio,
         unidadPrecioLabel: unidadPrecioLabel.trim() || null,
         cantidadDefault: cantidadDefault.trim() || null,
+        listasCustom: Object.keys(seleccionListas).filter((id) => seleccionListas[id]),
       });
       onCreated();
     } catch (e) {
@@ -2089,6 +2167,60 @@ function FormProducto({
             Para POR_KILO suelen ser 500g. Para POR_DOCENA, 1 (1 docena).
           </p>
         </div>
+      </div>
+
+      {/* Listas mayoristas (opcional) */}
+      <div className="border-t border-cream-200 pt-3">
+        <div className="flex items-center justify-between mb-1">
+          <label className="block text-sm font-medium text-ink-700">
+            Listas mayoristas (opcional)
+          </label>
+          <button
+            type="button"
+            onClick={() => setNuevaListaOpen((v) => !v)}
+            className="text-xs text-teresita-700 hover:underline font-medium"
+          >
+            {nuevaListaOpen ? '× Cerrar' : '+ Nueva lista'}
+          </button>
+        </div>
+        <p className="text-2xs text-ink-500 mb-2">
+          El producto siempre entra en la lista pública y las de canal. Marcá listas mayoristas
+          extra si corresponde.
+        </p>
+        {nuevaListaOpen && (
+          <div className="flex gap-2 mb-2">
+            <input
+              type="text"
+              value={nuevaListaNombre}
+              onChange={(e) => setNuevaListaNombre(e.target.value)}
+              placeholder="Nombre de la nueva lista (ej. Empresa X)"
+              className="input text-sm py-1.5 flex-1"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void crearListaInline();
+              }}
+            />
+            <Button size="sm" onClick={() => void crearListaInline()} disabled={!nuevaListaNombre.trim()}>
+              Crear
+            </Button>
+          </div>
+        )}
+        {listasCustom.length === 0 ? (
+          <p className="text-xs text-ink-400">No hay listas mayoristas. Creá una con "+ Nueva lista".</p>
+        ) : (
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {listasCustom.map((l) => (
+              <label key={l.id} className="flex items-center gap-2 cursor-pointer text-sm">
+                <input
+                  type="checkbox"
+                  checked={!!seleccionListas[l.id]}
+                  onChange={(e) => setSeleccionListas((s) => ({ ...s, [l.id]: e.target.checked }))}
+                  className="w-4 h-4"
+                />
+                <span className="text-ink-700">{l.nombre}</span>
+              </label>
+            ))}
+          </div>
+        )}
       </div>
 
       {error && <p className="text-sm text-pomodoro-600">{error}</p>}

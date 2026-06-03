@@ -62,6 +62,40 @@ export default async function listasRoutes(fastify: FastifyInstance) {
     };
   });
 
+  // ── Listas CUSTOM activas (para los checkboxes del form de producto) ──
+  // Con ?productoId, marca en cuáles está ese producto.
+  fastify.get(
+    '/admin/listas/custom',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { querystring: z.object({ productoId: z.string().uuid().optional() }) },
+    },
+    async (req) => {
+      const { productoId } = req.query as { productoId?: string };
+      const listas = await prisma.listaPrecios.findMany({
+        where: { canalDefault: CanalListaPrecios.MAYORISTA, activa: true },
+        orderBy: { nombre: 'asc' },
+        select: { id: true, nombre: true, ajustePctDefault: true },
+      });
+      let enSet = new Set<string>();
+      if (productoId && listas.length > 0) {
+        const px = await prisma.precioPorLista.findMany({
+          where: { productoId, listaId: { in: listas.map((l) => l.id) } },
+          select: { listaId: true },
+        });
+        enSet = new Set(px.map((p) => p.listaId));
+      }
+      return {
+        listas: listas.map((l) => ({
+          id: l.id,
+          nombre: l.nombre,
+          ajustePctDefault: l.ajustePctDefault.toString(),
+          enLista: enSet.has(l.id),
+        })),
+      };
+    },
+  );
+
   // ── Detalle: productos agrupados por categoría ──
   fastify.get(
     '/admin/listas/:id',
