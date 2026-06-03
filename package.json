@@ -33,7 +33,8 @@
     "cloud:setup-sync": "node --env-file=.env scripts/cloud/setup-sync-and-rls.mjs",
     "cloud:seed": "node --env-file=.env scripts/cloud/seed-with-retry.mjs",
     "cloud:status": "node --env-file=.env scripts/cloud/status.mjs",
-    "cloud:create-analytics-view": "node --env-file=.env scripts/cloud/create-analytics-view.mjs"
+    "cloud:create-analytics-view": "node --env-file=.env scripts/cloud/create-analytics-view.mjs",
+    "cloud:seed-publico": "node --env-file=.env scripts/cloud/seed-venta-al-publico.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

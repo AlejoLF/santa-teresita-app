@@ -1,6 +1,7 @@
 import { prisma } from '@sta/db/client';
 import {
   CanalVenta,
+  CanalListaPrecios,
   ModalidadVenta,
   EstadoVenta,
   FormaVenta as DbFormaVenta,
@@ -29,20 +30,26 @@ export async function crearVenta(args: {
 }): Promise<Venta> {
   const { data, usuarioId } = args;
 
-  // Buscar lista de precios según canal — fallback a Local.
-  const listaPorCanal: Record<CanalVenta, string> = {
-    MOSTRADOR: 'Local',
-    TELEFONO: 'Local',
-    WHATSAPP: 'Local',
-    WEB: 'Local',
-    RAPPI: 'RAPPI',
-    PEDIDOS_YA: 'Pedidos YA',
-    MERCADO_LIBRE: 'Mercado Libre',
-    DELIVERATE: 'DELIVERATE',
+  // Resolvemos la lista de precios por CANAL (canalDefault), NO por nombre. Así
+  // el nombre de la lista se puede cambiar (ej. "Local" → "Venta al público")
+  // sin romper la venta. Las listas custom/mayoristas usan canal MAYORISTA, así
+  // que nunca colisionan con la resolución de los canales de venta.
+  const canalListaPorVenta: Record<CanalVenta, CanalListaPrecios> = {
+    MOSTRADOR: CanalListaPrecios.LOCAL_MOSTRADOR,
+    TELEFONO: CanalListaPrecios.LOCAL_MOSTRADOR,
+    WHATSAPP: CanalListaPrecios.LOCAL_MOSTRADOR,
+    WEB: CanalListaPrecios.LOCAL_MOSTRADOR,
+    RAPPI: CanalListaPrecios.RAPPI,
+    PEDIDOS_YA: CanalListaPrecios.PEDIDOS_YA,
+    MERCADO_LIBRE: CanalListaPrecios.MERCADO_LIBRE,
+    DELIVERATE: CanalListaPrecios.DELIVERATE,
   };
-  const listaNombre = listaPorCanal[data.canal as CanalVenta];
-  const lista = await prisma.listaPrecios.findUnique({ where: { nombre: listaNombre } });
-  if (!lista) throw new Error(`Lista de precios "${listaNombre}" no encontrada`);
+  const canalLista = canalListaPorVenta[data.canal as CanalVenta];
+  const lista = await prisma.listaPrecios.findFirst({
+    where: { canalDefault: canalLista, activa: true },
+    orderBy: { nombre: 'asc' },
+  });
+  if (!lista) throw new Error(`No hay lista de precios activa para el canal ${canalLista}`);
 
   const sesion = await getOrCreateSesionActual(usuarioId);
   const numeroOrden = await siguienteNumeroOrdenTurno(sesion.id);
