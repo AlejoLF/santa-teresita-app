@@ -66,6 +66,7 @@ interface Dashboard {
     facturasVencenPronto: number;
     cambiosExcelPendientes: number;
     sesionesSinAprobar: number;
+    sesionesAbiertasViejas: number;
   };
   saldosCuentas: Array<{ id: string; nombre: string; tipo: string; saldoActual: string }>;
 }
@@ -128,10 +129,46 @@ export default function AdminDashboard() {
     data.pendientes.facturasSinValidar +
     data.pendientes.cambiosExcelPendientes +
     data.pendientes.sesionesSinAprobar +
+    data.pendientes.sesionesAbiertasViejas +
     data.pendientes.facturasVencenPronto;
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
+      {/* Alerta roja prominente: caja anterior sin cerrar/aprobar */}
+      {(data.pendientes.sesionesAbiertasViejas > 0 ||
+        data.pendientes.sesionesSinAprobar > 0) && (
+        <Link
+          href="/admin/cierres"
+          className="block rounded-lg bg-pomodoro-600 hover:bg-pomodoro-700 text-white px-5 py-4 shadow-modal transition-colors"
+        >
+          <div className="flex items-start gap-3">
+            <span className="text-2xl leading-none">⚠️</span>
+            <div>
+              <div className="font-display text-md font-semibold">
+                Caja anterior sin{' '}
+                {data.pendientes.sesionesAbiertasViejas > 0 ? 'cerrar' : 'aprobar'}
+              </div>
+              <div className="text-sm text-white/90 mt-0.5">
+                {data.pendientes.sesionesAbiertasViejas > 0 && (
+                  <>
+                    Hay {data.pendientes.sesionesAbiertasViejas} caja
+                    {data.pendientes.sesionesAbiertasViejas > 1 ? 's' : ''} abierta
+                    {data.pendientes.sesionesAbiertasViejas > 1 ? 's' : ''} sin cerrar.{' '}
+                  </>
+                )}
+                {data.pendientes.sesionesSinAprobar > 0 && (
+                  <>
+                    Hay {data.pendientes.sesionesSinAprobar} cierre
+                    {data.pendientes.sesionesSinAprobar > 1 ? 's' : ''} sin aprobar.{' '}
+                  </>
+                )}
+                Cerrá y aprobá la caja anterior antes de empezar la siguiente. →
+              </div>
+            </div>
+          </div>
+        </Link>
+      )}
+
       <header className="flex items-baseline justify-between">
         <h1 className="font-display text-xl text-ink-900">Inicio</h1>
         <span className="text-sm text-ink-500">
@@ -271,6 +308,13 @@ export default function AdminDashboard() {
                 icon="🧾"
                 href="/admin/insumos"
                 accent="warning"
+              />
+              <PendienteRow
+                show={data.pendientes.sesionesAbiertasViejas > 0}
+                label={`${data.pendientes.sesionesAbiertasViejas} caja(s) abierta(s) sin cerrar`}
+                icon="🔓"
+                href="/admin/cierres"
+                accent="danger"
               />
               <PendienteRow
                 show={data.pendientes.sesionesSinAprobar > 0}

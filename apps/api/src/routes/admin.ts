@@ -6,6 +6,7 @@ import {
   EstadoLiquidacion,
   EstadoMovimiento,
   EstadoSesionCaja,
+  TipoCategoriaMovimiento,
   RolUsuario,
 } from '@sta/db';
 import { queryBool } from '@sta/shared/schemas';
@@ -392,6 +393,18 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           ? ((totalVentasHoy - totalVentasAyer) / totalVentasAyer) * 100
           : null;
 
+      // Sesiones de turnos anteriores que quedaron ABIERTAS sin cerrar (todas
+      // las ABIERTA menos la del slot vigente). Alimenta la alerta roja del
+      // dashboard: "cerrá/aprobá la caja anterior antes de empezar la siguiente".
+      const sesionesAbiertasTodas = await prisma.sesionCaja.findMany({
+        where: { estado: EstadoSesionCaja.ABIERTA },
+        select: { id: true },
+      });
+      const { sesion: sesionSlotActual } = await getSesionActualReadOnly();
+      const sesionesAbiertasViejas = sesionesAbiertasTodas.filter(
+        (s) => s.id !== sesionSlotActual?.id,
+      ).length;
+
       return {
         periodo: {
           tipo: q.periodo,
@@ -501,6 +514,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           facturasVencenPronto,
           cambiosExcelPendientes,
           sesionesSinAprobar,
+          sesionesAbiertasViejas,
         },
         saldosCuentas: saldosCuentas.map((c) => ({
           id: c.id,
@@ -1932,14 +1946,79 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: `Solo se aprueban sesiones CERRADAS` });
       }
 
-      const updated = await prisma.sesionCaja.update({
-        where: { id: sesion.id },
-        data: {
-          estado: 'APROBADA',
-          aprobadaPorAdmin: true,
-          aprobadaAdminId: req.usuario!.id,
-          fechaAprobacion: new Date(),
-        },
+      // Al aprobar, barremos la plata física del cierre (existenciaFinal) a la
+      // cuenta "Efectivo acumulado" (EFECTIVO, excluida del cierre). Como el
+      // próximo turno arranca en $0, ese efectivo acumula ahí. La cuenta destino
+      // está excluida del cierre, así que NO afecta los cierres siguientes, y
+      // como el aprobar solo corre una vez (CERRADA → APROBADA) no se duplica.
+      const efectivo = Number(sesion.existenciaFinal ?? 0);
+      let cuentaDestino: { id: string; nombre: string } | null = null;
+      if (efectivo > 0) {
+        cuentaDestino =
+          (await prisma.cuenta.findFirst({
+            where: {
+              tipo: 'EFECTIVO',
+              excluidaDeCierreCaja: true,
+              activa: true,
+              nombre: { contains: 'acumulado', mode: 'insensitive' },
+            },
+            select: { id: true, nombre: true },
+          })) ??
+          (await prisma.cuenta.findFirst({
+            where: { tipo: 'EFECTIVO', excluidaDeCierreCaja: true, activa: true },
+            orderBy: { nombre: 'asc' },
+            select: { id: true, nombre: true },
+          }));
+      }
+
+      const result = await prisma.$transaction(async (tx) => {
+        const s = await tx.sesionCaja.update({
+          where: { id: sesion.id },
+          data: {
+            estado: 'APROBADA',
+            aprobadaPorAdmin: true,
+            aprobadaAdminId: req.usuario!.id,
+            fechaAprobacion: new Date(),
+          },
+        });
+
+        let barridoId: string | null = null;
+        if (efectivo > 0 && cuentaDestino) {
+          // Categoría dedicada (idempotente). esOperativa=false: es un
+          // movimiento de tesorería, no un ingreso operativo nuevo (las ventas
+          // ya se cuentan aparte), así no infla los reportes de ingresos.
+          const categoria = await tx.categoriaMovimiento.upsert({
+            where: { nombre: 'Recaudación de caja' },
+            create: {
+              nombre: 'Recaudación de caja',
+              tipo: TipoCategoriaMovimiento.INGRESO,
+              esSistema: true,
+              esOperativa: false,
+            },
+            update: {},
+          });
+          const mov = await tx.movimiento.create({
+            data: {
+              tipo: 'INGRESO',
+              monto: sesion.existenciaFinal!,
+              categoriaId: categoria.id,
+              cuentaDestinoId: cuentaDestino.id,
+              sesionCajaId: sesion.id,
+              fechaComputo: new Date(),
+              observacion: `Barrido de efectivo al aprobar cierre ${new Date(
+                sesion.fecha,
+              ).toLocaleDateString('es-AR')} ${sesion.turno}`,
+              estado: EstadoMovimiento.CONFIRMADO,
+              usuarioId: req.usuario!.id,
+            },
+          });
+          await tx.cuenta.update({
+            where: { id: cuentaDestino.id },
+            data: { saldoActual: { increment: efectivo } },
+          });
+          barridoId = mov.id;
+        }
+        return { s, barridoId };
       });
 
       await recordAudit({
@@ -1948,10 +2027,35 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         accion: 'TRANSITION',
         usuarioId: req.usuario!.id,
         valorAnterior: { estado: 'CERRADA' },
-        valorNuevo: { estado: 'APROBADA' },
+        valorNuevo: {
+          estado: 'APROBADA',
+          barridoEfectivo: result.barridoId ? efectivo.toFixed(2) : null,
+          cuentaAcumulada: result.barridoId ? cuentaDestino?.nombre : null,
+        },
       });
 
-      return updated;
+      if (result.barridoId) {
+        await recordAudit({
+          tabla: 'movimientos',
+          registroId: result.barridoId,
+          accion: 'INSERT',
+          usuarioId: req.usuario!.id,
+          valorNuevo: {
+            tipo: 'INGRESO',
+            monto: efectivo.toFixed(2),
+            categoria: 'Recaudación de caja',
+            cuentaDestino: cuentaDestino?.nombre,
+            origen: `Barrido de efectivo al aprobar cierre (sesión ${sesion.id})`,
+          },
+        });
+      }
+
+      return {
+        ...result.s,
+        barrido: result.barridoId
+          ? { monto: efectivo.toFixed(2), cuenta: cuentaDestino!.nombre }
+          : null,
+      };
     },
   );
 
