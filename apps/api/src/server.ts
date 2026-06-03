@@ -30,6 +30,7 @@ import proveedoresRoutes from './routes/proveedores.js';
 import empleadosRoutes from './routes/empleados.js';
 import configuracionRoutes from './routes/configuracion.js';
 import clientesRoutes from './routes/clientes.js';
+import mayoristasRoutes from './routes/mayoristas.js';
 import impresionRoutes from './routes/impresion.js';
 import { invalidate as cacheInvalidate } from './lib/cache.js';
 
@@ -206,6 +207,7 @@ export async function buildServer() {
       await api.register(empleadosRoutes);
       await api.register(configuracionRoutes);
       await api.register(clientesRoutes);
+      await api.register(mayoristasRoutes);
       await api.register(impresionRoutes);
     },
     { prefix: '/api/v1' },

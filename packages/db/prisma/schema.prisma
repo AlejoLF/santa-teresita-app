@@ -532,6 +532,7 @@ model ListaPrecios {
   precios   PrecioPorLista[]
   ventas    Venta[]
   historial HistorialPrecio[]
+  clientesMayoristas ClienteMayorista[]
 
   @@map("listas_precios")
 }
@@ -550,6 +551,77 @@ model PrecioPorLista {
 
   @@index([productoId, listaId, vigenciaDesde])
   @@map("precios_por_lista")
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//   MAYORISTAS — Clientes / Cuenta corriente (ventas a empresas con remitos)
+// ════════════════════════════════════════════════════════════════════════
+
+enum EstadoRemito {
+  PENDIENTE
+  ANULADO
+}
+
+/// Cliente mayorista (empresa que compra a precio especial vía una lista de
+/// precios dedicada y paga por cuenta corriente — se le entrega con remitos y
+/// se factura/cobra a fin de mes).
+model ClienteMayorista {
+  id             String   @id @default(uuid()) @db.Uuid
+  nombre         String   @db.VarChar(160) // razón social / empresa
+  cuit           String?  @db.VarChar(20)
+  contacto       String?  @db.VarChar(120) // persona de contacto
+  telefono       String?  @db.VarChar(40)
+  email          String?  @db.VarChar(120)
+  direccion      String?
+  listaPreciosId String   @map("lista_precios_id") @db.Uuid
+  activo         Boolean  @default(true)
+  observaciones  String?
+  creadoAt       DateTime @default(now()) @map("creado_at")
+
+  listaPrecios ListaPrecios @relation(fields: [listaPreciosId], references: [id])
+  remitos      Remito[]
+
+  @@index([activo])
+  @@map("clientes_mayoristas")
+}
+
+/// Remito = comprobante de cada entrega de mercadería al cliente mayorista.
+/// Suma a la cuenta corriente. A fin de mes se agrupan para facturar/cobrar.
+model Remito {
+  id                 String       @id @default(uuid()) @db.Uuid
+  numero             Int          @unique @default(autoincrement())
+  clienteMayoristaId String       @map("cliente_mayorista_id") @db.Uuid
+  fecha              DateTime     @default(now())
+  total              Decimal      @db.Decimal(18, 2)
+  estado             EstadoRemito @default(PENDIENTE)
+  observaciones      String?
+  usuarioId          String?      @map("usuario_id") @db.Uuid
+  motivoAnulacion    String?      @map("motivo_anulacion")
+  anuladoAt          DateTime?    @map("anulado_at")
+  creadoAt           DateTime     @default(now()) @map("creado_at")
+
+  clienteMayorista ClienteMayorista @relation(fields: [clienteMayoristaId], references: [id])
+  items            RemitoItem[]
+
+  @@index([clienteMayoristaId, estado])
+  @@index([fecha])
+  @@map("remitos")
+}
+
+model RemitoItem {
+  id             String  @id @default(uuid()) @db.Uuid
+  remitoId       String  @map("remito_id") @db.Uuid
+  productoId     String? @map("producto_id") @db.Uuid
+  nombreSnapshot String  @map("nombre_snapshot") @db.VarChar(200)
+  cantidad       Decimal @db.Decimal(12, 3)
+  precioUnitario Decimal @map("precio_unitario") @db.Decimal(18, 2)
+  subtotal       Decimal @db.Decimal(18, 2)
+  orden          Int     @default(0)
+
+  remito Remito @relation(fields: [remitoId], references: [id], onDelete: Cascade)
+
+  @@index([remitoId])
+  @@map("remito_items")
 }
 
 model HistorialPrecio {
