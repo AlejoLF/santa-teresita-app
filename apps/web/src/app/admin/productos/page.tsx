@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
+import { ListasPreciosManager } from '@/components/admin/ListasPreciosManager';
 import { cn } from '@/lib/cn';
 
 interface Categoria {
@@ -66,10 +68,14 @@ function unidadShort(formaVenta: string, unidadPrecio: string): string {
   }
 }
 
-type TabPrincipal = 'productos' | 'combos';
+type TabPrincipal = 'productos' | 'combos' | 'precios';
 
 export default function AdminProductosPage() {
-  const [tab, setTab] = useState<TabPrincipal>('productos');
+  const searchParams = useSearchParams();
+  const tabInicial = searchParams.get('tab');
+  const [tab, setTab] = useState<TabPrincipal>(
+    tabInicial === 'combos' || tabInicial === 'precios' ? tabInicial : 'productos',
+  );
 
   return (
     <div className="max-w-6xl mx-auto space-y-4">
@@ -85,6 +91,7 @@ export default function AdminProductosPage() {
           [
             { v: 'productos', label: 'Productos' },
             { v: 'combos', label: 'Combos / Promos' },
+            { v: 'precios', label: 'Lista de precios' },
           ] as const
         ).map((t) => (
           <button
@@ -102,7 +109,13 @@ export default function AdminProductosPage() {
         ))}
       </nav>
 
-      {tab === 'productos' ? <ProductosTab /> : <CombosTab />}
+      {tab === 'productos' ? (
+        <ProductosTab />
+      ) : tab === 'combos' ? (
+        <CombosTab />
+      ) : (
+        <ListasPreciosManager />
+      )}
     </div>
   );
 }

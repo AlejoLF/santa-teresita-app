@@ -28,7 +28,6 @@ const NAV: NavItem[] = [
   { group: 'Movimientos', label: 'Aportes y egresos', href: '/admin/movimientos', icon: '💸' },
   { group: 'Movimientos', label: 'Cuentas y saldos', href: '/admin/cuentas', icon: '💰' },
   { group: 'Productos', label: 'Catálogo', href: '/admin/productos', icon: '📋' },
-  { group: 'Productos', label: 'Lista de precios', href: '/admin/precios', icon: '🏷️' },
   { group: 'Administración', label: 'Empleados', href: '/admin/empleados', icon: '👥' },
   { group: 'Administración', label: 'Clientes', href: '/admin/clientes', icon: '🤝' },
   { group: 'Administración', label: 'Mayoristas / Cta. Cte.', href: '/admin/mayoristas', icon: '🏢' },
