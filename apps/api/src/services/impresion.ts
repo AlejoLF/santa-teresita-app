@@ -1,6 +1,6 @@
 import { prisma } from '@sta/db/client';
 import type { Prisma } from '@sta/db';
-import { TipoTrabajoImpresion } from '@sta/db';
+import { TipoTrabajoImpresion, EstadoTrabajoImpresion } from '@sta/db';
 
 /**
  * Servicio de la cola de impresión.
@@ -244,7 +244,13 @@ export async function buildComandaPayload(
  * DEBITO). El TICKET_DELIVERY se encola al finalizar la venta en
  * `encolarTicketDeliveryParaVenta`, con el pago real ya registrado.
  *
- * Idempotente para retries: cada llamada genera trabajos nuevos.
+ * DEDUP: si ya hay una comanda de cocina PENDIENTE (todavía no impresa) para
+ * esta venta, en vez de encolar otra ACTUALIZAMOS su payload. Así cualquier
+ * doble-disparo del ciclo de vida de la venta (crear + agregar items en
+ * ráfaga, reintento del frontend) colapsa a UNA sola comanda. Si la comanda
+ * anterior ya se imprimió (EN_PROCESO/IMPRESO), encolamos una nueva con la
+ * versión actualizada — la cocina ya arrancó la tanda anterior y necesita ver
+ * los cambios. Esto arregla el bug de comandas de cocina duplicadas/triplicadas.
  */
 export async function encolarComandasParaVenta(
   ventaId: string,
@@ -264,13 +270,31 @@ export async function encolarComandasParaVenta(
 
   const comandaPayload = await buildComandaPayload(ventaId, tx);
   for (const destino of destinos) {
-    await encolarTrabajo({
-      tipo: TipoTrabajoImpresion.COMANDA_COCINA,
-      destino,
-      payload: comandaPayload,
-      ventaId,
-      tx,
+    // ¿Ya hay una comanda de cocina sin imprimir para esta venta? La reusamos.
+    const pendiente = await tx.trabajoImpresion.findFirst({
+      where: {
+        ventaId,
+        destino,
+        tipo: TipoTrabajoImpresion.COMANDA_COCINA,
+        estado: EstadoTrabajoImpresion.PENDIENTE,
+      },
+      orderBy: { encoladoAt: 'desc' },
+      select: { id: true },
     });
+    if (pendiente) {
+      await tx.trabajoImpresion.update({
+        where: { id: pendiente.id },
+        data: { payload: comandaPayload as Prisma.InputJsonValue },
+      });
+    } else {
+      await encolarTrabajo({
+        tipo: TipoTrabajoImpresion.COMANDA_COCINA,
+        destino,
+        payload: comandaPayload,
+        ventaId,
+        tx,
+      });
+    }
   }
   return destinos;
 }

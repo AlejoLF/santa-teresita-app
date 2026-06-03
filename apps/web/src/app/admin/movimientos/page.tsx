@@ -47,6 +47,47 @@ interface Listado {
 
 const PAGE_SIZE = 50;
 
+type Periodo = 'sesion' | 'hoy' | 'semana' | 'mes' | 'custom';
+
+const PERIODOS: Array<{ value: Periodo; label: string }> = [
+  { value: 'sesion', label: 'Sesión actual' },
+  { value: 'hoy', label: 'Hoy' },
+  { value: 'semana', label: 'Semana' },
+  { value: 'mes', label: 'Mes' },
+  { value: 'custom', label: 'Personalizado' },
+];
+
+/**
+ * Rango ISO (desde/hasta) para los períodos de fecha. `sesion` y `custom` se
+ * manejan aparte. Calcula con fecha LOCAL (las cajas corren en TZ AR), así
+ * "Hoy" arranca a las 00:00 de Argentina.
+ */
+function rangoDeFecha(p: Periodo): { desde?: string; hasta?: string } {
+  const now = new Date();
+  const y = now.getFullYear();
+  const mo = now.getMonth();
+  const d = now.getDate();
+  const finHoy = new Date(y, mo, d, 23, 59, 59, 999).toISOString();
+  if (p === 'hoy') return { desde: new Date(y, mo, d, 0, 0, 0, 0).toISOString(), hasta: finHoy };
+  if (p === 'semana') {
+    const dow = (now.getDay() + 6) % 7; // 0 = lunes
+    return { desde: new Date(y, mo, d - dow, 0, 0, 0, 0).toISOString(), hasta: finHoy };
+  }
+  if (p === 'mes') return { desde: new Date(y, mo, 1, 0, 0, 0, 0).toISOString(), hasta: finHoy };
+  return {};
+}
+
+/** Convierte un value de <input type="date"> (yyyy-mm-dd) a ISO local. */
+function fechaInputAIso(value: string, finDelDia: boolean): string | undefined {
+  if (!value) return undefined;
+  const [yy, mm, dd] = value.split('-').map(Number);
+  if (!yy || !mm || !dd) return undefined;
+  const date = finDelDia
+    ? new Date(yy, mm - 1, dd, 23, 59, 59, 999)
+    : new Date(yy, mm - 1, dd, 0, 0, 0, 0);
+  return date.toISOString();
+}
+
 export default function AdminMovimientosPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -57,6 +98,9 @@ export default function AdminMovimientosPage() {
   const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [tipoFiltro, setTipoFiltro] = useState<string>('');
   const [cuentaFiltro, setCuentaFiltro] = useState<string>(cuentaIdParam);
+  const [periodo, setPeriodo] = useState<Periodo>('sesion');
+  const [customDesde, setCustomDesde] = useState('');
+  const [customHasta, setCustomHasta] = useState('');
   const [page, setPage] = useState(1);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +120,18 @@ export default function AdminMovimientosPage() {
       const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
       if (tipoFiltro) params.set('tipo', tipoFiltro);
       if (cuentaFiltro) params.set('cuentaId', cuentaFiltro);
+      if (periodo === 'sesion') {
+        params.set('sesion', 'actual');
+      } else if (periodo === 'custom') {
+        const desde = fechaInputAIso(customDesde, false);
+        const hasta = fechaInputAIso(customHasta, true);
+        if (desde) params.set('desde', desde);
+        if (hasta) params.set('hasta', hasta);
+      } else {
+        const { desde, hasta } = rangoDeFecha(periodo);
+        if (desde) params.set('desde', desde);
+        if (hasta) params.set('hasta', hasta);
+      }
       const res = await api.get<Listado>(`/admin/movimientos?${params.toString()}`);
       setData(res);
       setError(null);
@@ -86,7 +142,7 @@ export default function AdminMovimientosPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, tipoFiltro, cuentaFiltro]);
+  }, [page, tipoFiltro, cuentaFiltro, periodo, customDesde, customHasta]);
 
   // Mantener URL en sync con el filtro (para que se pueda compartir el link)
   function setCuentaFiltroSync(id: string) {
@@ -163,41 +219,90 @@ export default function AdminMovimientosPage() {
       )}
 
       {/* Filtros */}
-      <section className="card p-3 flex flex-wrap gap-3 items-center">
-        <select
-          value={tipoFiltro}
-          onChange={(e) => {
-            setTipoFiltro(e.target.value);
-            setPage(1);
-          }}
-          className="input w-auto"
-        >
-          <option value="">Todos los tipos</option>
-          <option value="INGRESO">Ingresos</option>
-          <option value="EGRESO">Egresos</option>
-          <option value="TRANSFERENCIA_INTERNA">Transferencias</option>
-          <option value="AJUSTE">Ajustes</option>
-        </select>
-        <select
-          value={cuentaFiltro}
-          onChange={(e) => setCuentaFiltroSync(e.target.value)}
-          className="input w-auto"
-        >
-          <option value="">Todas las cuentas</option>
-          {cuentas.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.nombre}
-            </option>
+      <section className="card p-3 space-y-3">
+        {/* Período */}
+        <div className="flex flex-wrap gap-2 items-center">
+          {PERIODOS.map((p) => (
+            <button
+              key={p.value}
+              onClick={() => {
+                setPeriodo(p.value);
+                setPage(1);
+              }}
+              className={cn(
+                'px-3 py-1.5 rounded-md text-sm font-medium border transition-colors',
+                periodo === p.value
+                  ? 'bg-teresita-700 text-white border-teresita-700'
+                  : 'bg-white border-cream-300 text-ink-700 hover:bg-cream-50',
+              )}
+            >
+              {p.label}
+            </button>
           ))}
-        </select>
-        {cuentaFiltro && (
-          <button
-            onClick={() => setCuentaFiltroSync('')}
-            className="text-xs text-teresita-700 hover:underline"
+          {periodo === 'custom' && (
+            <div className="flex items-center gap-2 ml-1">
+              <input
+                type="date"
+                value={customDesde}
+                onChange={(e) => {
+                  setCustomDesde(e.target.value);
+                  setPage(1);
+                }}
+                className="input w-auto text-sm"
+                title="Desde"
+              />
+              <span className="text-ink-500 text-sm">→</span>
+              <input
+                type="date"
+                value={customHasta}
+                onChange={(e) => {
+                  setCustomHasta(e.target.value);
+                  setPage(1);
+                }}
+                className="input w-auto text-sm"
+                title="Hasta"
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Tipo + cuenta */}
+        <div className="flex flex-wrap gap-3 items-center border-t border-cream-200 pt-3">
+          <select
+            value={tipoFiltro}
+            onChange={(e) => {
+              setTipoFiltro(e.target.value);
+              setPage(1);
+            }}
+            className="input w-auto"
           >
-            ✕ quitar filtro de cuenta
-          </button>
-        )}
+            <option value="">Todos los tipos</option>
+            <option value="INGRESO">Ingresos</option>
+            <option value="EGRESO">Egresos</option>
+            <option value="TRANSFERENCIA_INTERNA">Transferencias</option>
+            <option value="AJUSTE">Ajustes</option>
+          </select>
+          <select
+            value={cuentaFiltro}
+            onChange={(e) => setCuentaFiltroSync(e.target.value)}
+            className="input w-auto"
+          >
+            <option value="">Todas las cuentas</option>
+            {cuentas.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.nombre}
+              </option>
+            ))}
+          </select>
+          {cuentaFiltro && (
+            <button
+              onClick={() => setCuentaFiltroSync('')}
+              className="text-xs text-teresita-700 hover:underline"
+            >
+              ✕ quitar filtro de cuenta
+            </button>
+          )}
+        </div>
       </section>
 
       {error && (

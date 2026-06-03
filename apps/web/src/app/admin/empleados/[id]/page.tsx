@@ -302,6 +302,24 @@ export default function EmpleadoDetallePage({
 //   Modal cargar pago a empleado
 // ────────────────────────────────────────────────────────────────────────
 
+type MetodoEmp = 'EFECTIVO' | 'TRANSFERENCIA' | 'DEPOSITO' | 'CHEQUE' | 'MERCADOPAGO_QR' | 'OTRO';
+
+const METODOS_EMP: Array<{ value: MetodoEmp; label: string }> = [
+  { value: 'EFECTIVO', label: 'Efectivo' },
+  { value: 'TRANSFERENCIA', label: 'Transferencia' },
+  { value: 'DEPOSITO', label: 'Depósito' },
+  { value: 'MERCADOPAGO_QR', label: 'MercadoPago' },
+  { value: 'CHEQUE', label: 'Cheque' },
+  { value: 'OTRO', label: 'Otro' },
+];
+
+interface PagoLinea {
+  cuentaId: string;
+  monto: string;
+  metodo: MetodoEmp;
+  numeroReferencia: string;
+}
+
 function ModalCargarPago({
   empleadoId,
   tipoInicial,
@@ -317,11 +335,11 @@ function ModalCargarPago({
   const [concepto, setConcepto] = useState<string>(tipoInicial);
   const [conceptos, setConceptos] = useState<string[]>(EMP_CONCEPTOS.map((c) => c.label));
   const [monto, setMonto] = useState('');
-  const [cuentaId, setCuentaId] = useState('');
-  const [metodo, setMetodo] = useState<
-    'EFECTIVO' | 'TRANSFERENCIA' | 'DEPOSITO' | 'CHEQUE' | 'MERCADOPAGO_QR' | 'OTRO'
-  >('EFECTIVO');
-  const [numeroReferencia, setNumeroReferencia] = useState('');
+  // Multicuenta: el pago se puede repartir en varias cuentas (cada una con su
+  // monto y método). Con una sola línea funciona igual que antes.
+  const [pagos, setPagos] = useState<PagoLinea[]>([
+    { cuentaId: '', monto: '', metodo: 'EFECTIVO', numeroReferencia: '' },
+  ]);
   const [observacion, setObservacion] = useState('');
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
   const [guardando, setGuardando] = useState(false);
@@ -346,19 +364,77 @@ function ModalCargarPago({
     })();
   }, []);
 
+  // ── Multicuenta: cálculo de reparto ──
+  const montoNum = Number(monto || 0);
+  const totalAsignado = pagos.reduce((acc, p) => acc + Number(p.monto || 0), 0);
+  const faltante = montoNum - totalAsignado;
+  const cuadra = Math.abs(faltante) < 0.5;
+
+  // Auto-fill: con UNA sola cuenta, su monto = total del pago. Solo se reparte
+  // a mano cuando hay 2+ cuentas.
+  useEffect(() => {
+    if (pagos.length === 1 && montoNum > 0) {
+      const totalStr = montoNum.toFixed(2);
+      if (pagos[0]!.monto !== totalStr) {
+        setPagos((arr) => arr.map((p, i) => (i === 0 ? { ...p, monto: totalStr } : p)));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [montoNum, pagos.length]);
+
+  function setPago(idx: number, patch: Partial<PagoLinea>) {
+    setPagos((arr) => arr.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
+  }
+  function addPago() {
+    const restoSugerido = Math.max(0, faltante);
+    setPagos((arr) => [
+      ...arr,
+      {
+        cuentaId: '',
+        monto: restoSugerido > 0 ? restoSugerido.toFixed(2) : '',
+        metodo: 'EFECTIVO',
+        numeroReferencia: '',
+      },
+    ]);
+  }
+  function removePago(idx: number) {
+    setPagos((arr) => (arr.length > 1 ? arr.filter((_, i) => i !== idx) : arr));
+  }
+  function autocompletarResto(idx: number) {
+    const otras = pagos.reduce((acc, p, i) => (i === idx ? acc : acc + Number(p.monto || 0)), 0);
+    const resto = Math.max(0, montoNum - otras);
+    setPago(idx, { monto: resto.toFixed(2) });
+  }
+
   async function submit() {
     setError(null);
-    if (!monto || Number(monto) <= 0) return setError('Falta el monto');
-    if (!cuentaId) return setError('Elegí la cuenta de origen');
+    if (!monto || montoNum <= 0) return setError('Falta el monto');
+    if (pagos.some((p) => !p.cuentaId)) return setError('Hay una línea de cuenta sin elegir');
+    if (pagos.some((p) => Number(p.monto || 0) <= 0)) {
+      return setError('Cada cuenta tiene que tener un monto > 0');
+    }
+    if (!cuadra) {
+      return setError(
+        faltante > 0
+          ? `Falta asignar $${faltante.toFixed(2)} entre cuentas`
+          : `Asignaste $${(-faltante).toFixed(2)} de más`,
+      );
+    }
+    const ids = pagos.map((p) => p.cuentaId);
+    if (new Set(ids).size !== ids.length) {
+      return setError('No podés repetir la misma cuenta dos veces');
+    }
     setGuardando(true);
     try {
       await api.post(`/admin/empleados/${empleadoId}/movimientos`, {
         conceptoEtiqueta: concepto,
-        monto,
-        cuentaOrigenId: cuentaId,
-        metodo,
         observacion: observacion || undefined,
-        numeroReferencia: numeroReferencia || undefined,
+        pagos: pagos.map((p) => ({
+          cuentaId: p.cuentaId,
+          monto: p.monto,
+          metodo: p.metodo,
+          numeroReferencia: p.numeroReferencia || undefined,
+        })),
       });
       onCreated();
     } catch (e) {
@@ -368,11 +444,9 @@ function ModalCargarPago({
     }
   }
 
-  const necesitaRef = ['TRANSFERENCIA', 'CHEQUE', 'DEPOSITO'].includes(metodo);
-
   return (
     <div className="fixed inset-0 bg-ink-900/50 flex items-center justify-center z-40 p-4">
-      <div className="card w-full max-w-md p-5 shadow-modal">
+      <div className="card w-full max-w-lg p-5 shadow-modal max-h-[90vh] overflow-y-auto">
         <h2 className="font-display text-lg text-teresita-700 mb-3">Cargar pago a empleado</h2>
 
         <div className="space-y-3">
@@ -413,55 +487,138 @@ function ModalCargarPago({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-ink-700 mb-1">
-                Cuenta de origen
-              </label>
-              <select
-                value={cuentaId}
-                onChange={(e) => setCuentaId(e.target.value)}
-                className="input"
-              >
-                <option value="">Elegí cuenta...</option>
-                {cuentas.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.nombre}
-                  </option>
-                ))}
-              </select>
+          {/* Cuentas (multicuenta): repartir el pago en una o varias cuentas */}
+          <div>
+            <label className="block text-xs font-medium text-ink-700 mb-1">
+              Sale de
+              <span className="text-2xs text-ink-500 font-normal ml-1">
+                (podés repartir en varias cuentas)
+              </span>
+            </label>
+            <div className="space-y-2">
+              {pagos.map((linea, idx) => {
+                const necesitaRef = ['TRANSFERENCIA', 'CHEQUE', 'DEPOSITO'].includes(linea.metodo);
+                return (
+                  <div
+                    key={idx}
+                    className="rounded-md border border-cream-300 p-2 space-y-2 bg-cream-50/40"
+                  >
+                    <div className="flex gap-2 items-start">
+                      <select
+                        value={linea.cuentaId}
+                        onChange={(e) => setPago(idx, { cuentaId: e.target.value })}
+                        className="input text-sm flex-1"
+                      >
+                        <option value="">Elegí cuenta...</option>
+                        {cuentas.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.nombre}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={linea.monto}
+                        onChange={(e) => setPago(idx, { monto: e.target.value })}
+                        placeholder="0.00"
+                        className="input text-sm font-mono w-28 text-right"
+                      />
+                      {pagos.length > 1 && Math.abs(faltante) > 0.5 && (
+                        <button
+                          type="button"
+                          onClick={() => autocompletarResto(idx)}
+                          className="px-2 py-1.5 text-2xs bg-saffron-100 text-saffron-600 rounded border border-saffron-600/40 hover:bg-saffron-600 hover:text-white whitespace-nowrap"
+                          title="Autocompletar con el resto que falta"
+                        >
+                          Resto
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removePago(idx)}
+                        disabled={pagos.length === 1}
+                        className="text-pomodoro-600 hover:bg-pomodoro-100 px-2 py-1 rounded disabled:opacity-30"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div className="flex gap-2 items-center">
+                      <select
+                        value={linea.metodo}
+                        onChange={(e) => setPago(idx, { metodo: e.target.value as MetodoEmp })}
+                        className="input text-xs py-1.5 w-40"
+                      >
+                        {METODOS_EMP.map((m) => (
+                          <option key={m.value} value={m.value}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </select>
+                      {necesitaRef && (
+                        <input
+                          type="text"
+                          value={linea.numeroReferencia}
+                          onChange={(e) => setPago(idx, { numeroReferencia: e.target.value })}
+                          className="input text-xs py-1.5 font-mono flex-1"
+                          placeholder="Nº operación / referencia"
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            <div>
-              <label className="block text-xs font-medium text-ink-700 mb-1">Método</label>
-              <select
-                value={metodo}
-                onChange={(e) => setMetodo(e.target.value as typeof metodo)}
-                className="input"
-              >
-                <option value="EFECTIVO">Efectivo</option>
-                <option value="TRANSFERENCIA">Transferencia</option>
-                <option value="DEPOSITO">Depósito</option>
-                <option value="MERCADOPAGO_QR">MercadoPago</option>
-                <option value="CHEQUE">Cheque</option>
-                <option value="OTRO">Otro</option>
-              </select>
-            </div>
-          </div>
+            <button
+              type="button"
+              onClick={addPago}
+              className="mt-2 text-xs text-teresita-700 hover:underline"
+            >
+              + Agregar otra cuenta
+            </button>
 
-          {necesitaRef && (
-            <div>
-              <label className="block text-xs font-medium text-ink-700 mb-1">
-                Nº de operación / referencia
-              </label>
-              <input
-                type="text"
-                value={numeroReferencia}
-                onChange={(e) => setNumeroReferencia(e.target.value)}
-                className="input font-mono"
-                placeholder="ej. OP-12345"
-              />
-            </div>
-          )}
+            {/* Resumen Asignado / Falta / Sobra (solo cuando hay reparto) */}
+            {montoNum > 0 && pagos.length > 1 && (
+              <div className="mt-2 bg-surface-sunken rounded-md px-3 py-2 grid grid-cols-2 gap-y-1 text-sm font-mono">
+                <span className="text-ink-700">Asignado:</span>
+                <span
+                  className={cn(
+                    'text-right',
+                    cuadra && totalAsignado > 0 && 'text-basil-600 font-semibold',
+                  )}
+                >
+                  $ {totalAsignado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                </span>
+                {Math.abs(faltante) > 0.5 ? (
+                  <>
+                    <span
+                      className={cn(
+                        'font-semibold',
+                        faltante > 0 ? 'text-pomodoro-600' : 'text-saffron-600',
+                      )}
+                    >
+                      {faltante > 0 ? 'Falta:' : 'Sobra:'}
+                    </span>
+                    <span
+                      className={cn(
+                        'text-right font-semibold',
+                        faltante > 0 ? 'text-pomodoro-600' : 'text-saffron-600',
+                      )}
+                    >
+                      $ {Math.abs(faltante).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </>
+                ) : (
+                  totalAsignado > 0 && (
+                    <>
+                      <span className="text-basil-600">✓ Cuadra</span>
+                      <span></span>
+                    </>
+                  )
+                )}
+              </div>
+            )}
+          </div>
 
           <div>
             <label className="block text-xs font-medium text-ink-700 mb-1">

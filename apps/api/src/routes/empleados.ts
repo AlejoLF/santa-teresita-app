@@ -339,8 +339,9 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
           // mantiene opcional por compatibilidad.
           conceptoEtiqueta: z.string().min(1).max(120).optional(),
           tipoConcepto: z.string().max(40).optional(),
-          monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
-          cuentaOrigenId: z.string().uuid(),
+          // Modo simple (1 cuenta) — compat con clientes existentes.
+          monto: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+          cuentaOrigenId: z.string().uuid().optional(),
           metodo: z
             .enum([
               'EFECTIVO',
@@ -351,6 +352,28 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
               'OTRO',
             ])
             .default('EFECTIVO'),
+          // Modo multicuenta: reparte el pago en varias cuentas (cada una con su
+          // monto y método). Si viene, tiene prioridad sobre el modo simple.
+          pagos: z
+            .array(
+              z.object({
+                cuentaId: z.string().uuid(),
+                monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
+                metodo: z
+                  .enum([
+                    'EFECTIVO',
+                    'TRANSFERENCIA',
+                    'DEPOSITO',
+                    'CHEQUE',
+                    'MERCADOPAGO_QR',
+                    'OTRO',
+                  ])
+                  .default('EFECTIVO'),
+                numeroReferencia: z.string().max(80).optional(),
+              }),
+            )
+            .min(1)
+            .optional(),
           fechaComputo: z.string().datetime().optional(),
           observacion: z.string().max(500).optional(),
           numeroReferencia: z.string().max(80).optional(),
@@ -359,12 +382,25 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
     },
     async (req, reply) => {
       const params = req.params as { id: string };
+      type MetodoPago =
+        | 'EFECTIVO'
+        | 'TRANSFERENCIA'
+        | 'DEPOSITO'
+        | 'CHEQUE'
+        | 'MERCADOPAGO_QR'
+        | 'OTRO';
       const body = req.body as {
         conceptoEtiqueta?: string;
         tipoConcepto?: string;
-        monto: string;
-        cuentaOrigenId: string;
-        metodo: 'EFECTIVO' | 'TRANSFERENCIA' | 'DEPOSITO' | 'CHEQUE' | 'MERCADOPAGO_QR' | 'OTRO';
+        monto?: string;
+        cuentaOrigenId?: string;
+        metodo: MetodoPago;
+        pagos?: Array<{
+          cuentaId: string;
+          monto: string;
+          metodo: MetodoPago;
+          numeroReferencia?: string;
+        }>;
         fechaComputo?: string;
         observacion?: string;
         numeroReferencia?: string;
@@ -416,7 +452,35 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
       }
 
       const fecha = body.fechaComputo ? new Date(body.fechaComputo) : new Date();
-      const monto = Number(body.monto);
+
+      // Normalizamos a una lista de líneas (1 o más cuentas). El modo `pagos`
+      // (multicuenta) tiene prioridad; sino caemos al modo simple de 1 cuenta.
+      const lineas: Array<{
+        cuentaId: string;
+        monto: string;
+        metodo: MetodoPago;
+        numeroReferencia?: string;
+      }> =
+        body.pagos && body.pagos.length > 0
+          ? body.pagos
+          : body.cuentaOrigenId && body.monto
+            ? [
+                {
+                  cuentaId: body.cuentaOrigenId,
+                  monto: body.monto,
+                  metodo: body.metodo,
+                  numeroReferencia: body.numeroReferencia,
+                },
+              ]
+            : [];
+      if (lineas.length === 0) {
+        return reply.code(400).send({ error: 'Falta la cuenta de origen y el monto' });
+      }
+      const cuentaIds = lineas.map((l) => l.cuentaId);
+      if (new Set(cuentaIds).size !== cuentaIds.length) {
+        return reply.code(400).send({ error: 'No repitas la misma cuenta en el reparto' });
+      }
+
       // Anteponer la etiqueta del concepto a la observación cuando aporta info
       // (los conceptos que comparten la categoría "Sueldos", o cualquiera que
       // no sea el plano "Sueldo"). Así queda trazable qué tipo de pago fue.
@@ -425,53 +489,69 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
           ? `${etiqueta}${body.observacion ? ' · ' + body.observacion : ''}`
           : body.observacion;
 
+      // Multicuenta: creamos N movimientos enlazados (un EGRESO por cuenta),
+      // cada uno con su pago y su decremento de saldo. Mismo patrón que el form
+      // de Aportes/Egresos. Con 1 sola cuenta es 1 movimiento, como antes.
+      const total = lineas.length;
       const created = await prisma.$transaction(async (tx) => {
-        const mov = await tx.movimiento.create({
-          data: {
+        const movs = [];
+        for (let i = 0; i < lineas.length; i++) {
+          const linea = lineas[i]!;
+          const montoLinea = Number(linea.monto);
+          const observacion =
+            total > 1
+              ? `${obsConConcepto ? obsConConcepto + ' ' : ''}(parte ${i + 1}/${total})`
+              : obsConConcepto ?? null;
+          const mov = await tx.movimiento.create({
+            data: {
+              tipo: 'EGRESO',
+              monto: linea.monto,
+              categoriaId: categoria.id,
+              cuentaOrigenId: linea.cuentaId,
+              entidadId: empleado.id,
+              fechaComputo: fecha,
+              observacion,
+              estado: EstadoMovimiento.CONFIRMADO,
+              usuarioId: req.usuario!.id,
+            },
+          });
+          await tx.pago.create({
+            data: {
+              movimientoId: mov.id,
+              metodo: linea.metodo,
+              cuentaId: linea.cuentaId,
+              monto: linea.monto,
+              numeroReferencia: linea.numeroReferencia ?? null,
+              estado: 'CONFIRMADO',
+              fecha,
+            },
+          });
+          await tx.cuenta.update({
+            where: { id: linea.cuentaId },
+            data: { saldoActual: { decrement: montoLinea } },
+          });
+          movs.push(mov);
+        }
+        return movs;
+      });
+
+      for (const mov of created) {
+        await recordAudit({
+          tabla: 'movimientos',
+          registroId: mov.id,
+          accion: 'INSERT',
+          usuarioId: req.usuario!.id,
+          valorNuevo: {
             tipo: 'EGRESO',
-            monto: body.monto,
-            categoriaId: categoria.id,
-            cuentaOrigenId: body.cuentaOrigenId,
-            entidadId: empleado.id,
-            fechaComputo: fecha,
-            observacion: obsConConcepto ?? null,
-            estado: EstadoMovimiento.CONFIRMADO,
-            usuarioId: req.usuario!.id,
+            concepto: body.conceptoEtiqueta ?? body.tipoConcepto,
+            empleadoId: empleado.id,
+            empleadoNombre: empleado.nombre,
+            monto: mov.monto,
           },
         });
-        await tx.pago.create({
-          data: {
-            movimientoId: mov.id,
-            metodo: body.metodo,
-            cuentaId: body.cuentaOrigenId,
-            monto: body.monto,
-            numeroReferencia: body.numeroReferencia ?? null,
-            estado: 'CONFIRMADO',
-            fecha,
-          },
-        });
-        await tx.cuenta.update({
-          where: { id: body.cuentaOrigenId },
-          data: { saldoActual: { decrement: monto } },
-        });
-        return mov;
-      });
+      }
 
-      await recordAudit({
-        tabla: 'movimientos',
-        registroId: created.id,
-        accion: 'INSERT',
-        usuarioId: req.usuario!.id,
-        valorNuevo: {
-          tipo: 'EGRESO',
-          concepto: body.tipoConcepto,
-          empleadoId: empleado.id,
-          empleadoNombre: empleado.nombre,
-          monto: body.monto,
-        },
-      });
-
-      return reply.code(201).send(created);
+      return reply.code(201).send({ movimientos: created });
     },
   );
 }

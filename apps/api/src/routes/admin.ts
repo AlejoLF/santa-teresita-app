@@ -1,7 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@sta/db/client';
-import { EstadoVenta, EstadoLiquidacion, EstadoMovimiento, RolUsuario } from '@sta/db';
+import {
+  EstadoVenta,
+  EstadoLiquidacion,
+  EstadoMovimiento,
+  EstadoSesionCaja,
+  RolUsuario,
+} from '@sta/db';
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { clasificarCanalBucket } from '../services/clasificar-pago.js';
@@ -788,6 +794,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           tipo: z.enum(['INGRESO', 'EGRESO', 'TRANSFERENCIA_INTERNA', 'AJUSTE']).optional(),
           categoriaId: z.string().uuid().optional(),
           cuentaId: z.string().uuid().optional(),
+          // `sesion=actual` filtra por la sesión de caja abierta. Tiene prioridad
+          // sobre desde/hasta (es un filtro por sesión, no por fecha).
+          sesion: z.enum(['actual']).optional(),
           desde: z.string().datetime().optional(),
           hasta: z.string().datetime().optional(),
           page: z.coerce.number().int().min(1).default(1),
@@ -800,23 +809,42 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         tipo?: 'INGRESO' | 'EGRESO' | 'TRANSFERENCIA_INTERNA' | 'AJUSTE';
         categoriaId?: string;
         cuentaId?: string;
+        sesion?: 'actual';
         desde?: string;
         hasta?: string;
         page: number;
         pageSize: number;
       };
+
+      // "Sesión actual": resolvemos la sesión de caja abierta y filtramos por su
+      // id (no por fecha — un movimiento cuenta para el turno por su
+      // `sesionCajaId`, ver invariante en CLAUDE.md). Si no hay sesión abierta,
+      // forzamos un id imposible para que el listado salga vacío.
+      let sesionCajaId: string | undefined;
+      if (q.sesion === 'actual') {
+        const abierta = await prisma.sesionCaja.findFirst({
+          where: { estado: EstadoSesionCaja.ABIERTA },
+          orderBy: { horarioApertura: 'desc' },
+          select: { id: true },
+        });
+        sesionCajaId = abierta?.id ?? '00000000-0000-0000-0000-000000000000';
+      }
+
       const where = {
         ...(q.tipo && { tipo: q.tipo }),
         ...(q.categoriaId && { categoriaId: q.categoriaId }),
+        ...(sesionCajaId && { sesionCajaId }),
         ...(q.cuentaId && {
           OR: [{ cuentaOrigenId: q.cuentaId }, { cuentaDestinoId: q.cuentaId }],
         }),
-        ...((q.desde || q.hasta) && {
-          fechaComputo: {
-            ...(q.desde && { gte: new Date(q.desde) }),
-            ...(q.hasta && { lte: new Date(q.hasta) }),
-          },
-        }),
+        // El filtro por fecha solo aplica cuando NO se filtró por sesión actual.
+        ...(!sesionCajaId &&
+          (q.desde || q.hasta) && {
+            fechaComputo: {
+              ...(q.desde && { gte: new Date(q.desde) }),
+              ...(q.hasta && { lte: new Date(q.hasta) }),
+            },
+          }),
       };
       const [movimientos, total, sumas] = await Promise.all([
         prisma.movimiento.findMany({

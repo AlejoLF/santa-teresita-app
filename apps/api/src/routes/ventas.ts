@@ -18,7 +18,6 @@ import { recordAudit } from '../services/audit.js';
 import { aprobarConPinAdmin } from '../services/auth.js';
 import {
   encolarComandasCanceladas,
-  encolarComandasParaVenta,
   encolarTicketClienteParaVenta,
   encolarTicketDeliveryParaVenta,
 } from '../services/impresion.js';
@@ -321,7 +320,12 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
               data: { modalidad: modalidadNueva as never },
             });
           }
-          await encolarComandasParaVenta(params.id, tx);
+          // NO reimprimimos la comanda de cocina al asignar/cambiar el
+          // repartidor: la comida no cambia, solo quién la entrega. La comanda
+          // de cocina ya se encoló al crear la venta. Reimprimir acá era la
+          // causa de las comandas de cocina duplicadas (crear + asignar moto =
+          // 2 comandas). El dato del repartidor sale en el TICKET_DELIVERY al
+          // finalizar, que es quien lo necesita.
         }
         return u;
       });
