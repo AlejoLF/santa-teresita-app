@@ -213,6 +213,26 @@ Ver SPEC §1.5. Punteo:
 | 8 | Tests E2E con Playwright | Calidad |
 | 9 | Setup CI/CD GitHub Actions | Deploy automático |
 
+### 🔒 Pendientes de seguridad — HACER CUANDO ESTÉ EL SERVER LISTO
+
+Del acid-test de seguridad (alpha.39 cerró la mayoría). Estos dos quedaron para
+cuando se despliegue el mini PC porque están acoplados al recovery:
+
+- **A1 — audit append-only en Postgres.** Trigger que rechace UPDATE/DELETE sobre
+  `audit_log` (y tablas chaineadas). OJO: hacerlo mal rompe el catch-up (que
+  re-chainea filas) — diseñar JUNTO con C6. Además el salt de la cadena idealmente
+  NO debe vivir en las cajas (hoy `getOrCreateSecret` lo genera por máquina,
+  contradice el invariante "salt idéntico en todos lados").
+- **C6 — validar el catch-up.** `services/catch-up.ts` absorbe filas de la nube
+  (`origen='cloud'`) y las upsertea como fuente de verdad SIN revalidar precios/
+  totales → recalcular server-side al importar y cuarentenar anomalías. (El vector
+  principal —inyectar ventas vía la PWA— ya se cerró en alpha.39 con precios
+  server-side; urgencia bajó, queda el caso de escritura directa a Supabase.)
+
+Acción del dueño (no código): **C4** sacar el password de Postgres de las cajas
+(que hablen solo a la API), **C5** firmar el instalador (cert Authenticode), y
+operativo: **cambiar los PINs default `0001/0002/0003`** + segmentar el WiFi.
+
 ## Datos del cliente
 
 - Local: Av. 44 e. 12 y Plaza Paso, La Plata, Bs. As.
