@@ -214,6 +214,7 @@ export default function AdminCierresPage() {
                       weekday: 'short',
                       day: '2-digit',
                       month: 'short',
+                      timeZone: 'UTC', // fecha es @db.Date (medianoche UTC); sin esto corre 1 día atrás
                     })}{' '}
                     · {s.turno === 'MANANA' ? 'Mañana' : 'Tarde'}
                   </span>

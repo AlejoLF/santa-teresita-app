@@ -17,6 +17,7 @@ import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion
 import { recordAudit } from '../services/audit.js';
 import { aprobarConPinAdmin } from '../services/auth.js';
 import {
+  encolarComandasParaVenta,
   encolarComandasCanceladas,
   encolarTicketClienteParaVenta,
   encolarTicketDeliveryParaVenta,
@@ -648,6 +649,11 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
         //     "EFECTIVO / A_COBRAR" porque al crear venta todavía no había
         //     pagos registrados (incidente: ticket de #79 DEBITO impreso como
         //     EFECTIVO).
+        // Comanda de COCINA: se encola acá (al finalizar) y NO al crear/agregar
+        // items, para que salga UNA sola comanda con el pedido completo (fix de
+        // tickets partidos — venta 274). Sólo va a COCINA si hay items que
+        // cocinan (lo resuelve encolarComandasParaVenta).
+        await encolarComandasParaVenta(venta.id, tx);
         await encolarTicketClienteParaVenta(venta.id, tx);
         await encolarTicketDeliveryParaVenta(venta.id, tx);
 

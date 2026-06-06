@@ -817,6 +817,7 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         orderBy: [{ activo: 'desc' }, { nombre: 'asc' }],
         select: { id: true, codigo: true, nombre: true, precioBase: true, activo: true },
       });
+      const canalesMap = await getCanalesEnvioMap(productos.map((p) => p.id));
       return {
         envios: productos.map((p) => ({
           id: p.id,
@@ -824,7 +825,10 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
           nombre: p.nombre,
           monto: p.precioBase.toString(),
           activo: p.activo,
+          canales: canalesMap.get(p.id) ?? [...CANALES_ENVIO_DEFAULT],
         })),
+        // Para que el panel arme los checkboxes con etiquetas lindas.
+        canalesDisponibles: CANALES_VENTA_VALIDOS,
       };
     },
   );
@@ -838,11 +842,12 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         body: z.object({
           nombre: z.string().min(1).max(80),
           monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
+          canales: z.array(z.enum(CANALES_VENTA_VALIDOS)).optional(),
         }),
       },
     },
     async (req, reply) => {
-      const body = req.body as { nombre: string; monto: string };
+      const body = req.body as { nombre: string; monto: string; canales?: string[] };
       const tipoEnvio = await getOrCreateTipoEnvio();
       // Código autogenerado ENVxx incremental para no chocar con ENV01/ENV02.
       const ultimo = await prisma.producto.findFirst({
@@ -863,12 +868,15 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         },
         select: { id: true, codigo: true, nombre: true, precioBase: true, activo: true },
       });
+      // Canales donde aparece este envío (default: delivery propio).
+      const canales = sanitizarCanales(body.canales ?? CANALES_ENVIO_DEFAULT);
+      await setCanalesEnvio(created.id, canales);
       await recordAudit({
         tabla: 'productos',
         registroId: created.id,
         accion: 'INSERT',
         usuarioId: req.usuario!.id,
-        valorNuevo: { tipo: 'envio', nombre: created.nombre, monto: created.precioBase.toString() },
+        valorNuevo: { tipo: 'envio', nombre: created.nombre, monto: created.precioBase.toString(), canales },
       });
       return reply.code(201).send({
         id: created.id,
@@ -876,6 +884,7 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         nombre: created.nombre,
         monto: created.precioBase.toString(),
         activo: created.activo,
+        canales,
       });
     },
   );
@@ -891,12 +900,13 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
           nombre: z.string().min(1).max(80).optional(),
           monto: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
           activo: z.boolean().optional(),
+          canales: z.array(z.enum(CANALES_VENTA_VALIDOS)).optional(),
         }),
       },
     },
     async (req, reply) => {
       const params = req.params as { id: string };
-      const body = req.body as { nombre?: string; monto?: string; activo?: boolean };
+      const body = req.body as { nombre?: string; monto?: string; activo?: boolean; canales?: string[] };
       const before = await prisma.producto.findUnique({ where: { id: params.id } });
       if (!before) return reply.code(404).send({ error: 'Envío no encontrado' });
       const updated = await prisma.producto.update({
@@ -908,6 +918,10 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         },
         select: { id: true, codigo: true, nombre: true, precioBase: true, activo: true },
       });
+      // Actualizar canales si vinieron.
+      if (body.canales !== undefined) {
+        await setCanalesEnvio(params.id, body.canales);
+      }
       // Mantener sincronizadas las viejas config keys por compatibilidad
       // (si alguien todavía lee envio_simple_monto/doble).
       if (before.codigo === 'ENV01' && body.monto) {
@@ -929,12 +943,17 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
         valorAnterior: { nombre: before.nombre, monto: before.precioBase.toString() },
         valorNuevo: { nombre: updated.nombre, monto: updated.precioBase.toString() },
       });
+      const canalesActuales =
+        body.canales !== undefined
+          ? sanitizarCanales(body.canales)
+          : (await getCanalesEnvioMap([params.id])).get(params.id) ?? [...CANALES_ENVIO_DEFAULT];
       return {
         id: updated.id,
         codigo: updated.codigo,
         nombre: updated.nombre,
         monto: updated.precioBase.toString(),
         activo: updated.activo,
+        canales: canalesActuales,
       };
     },
   );
@@ -1463,6 +1482,61 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
 //   Helpers de envíos (productos del tipoProducto "Envío")
 // ────────────────────────────────────────────────────────────────────────
 
+/**
+ * Canales donde cada tipo de envío aparece como opción al cobrar. Se guarda en
+ * configuracion_sistema con clave `envio_canales_<productoId>` (JSON array de
+ * canales). Si no hay config guardada, default = canales de delivery propio
+ * (TELEFONO/WHATSAPP/WEB). El selector de envío en la pantalla de cobro filtra
+ * por el canal de la venta (y sólo aparece si la venta NO es take-away).
+ */
+const CANALES_VENTA_VALIDOS = [
+  'MOSTRADOR', 'TELEFONO', 'WHATSAPP', 'WEB',
+  'RAPPI', 'PEDIDOS_YA', 'MERCADO_LIBRE', 'DELIVERATE',
+] as const;
+const CANALES_ENVIO_DEFAULT = ['TELEFONO', 'WHATSAPP', 'WEB'];
+
+function sanitizarCanales(arr: unknown): string[] {
+  if (!Array.isArray(arr)) return [...CANALES_ENVIO_DEFAULT];
+  const filtrados = arr.filter(
+    (c): c is string =>
+      typeof c === 'string' && (CANALES_VENTA_VALIDOS as readonly string[]).includes(c),
+  );
+  return Array.from(new Set(filtrados));
+}
+
+async function getCanalesEnvioMap(productoIds: string[]): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  if (productoIds.length === 0) return map;
+  const rows = await prisma.configuracionSistema.findMany({
+    where: { clave: { in: productoIds.map((id) => `envio_canales_${id}`) } },
+    select: { clave: true, valor: true },
+  });
+  for (const r of rows) {
+    const id = r.clave.replace('envio_canales_', '');
+    try {
+      map.set(id, sanitizarCanales(JSON.parse(r.valor)));
+    } catch {
+      /* config malformada → cae al default abajo */
+    }
+  }
+  return map;
+}
+
+async function setCanalesEnvio(productoId: string, canales: string[]): Promise<void> {
+  const valor = JSON.stringify(sanitizarCanales(canales));
+  await prisma.configuracionSistema.upsert({
+    where: { clave: `envio_canales_${productoId}` },
+    create: {
+      clave: `envio_canales_${productoId}`,
+      valor,
+      tipo: 'json',
+      categoria: 'envios',
+      editable: true,
+    },
+    update: { valor },
+  });
+}
+
 /** Devuelve el id del tipoProducto "Envío" (o null si no existe todavía). */
 async function getTipoEnvioId(): Promise<string | null> {
   const tipo = await prisma.tipoProducto.findFirst({
@@ -1492,9 +1566,9 @@ async function getOrCreateTipoEnvio(): Promise<string> {
   return tipo.id;
 }
 
-/** Lista de tipos de envío activos para los botones de cobro. */
+/** Lista de tipos de envío activos para los botones de cobro (con canales). */
 async function listarEnviosActivos(): Promise<
-  Array<{ id: string; codigo: string | null; nombre: string; monto: string }>
+  Array<{ id: string; codigo: string | null; nombre: string; monto: string; canales: string[] }>
 > {
   const tipoEnvio = await getTipoEnvioId();
   if (!tipoEnvio) return [];
@@ -1503,10 +1577,12 @@ async function listarEnviosActivos(): Promise<
     orderBy: { nombre: 'asc' },
     select: { id: true, codigo: true, nombre: true, precioBase: true },
   });
+  const canalesMap = await getCanalesEnvioMap(productos.map((p) => p.id));
   return productos.map((p) => ({
     id: p.id,
     codigo: p.codigo,
     nombre: p.nombre,
     monto: p.precioBase.toString(),
+    canales: canalesMap.get(p.id) ?? [...CANALES_ENVIO_DEFAULT],
   }));
 }

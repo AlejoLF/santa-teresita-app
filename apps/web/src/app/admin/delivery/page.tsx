@@ -19,7 +19,23 @@ interface Envio {
   nombre: string;
   monto: string;
   activo: boolean;
+  canales: string[];
 }
+
+// Canales (de delivery) donde puede ofrecerse un envío al cobrar. Mostrador /
+// take-away nunca muestran envíos, por eso no están en la lista.
+const CANALES_ENVIO_OPCIONES: Array<{ value: string; label: string }> = [
+  { value: 'TELEFONO', label: 'Teléfono' },
+  { value: 'WHATSAPP', label: 'WhatsApp' },
+  { value: 'WEB', label: 'Web' },
+  { value: 'RAPPI', label: 'RAPPI' },
+  { value: 'PEDIDOS_YA', label: 'PedidosYa' },
+  { value: 'MERCADO_LIBRE', label: 'Mercado Libre' },
+  { value: 'DELIVERATE', label: 'DELIVERATE' },
+];
+const CANALES_ENVIO_DEFAULT = ['TELEFONO', 'WHATSAPP', 'WEB'];
+const labelCanal = (c: string) =>
+  CANALES_ENVIO_OPCIONES.find((x) => x.value === c)?.label ?? c;
 
 export default function AdminDeliveryPage() {
   return (
@@ -367,7 +383,14 @@ function EnviosSection() {
                   </tr>
                 ) : (
                   <tr key={e.id} className="border-b border-cream-200">
-                    <td className="py-1.5 font-medium text-ink-900">{e.nombre}</td>
+                    <td className="py-1.5 font-medium text-ink-900">
+                      {e.nombre}
+                      <div className="text-2xs font-normal text-ink-500">
+                        {e.canales.length > 0
+                          ? `Aparece en: ${e.canales.map(labelCanal).join(', ')}`
+                          : 'No aparece en ningún canal'}
+                      </div>
+                    </td>
                     <td className="py-1.5 text-right font-mono">
                       ${Number(e.monto).toLocaleString('es-AR')}
                     </td>
@@ -413,17 +436,23 @@ function EnvioForm({
 }) {
   const [nombre, setNombre] = useState(envio?.nombre ?? '');
   const [monto, setMonto] = useState(envio ? Number(envio.monto).toString() : '');
+  const [canales, setCanales] = useState<string[]>(envio?.canales ?? CANALES_ENVIO_DEFAULT);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const toggleCanal = (c: string) =>
+    setCanales((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
 
   async function guardar() {
     if (!nombre.trim()) return setError('Falta el nombre');
     const m = Number(monto);
     if (!isFinite(m) || m <= 0) return setError('Poné un precio válido');
+    if (canales.length === 0)
+      return setError('Elegí al menos un canal donde aparece este envío');
     setGuardando(true);
     setError(null);
     try {
-      const body = { nombre: nombre.trim(), monto: m.toFixed(2) };
+      const body = { nombre: nombre.trim(), monto: m.toFixed(2), canales };
       if (envio) {
         await api.patch(`/admin/configuracion/envios/${envio.id}`, body);
       } else {
@@ -464,6 +493,26 @@ function EnvioForm({
             className="input w-full text-sm"
           />
         </label>
+      </div>
+      <div className="space-y-1">
+        <span className="text-2xs uppercase text-ink-500">
+          Aparece al cobrar en estos pedidos
+        </span>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-1">
+          {CANALES_ENVIO_OPCIONES.map((c) => (
+            <label key={c.value} className="flex items-center gap-1.5 text-xs text-ink-700">
+              <input
+                type="checkbox"
+                checked={canales.includes(c.value)}
+                onChange={() => toggleCanal(c.value)}
+              />
+              <span>{c.label}</span>
+            </label>
+          ))}
+        </div>
+        <p className="text-2xs text-ink-500 italic">
+          En mostrador y take-away nunca aparece — el envío es solo para entregas a domicilio.
+        </p>
       </div>
       {error && <p className="text-2xs text-pomodoro-600">{error}</p>}
       <div className="flex gap-2">

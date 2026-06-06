@@ -366,7 +366,7 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
   wsResumen.columns = [{ width: 35 }, { width: 22 }];
 
   const titulo = wsResumen.addRow([
-    `Cierre — ${data.sesion.turno === 'MANANA' ? 'Mañana' : 'Tarde'} · ${data.sesion.fecha.toLocaleDateString('es-AR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })}`,
+    `Cierre — ${data.sesion.turno === 'MANANA' ? 'Mañana' : 'Tarde'} · ${data.sesion.fecha.toLocaleDateString('es-AR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' })}`,
   ]);
   titulo.font = { name: 'Calibri', size: 16, bold: true, color: { argb: VERDE_TERESITA } };
   wsResumen.mergeCells(titulo.number, 1, titulo.number, 2);
@@ -607,6 +607,9 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
     weekday: 'long',
     day: '2-digit',
     month: 'long',
+    // `fecha` es @db.Date (medianoche UTC). Sin timeZone:'UTC' el proceso (TZ
+    // AR) la corre un día atrás. Ver gotcha de fechas de sesión en CLAUDE.md.
+    timeZone: 'UTC',
   });
   const turnoStr = data.sesion.turno === 'MANANA' ? 'Mañana' : 'Tarde';
   const subject = `Cierre ${turnoStr} · ${fechaStr} · ${fmtMoney(data.resumen.totalCobrado)}`;
@@ -671,7 +674,7 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
   <table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:13px;">
     <tr>
       <td style="padding:8px;width:50%;background:#F8F2E2;border-radius:6px 0 0 6px;">
-        <div style="font-size:11px;color:#777;text-transform:uppercase;letter-spacing:.5px;">Total cobrado</div>
+        <div style="font-size:11px;color:#777;text-transform:uppercase;letter-spacing:.5px;">Total vendido</div>
         <div style="font-size:22px;font-weight:600;color:#1B3A2B;font-family:monospace;">${fmtMoney(data.resumen.totalCobrado)}</div>
         <div style="font-size:11px;color:#777;">${data.resumen.ventasFinalizadas} ventas finalizadas</div>
       </td>
@@ -695,7 +698,7 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
       ${seccionHeader('Delivery (local + WSP + web)', '#B7791F')}
       ${filaSimple('Efectivo · Damián', c.delivery.efectivoDamian, { sub: 'suma a caja' })}
       ${filaSimple('Transfer / Débito online', c.delivery.online)}
-      ${filaSimple('Efectivo · DELIVERATE', c.delivery.efectivoDeliverate, { sub: 'rinde semanal · NO suma a caja del día', informativo: true })}
+      ${filaSimple('Efectivo · DELIVERATE', c.delivery.efectivoDeliverate, { sub: 'Suma al total vendido. DELIVERATE lo liquida la semana siguiente, no entra a la caja de hoy.', informativo: true })}
       ${filaSubtotal('Subtotal delivery', c.totalDelivery)}
 
       ${seccionHeader('Plataformas (RAPPI · PYA · MELI)', '#2C5A8C')}

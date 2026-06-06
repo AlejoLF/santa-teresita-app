@@ -486,12 +486,13 @@ export async function encolarComandasCanceladas(
   });
   if (!venta) return [];
 
-  let destinos = determinarDestinos(venta.canal, venta.tieneCocina);
-  // Si la venta nunca llegó a finalizarse, el TICKET_DELIVERY nunca se
-  // imprimió — no encolar cancelación de DELIVERY.
-  if (!venta.fechaFinalizacion) {
-    destinos = destinos.filter((d) => d !== 'DELIVERY');
-  }
+  // Todos los tickets físicos (cocina + cliente + delivery) se imprimen al
+  // FINALIZAR. Si la venta nunca se finalizó, no se imprimió NADA → no hay
+  // nada que cancelar. (Antes la cocina se imprimía al crear, así que se
+  // filtraba sólo DELIVERY; ahora se descarta todo si no hubo finalización.)
+  if (!venta.fechaFinalizacion) return [];
+
+  const destinos = determinarDestinos(venta.canal, venta.tieneCocina);
   if (destinos.length === 0) return [];
 
   const payload = await buildComandaPayload(ventaId, tx);

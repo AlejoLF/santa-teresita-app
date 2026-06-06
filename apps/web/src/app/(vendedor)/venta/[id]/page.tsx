@@ -556,8 +556,14 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
                 </button>
               </div>
 
-              {/* Botón "Agregar envío" — agrega ENV01/ENV02 con monto configurable */}
-              <AgregarEnvioPanel ventaId={venta.id} onAgregado={refetch} />
+              {/* Botón "Agregar envío" — solo en delivery y en los canales que
+                  el admin configuró para cada envío. */}
+              <AgregarEnvioPanel
+                ventaId={venta.id}
+                canal={venta.canal}
+                modalidad={venta.modalidad}
+                onAgregado={refetch}
+              />
 
               {/* Selector de % de descuento al efectivo (solo mostrador) */}
               {habilitaDescuentoEfectivo && (
@@ -762,8 +768,9 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
           <div className="card w-full max-w-md p-6 shadow-modal">
             <h2 className="font-display text-lg text-pomodoro-600 mb-3">Anular pedido</h2>
             <p className="text-sm text-ink-500 mb-3">
-              {venta.tieneCocina &&
-                'La comanda ya fue a cocina. Se imprimirá una segunda comanda con leyenda CANCELADA.'}
+              {venta.estado === 'FINALIZADA'
+                ? 'El pedido ya se imprimió al cobrar. Donde haya salido (cocina/delivery) se imprimirá una comanda con leyenda CANCELADA.'
+                : 'El pedido todavía no se imprimió, así que no sale comanda de cancelación.'}
             </p>
             <label htmlFor="motivo-anular" className="text-sm font-medium text-ink-700 mb-1 block">
               Motivo
@@ -845,13 +852,18 @@ interface EnvioOpcion {
   codigo: string | null;
   nombre: string;
   monto: string;
+  canales: string[];
 }
 
 function AgregarEnvioPanel({
   ventaId,
+  canal,
+  modalidad,
   onAgregado,
 }: {
   ventaId: string;
+  canal: string;
+  modalidad: string;
   onAgregado: () => Promise<void>;
 }) {
   const [agregando, setAgregando] = useState<string | null>(null);
@@ -882,8 +894,17 @@ function AgregarEnvioPanel({
     }
   }
 
-  // Si todavía no cargó, o no hay envíos configurados, no mostramos el panel.
-  if (envios !== null && envios.length === 0) return null;
+  // Los envíos solo se ofrecen en delivery (no take-away) y solo en los canales
+  // que el admin configuró para cada envío (admin → Delivery → Tipos de envío).
+  const enviosVisibles =
+    envios === null
+      ? null
+      : modalidad === 'TAKE_AWAY'
+        ? []
+        : envios.filter((e) => e.canales.includes(canal));
+
+  // Si ya cargó y no hay envíos aplicables a este pedido, no mostramos el panel.
+  if (enviosVisibles !== null && enviosVisibles.length === 0) return null;
 
   return (
     <div className="bg-saffron-100/40 border border-saffron-200 px-3 py-2 rounded mb-3">
@@ -891,10 +912,10 @@ function AgregarEnvioPanel({
         Agregar envío
       </div>
       <div className="grid grid-cols-2 gap-2">
-        {envios === null ? (
+        {enviosVisibles === null ? (
           <div className="text-2xs text-ink-500 col-span-2">Cargando…</div>
         ) : (
-          envios.map((envio) => (
+          enviosVisibles.map((envio) => (
             <button
               key={envio.id}
               type="button"

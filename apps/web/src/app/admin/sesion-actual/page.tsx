@@ -170,7 +170,7 @@ export default function SesionActualPage() {
             {viejasSinCerrar.map((s) => (
               <div key={s.id} className="flex items-center justify-between text-xs bg-white/60 rounded px-2 py-1">
                 <span className="text-ink-700">
-                  {new Date(s.fecha).toLocaleDateString('es-AR', { weekday: 'short', day: '2-digit', month: 'short' })}
+                  {new Date(s.fecha).toLocaleDateString('es-AR', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'UTC' })}
                   {' · '}{s.turno === 'MANANA' ? 'Mañana' : 'Tarde'}
                   {s.abiertaPor && <span className="text-ink-500"> · abrió {s.abiertaPor}</span>}
                 </span>
@@ -204,6 +204,10 @@ export default function SesionActualPage() {
             weekday: 'long',
             day: 'numeric',
             month: 'long',
+            // `fecha` es @db.Date (medianoche UTC). Sin timeZone:'UTC' el
+            // navegador en AR (UTC-3) la corre un día atrás (bug reportado:
+            // "sesión actual" marcaba 3 de junio en vez de 4).
+            timeZone: 'UTC',
           })}
         </h1>
         <div className="flex items-center gap-3 mt-1 text-sm">
@@ -400,7 +404,7 @@ export default function SesionActualPage() {
           esperada={null}
           modo="normal"
           sesionId={cerrarVieja.id}
-          tituloExtra={`${new Date(cerrarVieja.fecha).toLocaleDateString('es-AR')} · ${cerrarVieja.turno}`}
+          tituloExtra={`${new Date(cerrarVieja.fecha).toLocaleDateString('es-AR', { timeZone: 'UTC' })} · ${cerrarVieja.turno}`}
           onClose={() => setCerrarVieja(null)}
           onCerrada={() => {
             setCerrarVieja(null);

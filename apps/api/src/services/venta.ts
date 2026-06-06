@@ -12,7 +12,6 @@ import type { ItemNuevo, VentaNueva } from '@sta/shared';
 import { subtotalItem } from '@sta/shared';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
 import { recordAudit } from './audit.js';
-import { encolarComandasParaVenta } from './impresion.js';
 
 /**
  * Crea una venta en estado PROCESADA, con items snapshot del precio.
@@ -223,12 +222,12 @@ export async function crearVenta(args: {
       tx,
     });
 
-    // Encolar comandas en TODOS los destinos físicos correspondientes según
-    // las reglas (mostrador / delivery / cocina). Para una venta de mostrador
-    // con item caliente, esto crea 2 trabajos (Mostrador + Cocina). Para una
-    // de RAPPI, 1 trabajo (Cocina). Para una WhatsApp con bebida, 1 (Delivery).
-    await encolarComandasParaVenta(venta.id, tx);
-
+    // NO se encola la comanda de cocina acá. Se encola al FINALIZAR (cobrar) —
+    // ver routes/ventas.ts. Motivo: si el pedido se arma de a poco (crear con
+    // 1 item, luego agregar items uno por uno), encolar en cada paso hacía que
+    // la impresora sacara una comanda parcial por item (1, luego 2, luego 3...
+    // items) porque imprime en <1s, antes del siguiente agregado. Bug real:
+    // venta 274. Al finalizar sale UNA comanda completa.
     return venta;
   });
 }
@@ -355,12 +354,9 @@ export async function agregarItemsAVenta(args: {
       },
     });
 
-    // Re-encolar comandas con la versión actualizada (que ya incluye los
-    // items nuevos). Reimprime en todos los destinos correspondientes según
-    // las reglas. Si ya se cocinó la versión anterior, las comanderas
-    // descartan la vieja y usan la nueva.
-    await encolarComandasParaVenta(ventaId, tx);
-
+    // NO se re-encola comanda de cocina al agregar items. La comanda sale
+    // completa al finalizar (ver routes/ventas.ts). Antes, cada agregado
+    // disparaba una comanda parcial si la anterior ya se había impreso.
     return updated;
   });
 }
