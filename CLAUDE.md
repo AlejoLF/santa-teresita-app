@@ -15,6 +15,7 @@ problemas estructurales.
 - [docs/wireframes/00-INDEX.md](docs/wireframes/00-INDEX.md) — wireframes ASCII.
 - [docs/SERVIDOR-LOCAL.md](docs/SERVIDOR-LOCAL.md) — diseño del servidor local LAN (Fase 1A/1B/1.5 implementadas).
 - [docs/DEPLOY-SERVIDOR-LOCAL.md](docs/DEPLOY-SERVIDOR-LOCAL.md) — **playbook de deploy** del server, cajas y PWA. Abrir cuando vayas a desplegar.
+- [docs/PRODUCTIZACION-Y-VENTA.md](docs/PRODUCTIZACION-Y-VENTA.md) — análisis estratégico de vender el POS como producto (mercado ES/AR/PT, regulación Veri*Factu/AT, pricing, arquitectura SaaS multi-tenant, capacidad Supabase medida, features IA). Research 2026-06-06.
 
 ## Arquitectura: WAT (Workflows / Agents / Tools)
 
