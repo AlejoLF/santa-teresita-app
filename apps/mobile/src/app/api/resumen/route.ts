@@ -67,7 +67,7 @@ export async function GET() {
         v.total::text,
         v.canal::text AS canal,
         v.fecha_finalizacion::text AS fecha,
-        COALESCE(c.nombre || COALESCE(' ' || c.apellido, ''), 'NN') AS cliente
+        (c.nombre || COALESCE(' ' || c.apellido, '')) AS cliente
       FROM ventas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
       WHERE v.estado = 'FINALIZADA'

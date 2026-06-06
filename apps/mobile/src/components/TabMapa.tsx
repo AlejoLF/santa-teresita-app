@@ -10,7 +10,7 @@ interface Pin {
   total: string;
   estado: string;
   estado_delivery: string | null;
-  cliente: string;
+  cliente: string | null;
   telefono: string | null;
   direccion: string;
   lat: number | null;
@@ -99,7 +99,8 @@ export function TabMapa() {
             <div className="flex justify-between items-start mb-2">
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-ink-900 truncate">
-                  #{p.numero} · {p.cliente}
+                  #{p.numero}
+                  {p.cliente ? ` · ${p.cliente}` : ''}
                 </p>
                 <p className="text-2xs text-ink-500 truncate">{p.direccion || 'Sin dirección'}</p>
               </div>

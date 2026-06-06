@@ -23,7 +23,7 @@ export async function GET() {
     total: string;
     estado: string;
     estado_delivery: string | null;
-    cliente: string;
+    cliente: string | null;
     telefono: string | null;
     direccion: string;
     lat: number | null;
@@ -36,7 +36,7 @@ export async function GET() {
       v.total::text,
       v.estado::text,
       d.estado::text AS estado_delivery,
-      COALESCE(c.nombre || COALESCE(' ' || c.apellido, ''), 'NN') AS cliente,
+      (c.nombre || COALESCE(' ' || c.apellido, '')) AS cliente,
       c.telefono,
       COALESCE(d.direccion_snapshot->>'direccion', '') AS direccion,
       (d.direccion_snapshot->>'lat')::float AS lat,

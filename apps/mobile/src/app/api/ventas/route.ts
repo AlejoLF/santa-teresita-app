@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
     canal: string;
     modalidad: string;
     fecha: string;
-    cliente: string;
+    cliente: string | null;
     items_count: number;
   }>(
     `
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
       v.canal::text AS canal,
       v.modalidad::text AS modalidad,
       v.fecha_finalizacion::text AS fecha,
-      COALESCE(c.nombre || COALESCE(' ' || c.apellido, ''), 'NN') AS cliente,
+      (c.nombre || COALESCE(' ' || c.apellido, '')) AS cliente,
       (SELECT COUNT(*)::int FROM items_venta i WHERE i.venta_id = v.id) AS items_count
     FROM ventas v
     LEFT JOIN clientes c ON c.id = v.cliente_id

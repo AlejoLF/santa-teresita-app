@@ -68,7 +68,8 @@ export function TabResumen() {
             >
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-ink-900 truncate">
-                  #{v.numero} · {v.cliente}
+                  #{v.numero}
+                  {v.cliente ? ` · ${v.cliente}` : ''}
                 </p>
                 <p className="text-2xs text-ink-500">
                   {CANAL_LABEL[v.canal] ?? v.canal} · {fmtFechaHora(v.fecha)}
