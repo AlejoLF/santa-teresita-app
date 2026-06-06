@@ -703,6 +703,7 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
             contexto: { ventaId: venta.id, numero: venta.numero, motivo: body.motivo },
             usuarioSolicitanteId: req.usuario!.id,
             pcOrigen: venta.pcOrigen,
+            ipOrigen: req.ip,
           });
           aprobadorId = aprob.usuarioAprobador.id;
         } catch (e) {

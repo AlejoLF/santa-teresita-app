@@ -48,7 +48,11 @@ export async function buildServer() {
             options: { colorize: true, translateTime: 'HH:MM:ss', ignore: 'pid,hostname' },
           },
     },
-    trustProxy: true,
+    // trustProxy=false: la API se expone DIRECTO (loopback en el .exe, LAN en el
+    // server) sin un proxy de confianza. Con true, req.ip salía del header
+    // X-Forwarded-For (que el cliente falsifica) → se esquivaban los rate-limits
+    // y el lockout por-origen. Si algún día va detrás de Caddy, poner la CIDR del proxy.
+    trustProxy: false,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
@@ -125,14 +129,9 @@ export async function buildServer() {
     keyGenerator: (req) => `${req.ip}:${req.routeOptions.url ?? req.url}`,
   });
 
-  // Auth: rate limit más estricto en /auth/login
-  app.register(async (loginScope) => {
-    await loginScope.register(rateLimit, {
-      max: 10,
-      timeWindow: '1 minute',
-      keyGenerator: (req) => `login:${req.ip}`,
-    });
-  });
+  // Rate limit estricto de /auth/login y /auth/approve: ahora va por-ruta vía
+  // `config.rateLimit` en routes/auth.ts (el bloque anterior se registraba en
+  // un scope vacío y no aplicaba a ninguna ruta).
 
   await app.register(authPlugin);
 

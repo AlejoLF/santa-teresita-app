@@ -34,6 +34,36 @@ interface LoginResult {
 }
 
 /**
+ * Anti-fuerza-bruta para login y aprobación con PIN. Como el login es
+ * por-PIN-sin-usuario, el bloqueo es por ORIGEN: cuenta los LOGIN_FALLIDO
+ * recientes de esa IP (el socket real, confiable con trustProxy=false) y, si
+ * superan el umbral, bloquea por AUTH_PIN_LOCKOUT_MINUTES.
+ *
+ * Seguridad: antes el lockout estaba declarado en el schema/config pero el
+ * código NUNCA incrementaba intentosFallidos → un PIN de 4 dígitos (10k combos)
+ * se barría sin freno. Esto lo cierra.
+ */
+async function assertNoBruteForce(
+  ipOrigen?: string | null,
+  pcOrigen?: string | null,
+): Promise<void> {
+  const desde = new Date(Date.now() - config.AUTH_PIN_LOCKOUT_MINUTES * 60_000);
+  // Clave de conteo: preferimos la IP del socket; si no hay, el pcOrigen.
+  const filtroOrigen = ipOrigen ? { ipOrigen } : pcOrigen ? { pcOrigen } : null;
+  if (!filtroOrigen) return;
+  const fallidos = await prisma.loginAudit.count({
+    where: { tipo: TipoLoginAudit.LOGIN_FALLIDO, timestamp: { gte: desde }, ...filtroOrigen },
+  });
+  if (fallidos >= config.AUTH_PIN_LOCKOUT_THRESHOLD) {
+    throw new AuthError(
+      'USUARIO_BLOQUEADO',
+      `Demasiados intentos fallidos. Esperá ${config.AUTH_PIN_LOCKOUT_MINUTES} minutos.`,
+      { bloqueadoHasta: new Date(Date.now() + config.AUTH_PIN_LOCKOUT_MINUTES * 60_000) },
+    );
+  }
+}
+
+/**
  * Login con PIN (sin "username") — el sistema busca el usuario por PIN.
  *
  * Política de matching: itera sobre los usuarios activos y testea cada PIN con bcrypt.
@@ -44,6 +74,9 @@ interface LoginResult {
  * el usuario queda bloqueado por AUTH_PIN_LOCKOUT_MINUTES.
  */
 export async function login(pin: string, ctx: LoginContext): Promise<LoginResult> {
+  // Freno de fuerza bruta por origen ANTES de testear PINs.
+  await assertNoBruteForce(ctx.ipOrigen, ctx.pcOrigen);
+
   const usuarios = await prisma.usuario.findMany({ where: { activo: true } });
 
   // Buscar el usuario cuyo PIN matchea (constant-time-ish: testeamos todos).
@@ -145,6 +178,10 @@ export async function aprobarConPinAdmin(args: {
   pcOrigen: string;
   ipOrigen?: string;
 }): Promise<{ usuarioAprobador: Pick<Usuario, 'id' | 'nombre' | 'rol'> }> {
+  // Mismo freno de fuerza bruta que el login (un cajero con el PIN compartido
+  // no puede barrer el PIN admin para auto-aprobarse anulaciones).
+  await assertNoBruteForce(args.ipOrigen, args.pcOrigen);
+
   const admins = await prisma.usuario.findMany({
     where: { activo: true, rol: RolUsuario.ADMIN },
   });

@@ -10,13 +10,19 @@ export default async function authRoutes(fastify: FastifyInstance) {
       schema: {
         body: LoginSchema,
       },
+      // Rate limit estricto en login. El limiter "estricto" anterior se
+      // registraba en un scope de Fastify vacío (sin rutas) y NO aplicaba; el
+      // login quedaba sólo bajo el global de 200/min. Acá lo atamos a la ruta.
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     },
     async (req, reply) => {
       const body = LoginSchema.parse(req.body);
       try {
         const result = await login(body.pin, {
           pcOrigen: body.pcOrigen,
-          ipOrigen: body.ipOrigen ?? req.ip,
+          // ipOrigen del SOCKET (req.ip), NO del body: el body lo controla el
+          // cliente y envenenaría el audit y el lockout por-origen.
+          ipOrigen: req.ip,
           userAgent: body.userAgent ?? req.headers['user-agent'],
         });
         reply.setCookie('sta_session', result.token, {
@@ -39,7 +45,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
         });
       } catch (e) {
         if (e instanceof AuthError) {
-          return reply.code(401).send({ error: e.message, code: e.code, meta: e.meta });
+          const status = e.code === 'USUARIO_BLOQUEADO' ? 429 : 401;
+          return reply.code(status).send({ error: e.message, code: e.code, meta: e.meta });
         }
         throw e;
       }
@@ -77,6 +84,9 @@ export default async function authRoutes(fastify: FastifyInstance) {
     {
       preHandler: fastify.requireAuth(),
       schema: { body: ApprovalSchema },
+      // Rate limit estricto: el PIN admin in-line es brute-forceable por un
+      // vendedor que ya tiene sesión. Lockout por-origen + este tope.
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     },
     async (req, reply) => {
       const body = ApprovalSchema.parse(req.body);
@@ -92,7 +102,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
         return reply.send({ ok: true, aprobador: result.usuarioAprobador });
       } catch (e) {
         if (e instanceof AuthError) {
-          return reply.code(401).send({ error: e.message, code: e.code });
+          const status = e.code === 'USUARIO_BLOQUEADO' ? 429 : 401;
+          return reply.code(status).send({ error: e.message, code: e.code });
         }
         throw e;
       }
