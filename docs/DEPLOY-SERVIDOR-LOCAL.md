@@ -34,14 +34,45 @@ Verificá:
       `.exe`/Vercel hoy). Los necesitás idénticos en server y en Vercel.
 - [ ] Decidiste la IP fija del mini PC en la LAN (típicamente `192.168.1.10`).
       Reservala en el router por MAC del mini PC.
+- [ ] **Si el local tiene 2 internets / 2 routers** (caso Santa Teresita): el
+      mini PC va con **una placa de red a cada router** (2 cables). Va a tener
+      **una IP por red** (ej. `192.168.1.10` y `192.168.0.10`). Reservá *ambas*
+      por MAC, una en cada router. Ver §1.11.
 
 ---
 
 ## 1. Mini PC (server LAN)  ── ~30 min
 
+### 1.0 Primero: mirar la red real (diagnose-red.ps1)
+
+Antes de instalar nada, corré el diagnóstico — **no cambia nada, sólo lee**:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\diagnose-red.ps1
+# para probar la impresora térmica también:
+#   .\diagnose-red.ps1 -PrinterIp 192.168.1.60
+```
+
+Genera `red-diagnostico.txt`. Confirmá: cuántas **subredes reales** hay
+(sección 3), si cada internet es por **cable o WiFi** (sección 1), y si la
+**impresora térmica** cae en una de esas redes (secciones 6/7). Con eso validás
+que la estructura es la que pensamos (2 redes) antes de tocar nada.
+
 ### 1.1 Prereqs del mini PC (instalar una sola vez)
 
-En el mini PC, como administrador:
+**Camino fácil (recomendado):** ya está en la carpeta `dist/`. Como
+administrador, desde `C:\sta-server\`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\bootstrap-mini-pc.ps1
+```
+
+Instala **Node 20 LTS + NSSM + PostgreSQL 16** por winget (Postgres en modo
+desatendido; te pide inventar la password del superusuario `postgres` —
+**anotala**, va al `.env` como `PG_SUPERUSER_PASSWORD`). Si winget no pudiera con
+Postgres, el script te avisa para instalarlo a mano y seguir.
+
+**Camino manual** (si preferís control fino):
 
 ```powershell
 # Postgres 16 — descargá el instalador oficial de https://www.postgresql.org
@@ -95,7 +126,8 @@ Completar (los **críticos**):
 
 | Var | Valor |
 |-|-|
-| `DATABASE_URL` | `postgresql://teresita:PASS_FUERTE@127.0.0.1:5432/teresita?schema=public` |
+| `DATABASE_URL` | `postgresql://teresita:PASS_FUERTE@127.0.0.1:5432/teresita?schema=public` (password del rol `teresita`) |
+| `PG_SUPERUSER_PASSWORD` | Password del superusuario `postgres` (la que pusiste al instalar Postgres / en el bootstrap). El setup la usa para crear el rol/DB y abrir el acceso de red. **No** es la de `teresita`. Si la dejás vacía, el setup te la pregunta. |
 | `REPLICATE_TO_URL` | URL del pooler **aws-1** de Supabase (con `?pgbouncer=true&connection_limit=1`). Si lo dejás vacío, el replicator no arranca (no hay backup a la nube). |
 | `AUTH_SECRET` | **EL MISMO** valor que usan hoy las cajas / Vercel. Si lo cambiás se invalidan todas las sesiones. |
 | `AUDIT_HASH_SALT` | **EL MISMO** que el resto del sistema. Si difiere se rompe el hash-chain del audit. |
@@ -117,14 +149,18 @@ powershell -ExecutionPolicy Bypass -File .\setup-mini-pc.ps1
 El script es idempotente (se puede re-correr). Hace:
 
 1. Verifica prereqs (Node, psql, postgres service, NSSM).
-2. Crea rol + DB `teresita` si no existen.
-3. Aplica migraciones SQL pendientes (tracking en `_prisma_migrations` — **no**
+2. Crea rol + DB `teresita` si no existen (usa `PG_SUPERUSER_PASSWORD`).
+3. **Configura el acceso de red de Postgres**: `listen_addresses='*'` +
+   una línea en `pg_hba.conf` por **cada subred LAN detectada** (soporta el
+   mini PC con 2 placas / 2 internets), y recarga Postgres. Sin esto las
+   cajas no pueden conectarse al 5432.
+4. Aplica migraciones SQL pendientes (tracking en `_prisma_migrations` — **no**
    usa `prisma migrate dev`, ver gotcha CLAUDE.md).
-4. Seed solo si la DB está vacía (primer arranque). Crea usuarios default
+5. Seed solo si la DB está vacía (primer arranque). Crea usuarios default
    con PINs `0001`/`0002`/`0003`.
-5. Registra el Windows Service `sta-server` (Node, auto-start, recovery,
+6. Registra el Windows Service `sta-server` (Node, auto-start, recovery,
    depende de Postgres). El service **arranca sin login/UAC** — headless.
-6. Abre el firewall para 5432 y 3001 **solo en la subred LAN**.
+7. Abre el firewall para 5432 y 3001 en **todas las subredes LAN** detectadas.
 
 ### 1.6 Configurar NTP en el mini PC (importante)
 
@@ -160,7 +196,8 @@ ipconfig | findstr "IPv4"
 ```
 
 Esa IP la necesitás para configurar las cajas. Asegurate que esté fija
-(reserva DHCP por MAC, o IP estática).
+(reserva DHCP por MAC, o IP estática). Con 2 internets vas a ver **2 IPs**
+(una por red) — el `setup-mini-pc.ps1` también las lista al final. Ver §1.11.
 
 ### 1.9 Acceso remoto admin (opcional pero recomendado)
 
@@ -180,6 +217,55 @@ Un UPS chico en el mini PC. Razón: evita reinicios por parpadeos y, en un
 corte real, da tiempo a que Postgres haga shutdown limpio (sin esto, riesgo
 de corrupción del WAL). Sin UPS igual funciona, pero el UPS elimina la peor
 clase de problema.
+
+### 1.11 Caso 2 internets / 2 redes (infra de Santa Teresita)
+
+El local tiene **2 internets con 2 routers independientes**: algunas PCs
+cuelgan de un router y otras del otro. Esto se resuelve haciendo el mini PC
+**multi-homed**: una placa de red a cada router.
+
+**Cómo funciona:**
+
+- El mini PC obtiene **una IP en cada red** (ej. `192.168.1.10` en la red A,
+  `192.168.0.10` en la red B). Es el mismo server físico, una sola DB.
+- La API ya escucha en `0.0.0.0` (todas las placas), y `setup-mini-pc.ps1`
+  configura `pg_hba.conf` + el firewall para **ambas subredes**. Resultado:
+  una caja de la red A le pega por `192.168.1.10` y una de la red B por
+  `192.168.0.10` — al mismo Postgres.
+- El server es el **centro de la estrella**: las cajas no necesitan verse entre
+  sí (aunque estén en redes distintas), sólo ver al server, que está en las dos.
+
+**Qué tenés que hacer vos:**
+
+1. Conectá las dos placas del mini PC, una a cada router.
+2. Reservá la IP del mini PC **en cada router** (DHCP reservation por MAC), para
+   que ninguna de las dos cambie.
+3. Corré `setup-mini-pc.ps1` normal. Al final imprime **las dos IPs**.
+4. En cada caja, poné en `lanDbUrl` la IP del server **de la red a la que esa
+   caja está conectada** (ver §2.1).
+
+**Sobre el "salto" de internet:** que el server tenga las dos internets le da
+redundancia para el **backup a la nube** (replicator → Supabase), que es
+asincrónico y no crítico — si una internet se cae, Windows rutea por la otra y,
+si el backup se atrasa unos minutos, se pone al día solo. No es un failover
+*seamless* perfecto (eso sería un router dual-WAN), pero para el backup alcanza
+de sobra. Lo importante — que las cajas lleguen al server — está cubierto por el
+multi-homing de arriba.
+
+**Si el diagnóstico mostró subredes distintas a lo esperado** (o la
+auto-detección falló), forzalas a mano — sin reinstalar todo:
+
+```powershell
+.\setup-mini-pc.ps1 -NetworkOnly -Subnets "192.168.1.0/24","192.168.0.0/24"
+```
+
+`-NetworkOnly` sólo rehace la red (pg_hba + firewall), en segundos, sin tocar la
+DB ni el service. Útil para corregir si algo de red quedó mal.
+
+**La impresora térmica en otra subred:** justamente por estar en otra IP, una PC
+de la otra red no la alcanzaba. El mini PC, al estar en **las dos redes**, sí la
+alcanza. Verificalo con `-PrinterIp` (en `diagnose-red.ps1` o en el setup). Si el
+server la ve, centralizar la impresión por el server resuelve ese problema.
 
 ---
 
@@ -206,7 +292,9 @@ Contenido:
 ```
 
 - `lanDbUrl` = IP del mini PC + password del rol `teresita` (la del `.env`
-  del server).
+  del server). **Si hay 2 redes (§1.11):** usá la IP del server **de la red a la
+  que está conectada ESA caja** (las de la red A → `192.168.1.10`; las de la red
+  B → `192.168.0.10`).
 - `cloudDbUrl` = pooler **aws-1** de Supabase.
 - `webRemoteUrl` = Vercel (o `""` si querés usar el web bundleado del `.exe`).
 
