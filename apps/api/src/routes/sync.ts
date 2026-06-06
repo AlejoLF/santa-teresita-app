@@ -22,10 +22,21 @@ import { config } from '../config.js';
  *   5. Cuando publica OK, lo borra. Si falla, incrementa attempts +
  *      backoff exponencial.
  *
- * No requiere auth — quien tenga acceso a la API local ya tiene acceso
- * al sistema. El sync queue solo guarda en disco local, no escribe a cloud.
+ * Acceso: SOLO loopback (127.0.0.1). Lo usa el frontend de ESTA máquina cuando
+ * un write falla. No usamos requireAuth porque /sync tiene que funcionar con la
+ * DB caída (modo degradado) y requireAuth necesita la DB; limitar a loopback
+ * frena a un atacante en la LAN (un cliente en el WiFi del local) sin romper la
+ * resiliencia. (A9 del audit de seguridad.)
  */
 export default async function syncRoutes(fastify: FastifyInstance) {
+  // Gate loopback para todas las rutas /sync de este plugin.
+  fastify.addHook('onRequest', async (req, reply) => {
+    const ip = req.ip;
+    if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
+      return reply.code(403).send({ error: 'No autorizado (solo loopback)' });
+    }
+  });
+
   fastify.post(
     '/sync/queue',
     {

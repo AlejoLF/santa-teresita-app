@@ -571,7 +571,15 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       const recargoCanal = Number(venta.recargoCanal ?? 0);
       let total = Number(venta.total);
       if (body.aplicarDescuentoEfectivo && venta.canal === 'MOSTRADOR') {
-        const pct = body.descuentoPctEfectivo;
+        // Seguridad: el % de descuento es una REGLA DEL NEGOCIO (config, 10% por
+        // defecto), no algo que elija el cliente. Sin esto, un cajero mandaba
+        // descuentoPctEfectivo=50 y vendía a mitad de precio. Capeamos server-side.
+        const pctConfig = await prisma.configuracionSistema.findUnique({
+          where: { clave: 'descuento_efectivo_pct' },
+          select: { valor: true },
+        });
+        const pctMax = Math.min(100, Math.max(0, Number(pctConfig?.valor ?? 10) || 10));
+        const pct = Math.min(body.descuentoPctEfectivo, pctMax);
         if (pct <= 0 || pct >= 100) {
           return reply
             .code(400)

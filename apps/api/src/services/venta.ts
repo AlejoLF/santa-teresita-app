@@ -76,7 +76,14 @@ export async function crearVenta(args: {
     const precioListaSinDelta = precioOverride
       ? Number(precioOverride)
       : precioBaseNumber * (1 + ajustePct / 100);
-    const deltaMod = item.modificadores.reduce((acc, m) => acc + Number(m.deltaPrecio || 0), 0);
+    // Seguridad: clamp del delta a >= 0 por modificador. El deltaPrecio viene
+    // del cliente y un valor negativo (ej. -999999) llevaba el total a cero o
+    // negativo. Un modificador SUMA (queso extra), nunca resta — las etiquetas
+    // libres van con delta 0. (A6 del audit de seguridad.)
+    const deltaMod = item.modificadores.reduce(
+      (acc, m) => acc + Math.max(0, Number(m.deltaPrecio || 0)),
+      0,
+    );
     const precioUnitario = precioListaSinDelta + deltaMod;
 
     const subTotalItemStr = subtotalItem({
@@ -309,7 +316,14 @@ export async function agregarItemsAVenta(args: {
     const precioListaSinDelta = precioOverride
       ? Number(precioOverride)
       : precioBaseNum * (1 + ajustePct / 100);
-    const deltaMod = item.modificadores.reduce((acc, m) => acc + Number(m.deltaPrecio || 0), 0);
+    // Seguridad: clamp del delta a >= 0 por modificador. El deltaPrecio viene
+    // del cliente y un valor negativo (ej. -999999) llevaba el total a cero o
+    // negativo. Un modificador SUMA (queso extra), nunca resta — las etiquetas
+    // libres van con delta 0. (A6 del audit de seguridad.)
+    const deltaMod = item.modificadores.reduce(
+      (acc, m) => acc + Math.max(0, Number(m.deltaPrecio || 0)),
+      0,
+    );
     const precioUnitario = precioListaSinDelta + deltaMod;
 
     const subTotalItemStr = subtotalItem({

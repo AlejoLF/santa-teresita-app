@@ -46,12 +46,24 @@ async function flushOnce(cfg: FlusherConfig): Promise<'flushed' | 'failed' | 'id
     ? `${cfg.apiBaseUrl.replace(/\/api\/v1$/, '')}${event.url}`
     : `${cfg.apiBaseUrl}${event.url.startsWith('/') ? '' : '/'}${event.url}`;
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(event.headers_json ? (JSON.parse(event.headers_json) as Record<string, string>) : {}),
-  };
-  // Token de agente (compartido con local-agent) — bypassa auth de sesión.
-  if (cfg.agentToken) headers['X-Agent-Token'] = cfg.agentToken;
+  // Seguridad (A9): NO confiar en los headers que el cliente puso en la cola —
+  // un atacante podría haber inyectado Authorization/Cookie ajenos para que el
+  // flusher los reenvíe. Preservamos sólo headers NO sensibles (ej. x-pc-origen)
+  // y nos autenticamos nosotros con el token del agente vía Authorization Bearer
+  // (que es lo que la API valida; antes se mandaba X-Agent-Token, ignorado por
+  // la API → no-op, y los queued Authorization viajaban sin filtrar).
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const queued = event.headers_json
+    ? (JSON.parse(event.headers_json) as Record<string, unknown>)
+    : {};
+  for (const [k, v] of Object.entries(queued)) {
+    const lk = k.toLowerCase();
+    if (lk === 'authorization' || lk === 'cookie' || lk === 'x-agent-token' || lk === 'content-type') {
+      continue;
+    }
+    if (typeof v === 'string') headers[k] = v;
+  }
+  if (cfg.agentToken) headers['Authorization'] = `Bearer ${cfg.agentToken}`;
 
   try {
     const res = await fetch(url, {
