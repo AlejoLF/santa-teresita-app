@@ -75,6 +75,48 @@ const METODO_LABEL: Record<string, string> = {
   OTRO: '❓ Otro',
 };
 
+/** Banner de cajas de turnos anteriores sin cerrar, con botón para cerrar cada
+ *  una. Se usa tanto en la vista normal como cuando no hay sesión del turno
+ *  actual (sino el cartel del dashboard quedaba sin destino). */
+function BannerViejas({
+  viejas,
+  onCerrar,
+}: {
+  viejas: SesionAbierta[];
+  onCerrar: (s: SesionAbierta) => void;
+}) {
+  if (viejas.length === 0) return null;
+  return (
+    <div className="card p-3 bg-saffron-100 border-l-4 border-saffron-600">
+      <div className="text-sm text-saffron-700 font-medium mb-2">
+        ⚠ Hay {viejas.length} sesión{viejas.length > 1 ? 'es' : ''} de turnos
+        anteriores sin cerrar. Cerralas para que no se mezclen con la de hoy.
+      </div>
+      <div className="space-y-1">
+        {viejas.map((s) => (
+          <div
+            key={s.id}
+            className="flex items-center justify-between text-xs bg-white/60 rounded px-2 py-1"
+          >
+            <span className="text-ink-700">
+              {new Date(s.fecha).toLocaleDateString('es-AR', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'UTC' })}
+              {' · '}
+              {s.turno === 'MANANA' ? 'Mañana' : 'Tarde'}
+              {s.abiertaPor && <span className="text-ink-500"> · abrió {s.abiertaPor}</span>}
+            </span>
+            <button
+              onClick={() => onCerrar(s)}
+              className="text-2xs font-medium text-pomodoro-600 hover:underline"
+            >
+              Cerrar esta
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function SesionActualPage() {
   const [data, setData] = useState<SesionData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -113,26 +155,48 @@ export default function SesionActualPage() {
   if (error) return <div className="text-pomodoro-600">{error}</div>;
   if (!data) return <div className="text-ink-500">Cargando...</div>;
 
+  // Cajas viejas colgadas (de turnos anteriores). Se calcula ANTES del early
+  // return de "sin sesión" para poder mostrarlas/cerrarlas aunque todavía no
+  // haya sesión del turno actual — sino el cartel rojo del dashboard llevaba a
+  // un callejón sin salida (caso: a la mañana, sin la primera venta cargada).
+  const viejasSinCerrar = abiertas.filter((sa) => !sa.esActual);
+
   if (!data.sesion) {
     const r = data.resolucion;
     const cerrado = r?.tipo === 'CERRADO';
     return (
-      <div className="card p-8 text-center max-w-md mx-auto">
-        <div className="text-3xl mb-3">{cerrado ? '🔒' : '🌅'}</div>
-        <h2 className="font-display text-md text-ink-900 mb-2">
-          {cerrado
-            ? r?.razon === 'FERIADO'
-              ? 'Hoy es feriado'
-              : 'Fuera del horario de atención'
-            : 'Sin sesión abierta'}
-        </h2>
-        <p className="text-sm text-ink-500">
-          {cerrado
-            ? r?.proximaApertura
-              ? `Próxima apertura ${formatearEspera(r.proximaApertura.minutosEspera)} (${r.proximaApertura.horaInicio})`
-              : 'Revisá la configuración de horarios.'
-            : 'La sesión se abre automáticamente cuando se carga la primera venta del turno.'}
-        </p>
+      <div className="max-w-md mx-auto space-y-4">
+        <BannerViejas viejas={viejasSinCerrar} onCerrar={setCerrarVieja} />
+        <div className="card p-8 text-center">
+          <div className="text-3xl mb-3">{cerrado ? '🔒' : '🌅'}</div>
+          <h2 className="font-display text-md text-ink-900 mb-2">
+            {cerrado
+              ? r?.razon === 'FERIADO'
+                ? 'Hoy es feriado'
+                : 'Fuera del horario de atención'
+              : 'Sin sesión abierta'}
+          </h2>
+          <p className="text-sm text-ink-500">
+            {cerrado
+              ? r?.proximaApertura
+                ? `Próxima apertura ${formatearEspera(r.proximaApertura.minutosEspera)} (${r.proximaApertura.horaInicio})`
+                : 'Revisá la configuración de horarios.'
+              : 'La sesión se abre automáticamente cuando se carga la primera venta del turno.'}
+          </p>
+        </div>
+        {cerrarVieja && (
+          <ModalCerrarSesion
+            esperada={null}
+            modo="normal"
+            sesionId={cerrarVieja.id}
+            tituloExtra={`${new Date(cerrarVieja.fecha).toLocaleDateString('es-AR', { timeZone: 'UTC' })} · ${cerrarVieja.turno}`}
+            onClose={() => setCerrarVieja(null)}
+            onCerrada={() => {
+              setCerrarVieja(null);
+              void fetchData();
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -156,35 +220,9 @@ export default function SesionActualPage() {
   const enGrace = r?.tipo === 'EN_HORARIO' && r.slot.estado === 'GRACE';
   const fueraDeHorario = r?.tipo === 'CERRADO';
 
-  const viejasSinCerrar = abiertas.filter((s) => !s.esActual);
-
   return (
     <div className="max-w-4xl mx-auto space-y-4">
-      {viejasSinCerrar.length > 0 && (
-        <div className="card p-3 bg-saffron-100 border-l-4 border-saffron-600">
-          <div className="text-sm text-saffron-700 font-medium mb-2">
-            ⚠ Hay {viejasSinCerrar.length} sesión{viejasSinCerrar.length > 1 ? 'es' : ''} de
-            turnos anteriores sin cerrar. Cerralas para que no se mezclen con la de hoy.
-          </div>
-          <div className="space-y-1">
-            {viejasSinCerrar.map((s) => (
-              <div key={s.id} className="flex items-center justify-between text-xs bg-white/60 rounded px-2 py-1">
-                <span className="text-ink-700">
-                  {new Date(s.fecha).toLocaleDateString('es-AR', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'UTC' })}
-                  {' · '}{s.turno === 'MANANA' ? 'Mañana' : 'Tarde'}
-                  {s.abiertaPor && <span className="text-ink-500"> · abrió {s.abiertaPor}</span>}
-                </span>
-                <button
-                  onClick={() => setCerrarVieja(s)}
-                  className="text-2xs font-medium text-pomodoro-600 hover:underline"
-                >
-                  Cerrar esta
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <BannerViejas viejas={viejasSinCerrar} onCerrar={setCerrarVieja} />
       {enGrace && r.tipo === 'EN_HORARIO' && (
         <div className="card p-3 bg-saffron-100 text-saffron-600 text-sm flex items-center gap-2">
           ⏳ Ventana de cierre — quedan {r.slot.minutosRestantes} min para cargar ventas tardías
