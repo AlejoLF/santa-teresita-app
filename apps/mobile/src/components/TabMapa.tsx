@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { fmtPesos } from '@/lib/format';
+import { useAutoRefresh } from '@/lib/useAutoRefresh';
+import { RefreshIndicator } from './RefreshIndicator';
 
 interface Pin {
   id: string;
@@ -35,27 +36,25 @@ const COLOR_ESTADO: Record<string, string> = {
  * de 6") y aprovecha apps nativas que ya hacen lo que necesitan.
  */
 export function TabMapa() {
-  const [pines, setPines] = useState<Pin[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    data: pines,
+    error,
+    loading,
+    refreshing,
+    lastUpdated,
+    refetch,
+  } = useAutoRefresh<Pin[]>(
+    async () => {
+      const r = await fetch('/api/mapa');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = (await r.json()) as { pines: Pin[] };
+      return j.pines;
+    },
+    // Deliveries en curso cambian rápido → refresco ágil.
+    { intervalMs: 15_000 },
+  );
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch('/api/mapa');
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as { pines: Pin[] };
-        if (!cancelled) setPines(j.pines);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Error de red');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (error) {
+  if (error && !pines) {
     return (
       <div className="m-4 bg-pomodoro-100 border-l-4 border-pomodoro-600 p-3 rounded-r text-xs text-pomodoro-600">
         ⚠ {error}
@@ -63,7 +62,7 @@ export function TabMapa() {
     );
   }
 
-  if (!pines) {
+  if (loading || !pines) {
     return (
       <div className="p-4 space-y-2">
         {[0, 1, 2, 3].map((i) => (
@@ -77,9 +76,12 @@ export function TabMapa() {
     <div className="p-4">
       <div className="flex items-center justify-between mb-3">
         <h2 className="font-display text-md text-ink-900">Deliveries de hoy</h2>
-        <span className="text-2xs text-ink-500">
-          {pines.length} pedido{pines.length === 1 ? '' : 's'}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-2xs text-ink-500">
+            {pines.length} pedido{pines.length === 1 ? '' : 's'}
+          </span>
+          <RefreshIndicator lastUpdated={lastUpdated} refreshing={refreshing} onRefresh={refetch} />
+        </div>
       </div>
 
       {pines.length === 0 && (
@@ -88,7 +90,7 @@ export function TabMapa() {
         </p>
       )}
 
-      <div className="space-y-2">
+      <div className="space-y-2 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-2">
         {pines.map((p) => (
           <div
             key={p.id}

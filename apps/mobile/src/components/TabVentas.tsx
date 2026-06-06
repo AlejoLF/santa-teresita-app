@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { fmtPesos, fmtFechaHora } from '@/lib/format';
+import { useAutoRefresh } from '@/lib/useAutoRefresh';
+import { RefreshIndicator } from './RefreshIndicator';
 
 type Periodo = 'hoy' | 'semana' | 'mes';
 const CANAL_LABEL: Record<string, string> = {
@@ -29,31 +31,24 @@ interface Venta {
 export function TabVentas() {
   const [periodo, setPeriodo] = useState<Periodo>('hoy');
   const [q, setQ] = useState('');
-  const [data, setData] = useState<Venta[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    const params = new URLSearchParams({ periodo });
-    if (q.trim()) params.set('q', q.trim());
-    (async () => {
-      setData(null);
-      try {
-        const r = await fetch(`/api/ventas?${params}`);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as { ventas: Venta[] };
-        if (!cancelled) setData(j.ventas);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Error de red');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [periodo, q]);
+  const { data, error, loading, refreshing, lastUpdated, refetch } = useAutoRefresh<Venta[]>(
+    async () => {
+      const params = new URLSearchParams({ periodo });
+      if (q.trim()) params.set('q', q.trim());
+      const r = await fetch(`/api/ventas?${params}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = (await r.json()) as { ventas: Venta[] };
+      return j.ventas;
+    },
+    { deps: [periodo, q] },
+  );
 
   return (
     <div className="p-4">
+      <div className="flex justify-end -mt-1 mb-1">
+        <RefreshIndicator lastUpdated={lastUpdated} refreshing={refreshing} onRefresh={refetch} />
+      </div>
       <div className="flex gap-1 mb-3 bg-cream-200 rounded-md p-0.5">
         {(['hoy', 'semana', 'mes'] as Periodo[]).map((p) => (
           <button
@@ -84,7 +79,7 @@ export function TabVentas() {
         </div>
       )}
 
-      {!data && !error && (
+      {loading && !data && (
         <div className="space-y-2">
           {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className="h-16 bg-cream-200 animate-pulse rounded" />
@@ -98,7 +93,7 @@ export function TabVentas() {
         </p>
       )}
 
-      <div className="space-y-2">
+      <div className="space-y-2 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-2">
         {data?.map((v) => (
           <div
             key={v.id}

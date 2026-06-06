@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { fmtPesos, fmtNum, fmtFechaHora } from '@/lib/format';
+import { useAutoRefresh } from '@/lib/useAutoRefresh';
+import { RefreshIndicator } from './RefreshIndicator';
 
 interface ResumenData {
   hoy: { cantidad: string; monto: string; ticket: string };
@@ -29,42 +30,35 @@ const CANAL_LABEL: Record<string, string> = {
 };
 
 export function TabResumen() {
-  const [data, setData] = useState<ResumenData | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, loading, refreshing, lastUpdated, refetch } =
+    useAutoRefresh<ResumenData>(async () => {
+      const r = await fetch('/api/resumen');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return (await r.json()) as ResumenData;
+    });
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch('/api/resumen');
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as ResumenData;
-        if (!cancelled) setData(j);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Error de red');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (error) return <Banner mensaje={error} />;
-  if (!data) return <Skeleton />;
+  if (error && !data) return <Banner mensaje={error} />;
+  if (loading || !data) return <Skeleton />;
 
   return (
     <div className="p-4 space-y-3">
-      <KpiCard titulo="Hoy" data={data.hoy} color="teresita" />
-      <KpiCard titulo="Últimos 7 días" data={data.semana} color="basil" />
-      <KpiCard titulo="Últimos 30 días" data={data.mes} color="ink" />
+      <div className="flex justify-end -mt-1 -mb-1">
+        <RefreshIndicator lastUpdated={lastUpdated} refreshing={refreshing} onRefresh={refetch} />
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <KpiCard titulo="Hoy" data={data.hoy} color="teresita" />
+        <KpiCard titulo="Últimos 7 días" data={data.semana} color="basil" />
+        <KpiCard titulo="Últimos 30 días" data={data.mes} color="ink" />
+      </div>
 
       <div>
         <h2 className="font-display text-md text-ink-900 mt-4 mb-2 px-1">Últimas ventas</h2>
         <div className="space-y-2">
           {data.ultimas.length === 0 && (
             <p className="text-sm text-ink-500 italic text-center py-4">
-              Aún no hay ventas en la cloud DB. Una vez que el sync agent esté
-              corriendo, las ventas de la encargada aparecen acá en tiempo real.
+              Todavía no hay ventas hoy. Apenas la encargada (o esta misma app)
+              cargue una, aparece acá en vivo.
             </p>
           )}
           {data.ultimas.map((v) => (

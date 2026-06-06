@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { TabBar, type TabId } from './TabBar';
+import { TabBar, TABS, type TabId } from './TabBar';
 import { TabResumen } from './TabResumen';
 import { TabVentas } from './TabVentas';
 import { TabAnalytics } from './TabAnalytics';
@@ -19,40 +19,91 @@ export function Dashboard({ nombre, rol }: { nombre: string; rol?: string }) {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-cream-100 safe-top">
-      <header className="bg-teresita-700 text-cream-50 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
-        <div>
-          <p className="font-display text-md leading-tight">Santa Teresita</p>
-          <p className="text-2xs text-cream-100/80">
-            Hola, {nombre}
+    <div className="min-h-screen bg-cream-100 lg:flex">
+      {/* Sidebar — solo desktop/notebook (lg+) */}
+      <aside className="hidden lg:flex lg:flex-col lg:w-60 lg:shrink-0 bg-teresita-700 text-cream-50 min-h-screen sticky top-0">
+        <div className="px-5 py-5 border-b border-cream-50/15">
+          <p className="font-display text-xl leading-tight">Santa Teresita</p>
+          <p className="text-2xs text-cream-100/80 mt-0.5">
+            {nombre}
             {rol ? ` · ${rol}` : ''}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <nav className="flex-1 py-3">
+          {TABS.map((t) => {
+            const sel = t.id === tab;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={
+                  sel
+                    ? 'w-full flex items-center gap-3 px-5 py-3 text-sm font-semibold bg-cream-50/15 border-l-4 border-cream-50'
+                    : 'w-full flex items-center gap-3 px-5 py-3 text-sm text-cream-100/85 border-l-4 border-transparent hover:bg-cream-50/10'
+                }
+              >
+                <span className="text-lg leading-none">{t.icon}</span>
+                {t.label}
+              </button>
+            );
+          })}
+        </nav>
+        <div className="p-4 space-y-2 border-t border-cream-50/15">
           <button
             onClick={() => router.push('/cargar-pedido')}
-            className="text-2xs px-2 py-1 rounded bg-cream-50 text-teresita-700 font-semibold"
-            title="Cargar pedido (modo vendedor)"
+            className="w-full py-2 rounded-md bg-cream-50 text-teresita-700 text-sm font-semibold"
           >
-            + Pedido
+            + Cargar pedido
           </button>
           <button
             onClick={logout}
-            className="text-2xs px-2 py-1 rounded bg-teresita-900/30 text-cream-50"
+            className="w-full py-2 rounded-md bg-teresita-900/40 text-cream-50 text-sm"
           >
             Salir
           </button>
         </div>
-      </header>
+      </aside>
 
-      <main className="flex-1 overflow-y-auto pb-20 safe-bottom">
-        {tab === 'resumen' && <TabResumen />}
-        {tab === 'ventas' && <TabVentas />}
-        {tab === 'analytics' && <TabAnalytics />}
-        {tab === 'productos' && <TabProductos />}
-        {tab === 'mapa' && <TabMapa />}
-      </main>
+      {/* Columna principal */}
+      <div className="flex-1 flex flex-col min-w-0 safe-top">
+        {/* Header — solo mobile/tablet angosto (lg- oculta) */}
+        <header className="lg:hidden bg-teresita-700 text-cream-50 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
+          <div>
+            <p className="font-display text-md leading-tight">Santa Teresita</p>
+            <p className="text-2xs text-cream-100/80">
+              Hola, {nombre}
+              {rol ? ` · ${rol}` : ''}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => router.push('/cargar-pedido')}
+              className="text-2xs px-2 py-1 rounded bg-cream-50 text-teresita-700 font-semibold"
+              title="Cargar pedido (modo vendedor)"
+            >
+              + Pedido
+            </button>
+            <button
+              onClick={logout}
+              className="text-2xs px-2 py-1 rounded bg-teresita-900/30 text-cream-50"
+            >
+              Salir
+            </button>
+          </div>
+        </header>
 
+        <main className="flex-1 overflow-y-auto pb-20 lg:pb-8 safe-bottom">
+          <div className="mx-auto w-full max-w-3xl lg:max-w-5xl">
+            {tab === 'resumen' && <TabResumen />}
+            {tab === 'ventas' && <TabVentas />}
+            {tab === 'analytics' && <TabAnalytics />}
+            {tab === 'productos' && <TabProductos />}
+            {tab === 'mapa' && <TabMapa />}
+          </div>
+        </main>
+      </div>
+
+      {/* Barra inferior — solo mobile/tablet angosto */}
       <TabBar activo={tab} onChange={setTab} />
     </div>
   );

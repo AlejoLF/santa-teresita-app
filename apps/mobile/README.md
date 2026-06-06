@@ -1,7 +1,15 @@
 # Santa Teresita Mobile (PWA)
 
-Panel de consulta **read-only** para Julio (dueño) y la encargada — instalable
-en iPhone/Android sin App Store. Conecta directo a Supabase.
+App web instalable (iPhone / Android / iPad / notebook) que pega **directo a
+Supabase**, sin App Store y sin instalar el `.exe`. Dos usos según el rol del PIN:
+
+- **Encargada / vendedor (rol VENDEDOR):** carga pedidos directo a la cloud DB
+  (`/cargar-pedido`) — catálogo + carrito + cobro. Útil desde una tablet en el
+  salón, o como respaldo si la caja desktop está caída.
+- **Julio / gerencia (rol ADMIN):** dashboard de **estadísticas en vivo**
+  (auto-refresh por polling) + puede también cargar pedidos.
+
+Mismo PIN que en el desktop (validado contra `usuarios.pin_hash`).
 
 ## Stack
 
@@ -16,19 +24,32 @@ en iPhone/Android sin App Store. Conecta directo a Supabase.
 2. Login con su PIN (mismo que tiene en el desktop, validado contra `usuarios.pin_hash`).
 3. Backend firma JWT con `MOBILE_AUTH_SECRET` y lo guarda en cookie httpOnly.
 4. API routes verifican el JWT en cada request.
-5. Solo usuarios con rol `ADMIN` pueden entrar — el PIN del cajero no funciona en mobile.
+5. Entran roles `ADMIN` y `VENDEDOR`. El rol viaja en el JWT: `VENDEDOR` cae en
+   `/cargar-pedido`; `ADMIN` ve el dashboard (y puede ir a cargar pedido con el
+   botón "+ Pedido").
 
-## Tabs disponibles
+## Cargar pedido (escritura)
 
-| Tab | Endpoint API | Qué muestra |
-|---|---|---|
-| Resumen | `/api/resumen` | KPIs hoy/7d/30d + últimas 10 ventas |
-| Ventas | `/api/ventas?periodo=&q=` | Lista filtrable de últimas 100 ventas |
-| Analytics | `/api/analytics` | Top productos, ventas por canal, top clientes, tendencia 14d |
-| Productos | `/api/productos?q=` | Browse del catálogo, agrupado por categoría |
-| Mapa | `/api/mapa` | Deliveries del día con botones "Llamar" + "Ir" (abren apps nativas) |
+`POST /api/ventas` crea la venta **FINALIZADA** en una sola transacción contra
+Supabase: sesión de caja (reusa la ABIERTA del turno o crea una), items, pago,
+delivery info y una fila de audit en el hash-chain de la cloud (`origen='cloud'`).
 
-Todo es **solo lectura**. No hay endpoints de escritura.
+Seguridad: **los precios se recalculan server-side** (lista por canal +
+override), NUNCA se confía en el `precioUnitario` del cliente. El monto del pago
+nunca puede ser menor al total server-side. (Endurecido en el acid-test, alpha.39.)
+
+## Tabs del dashboard (lectura, en vivo)
+
+Cada tab refresca solo por polling (pausa cuando la pantalla está oculta, vuelve
+a tirar al recuperar foco). Indicador "EN VIVO · hace Xs" arriba a la derecha.
+
+| Tab | Endpoint API | Refresh | Qué muestra |
+|---|---|---|---|
+| Resumen | `/api/resumen` | 20s | KPIs hoy/7d/30d + últimas 10 ventas |
+| Ventas | `/api/ventas?periodo=&q=` | 20s | Lista filtrable de últimas 100 ventas |
+| Analytics | `/api/analytics` | 60s | Top productos, ventas por canal, top clientes, tendencia 14d |
+| Productos | `/api/productos?q=` | — | Browse del catálogo, agrupado por categoría |
+| Mapa | `/api/mapa` | 15s | Deliveries del día con botones "Llamar" + "Ir" (abren apps nativas) |
 
 ## Deploy en Vercel
 
@@ -40,6 +61,11 @@ Todo es **solo lectura**. No hay endpoints de escritura.
    |---|---|
    | `SUPABASE_DB_URL_POOLED` | Mismo string de Supabase Pooler IPv4-compatible que usás en el repo raíz |
    | `MOBILE_AUTH_SECRET` | Generar con `openssl rand -hex 32` |
+   | `AUDIT_HASH_SALT` | **Mismo valor** que en las cajas / el server. Sin esto, las ventas cargadas desde la PWA quedan con audit sin firmar (`NO_SALT_CLOUD`) hasta el catch-up del server local. |
+
+   > **Íconos PWA:** se generan con `node apps/mobile/scripts/gen-icons.mjs`
+   > (encoder PNG en Node puro, sin deps). Ya están committeados en `public/`;
+   > re-correr solo si cambiás la marca.
 
 4. Deploy.
 
@@ -64,10 +90,11 @@ En Android es el mismo flujo desde Chrome → "Agregar a pantalla de inicio".
 
 ## Limitaciones (por ahora)
 
-- **Solo lectura.** Ni Julio ni la encargada pueden cargar/anular ventas
-  desde mobile. Para eso usan la app desktop (la encargada en su PC del local).
-- **Necesita conexión a internet.** No funciona offline. Si la encargada está
-  en un lugar sin señal y quiere consultar, no puede.
+- **Carga de pedidos simplificada.** Single-pago (no multi-cuenta), sin combos
+  y 1 modificador por ítem. **No anula** ventas ni imprime comanda (no hay
+  impresora en mobile). Para multi-pago / anulación / impresión → app desktop.
+- **Necesita conexión a internet.** No funciona offline (no hay service worker
+  todavía). Si no hay señal, no carga ni consulta.
 - **No hay push notifications** todavía. iOS las soporta desde 16.4 pero
   hay que armar el backend de Web Push — TODO post-MVP.
 - **El mapa NO renderiza un mapa.** Muestra lista de deliveries con botones
@@ -77,14 +104,11 @@ En Android es el mismo flujo desde Chrome → "Agregar a pantalla de inicio".
 
 ## Datos en cloud
 
-La cloud DB (Supabase) actualmente tiene **catálogo y configuración** seedeados
-pero **0 ventas / movimientos / sesiones**. Esos vienen del **sync agent
-local→cloud** que aún no está construido. Hasta entonces:
+El `.exe` v2.x corre **cloud-first**: las cajas escriben directo a Supabase. O
+sea la cloud DB **ya es la base de producción en vivo** — cada venta de la
+encargada está ahí en el momento. La PWA lee de la misma DB, así que los KPIs y
+las listas reflejan lo que pasa en el local, con el delay del polling (15–60s
+según tab). No depende de ningún "sync agent" aparte.
 
-- Tab Resumen: muestra "0 ventas, $0" (esperado).
-- Tab Ventas: lista vacía.
-- Tab Analytics: gráficos vacíos.
-- Tab Productos: ✅ funciona (catálogo está seedeado).
-- Tab Mapa: lista vacía.
-
-Cuando el sync agent esté online, la PWA empieza a tener datos en tiempo real.
+(Cuando se despliegue el mini-PC con Postgres local como fuente de verdad, el
+replicador transaccional sigue empujando a Supabase y la PWA no cambia.)

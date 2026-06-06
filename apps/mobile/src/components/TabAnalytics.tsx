@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { fmtPesos, fmtNum } from '@/lib/format';
+import { useAutoRefresh } from '@/lib/useAutoRefresh';
+import { RefreshIndicator } from './RefreshIndicator';
 
 const CANAL_LABEL: Record<string, string> = {
   MOSTRADOR: 'Mostrador',
@@ -22,27 +23,17 @@ interface Data {
 }
 
 export function TabAnalytics() {
-  const [data, setData] = useState<Data | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, loading, refreshing, lastUpdated, refetch } = useAutoRefresh<Data>(
+    async () => {
+      const r = await fetch('/api/analytics');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return (await r.json()) as Data;
+    },
+    // Analytics es más pesado (30 días agregados) → refrescamos más espaciado.
+    { intervalMs: 60_000 },
+  );
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch('/api/analytics');
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as Data;
-        if (!cancelled) setData(j);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Error de red');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (error) {
+  if (error && !data) {
     return (
       <div className="m-4 bg-pomodoro-100 border-l-4 border-pomodoro-600 p-3 rounded-r text-xs text-pomodoro-600">
         ⚠ {error}
@@ -50,7 +41,7 @@ export function TabAnalytics() {
     );
   }
 
-  if (!data) {
+  if (loading || !data) {
     return (
       <div className="p-4 space-y-3">
         {[0, 1, 2, 3].map((i) => (
@@ -65,8 +56,11 @@ export function TabAnalytics() {
   const max = Math.max(1, ...valores);
 
   return (
-    <div className="p-4 space-y-4">
-      <div className="bg-white rounded-lg border border-cream-300 p-3">
+    <div className="p-4 space-y-4 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-4 lg:items-start">
+      <div className="flex justify-end -mt-1 -mb-2 lg:col-span-2 lg:mb-0">
+        <RefreshIndicator lastUpdated={lastUpdated} refreshing={refreshing} onRefresh={refetch} />
+      </div>
+      <div className="bg-white rounded-lg border border-cream-300 p-3 lg:col-span-2">
         <h2 className="font-display text-sm text-ink-700 mb-2">
           Tendencia últimos 14 días
         </h2>

@@ -208,12 +208,13 @@ export function CargarPedido({ nombre, rol }: { nombre: string; rol: string }) {
 
       {/* Lista productos */}
       <main className="flex-1 overflow-y-auto px-3 py-2 pb-32">
-        {loading && <p className="text-center text-ink-500 mt-8">Cargando catálogo…</p>}
-        {error && <p className="text-center text-pomodoro-600 mt-8">Error: {error}</p>}
-        {!loading && !error && productosFiltrados.length === 0 && (
-          <p className="text-center text-ink-500 mt-8">Sin resultados</p>
-        )}
-        <ul className="space-y-2">
+        <div className="mx-auto w-full max-w-5xl">
+          {loading && <p className="text-center text-ink-500 mt-8">Cargando catálogo…</p>}
+          {error && <p className="text-center text-pomodoro-600 mt-8">Error: {error}</p>}
+          {!loading && !error && productosFiltrados.length === 0 && (
+            <p className="text-center text-ink-500 mt-8">Sin resultados</p>
+          )}
+          <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
           {productosFiltrados.map((p) => (
             <li key={p.id}>
               <button
@@ -234,14 +235,15 @@ export function CargarPedido({ nombre, rol }: { nombre: string; rol: string }) {
               </button>
             </li>
           ))}
-        </ul>
+          </ul>
+        </div>
       </main>
 
       {/* Carrito flotante */}
       {carrito.length > 0 && (
         <button
           onClick={() => setMostrarCobro(true)}
-          className="fixed bottom-4 left-4 right-4 bg-teresita-700 text-cream-50 px-4 py-3 rounded-md font-semibold shadow-lg flex items-center justify-between safe-bottom"
+          className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:w-96 lg:right-8 bg-teresita-700 text-cream-50 px-4 py-3 rounded-md font-semibold shadow-lg flex items-center justify-between safe-bottom z-20"
         >
           <span>
             {carrito.length} ítem{carrito.length === 1 ? '' : 's'} · {formatARS(subtotalCarrito)}
@@ -310,9 +312,12 @@ function ProductoModal({
   const total = precioFinal * cantidad;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-end" onClick={onCerrar}>
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center"
+      onClick={onCerrar}
+    >
       <div
-        className="bg-white w-full rounded-t-xl p-4 max-h-[85vh] overflow-y-auto safe-bottom"
+        className="bg-white w-full sm:max-w-md rounded-t-xl sm:rounded-xl p-4 max-h-[85vh] overflow-y-auto safe-bottom"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between mb-3">
@@ -502,9 +507,12 @@ function CobroModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40" onClick={onCerrar}>
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center"
+      onClick={onCerrar}
+    >
       <div
-        className="absolute inset-x-0 bottom-0 bg-white rounded-t-xl p-4 max-h-[90vh] overflow-y-auto safe-bottom"
+        className="w-full sm:max-w-md bg-white rounded-t-xl sm:rounded-xl p-4 max-h-[90vh] overflow-y-auto safe-bottom"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between mb-3">

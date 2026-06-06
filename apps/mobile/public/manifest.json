@@ -4,7 +4,7 @@
   "description": "Panel de consulta — Santa Teresita Pastas",
   "start_url": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#fdfbf7",
   "theme_color": "#1f4d3c",
   "lang": "es-AR",

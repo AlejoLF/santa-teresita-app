@@ -48,7 +48,7 @@ export default function LoginPage() {
       <div className="text-center mb-8">
         <div className="text-6xl mb-2">🍝</div>
         <h1 className="font-display text-3xl text-teresita-700">Santa Teresita</h1>
-        <p className="text-sm text-ink-500 mt-1">Panel de consulta</p>
+        <p className="text-sm text-ink-500 mt-1">Pedidos · estadísticas en vivo</p>
       </div>
 
       <div className="w-full max-w-xs">
@@ -107,7 +107,7 @@ export default function LoginPage() {
       </div>
 
       <p className="text-2xs text-ink-300 mt-8 text-center max-w-xs">
-        Solo administradores pueden acceder. Si el PIN no funciona, pedile a Alejo que verifique tu usuario en el panel desktop.
+        Ingresá con tu PIN del local. Si no funciona, pedile a Alejo que verifique tu usuario en el panel desktop.
       </p>
     </div>
   );

@@ -90,7 +90,7 @@ export function TabProductos() {
               {cat}{' '}
               <span className="text-2xs text-ink-500 font-normal">({prods.length})</span>
             </h2>
-            <div className="space-y-1">
+            <div className="space-y-1 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-1">
               {prods.map((p) => (
                 <div
                   key={p.id}

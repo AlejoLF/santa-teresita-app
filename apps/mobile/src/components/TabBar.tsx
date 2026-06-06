@@ -2,7 +2,7 @@
 
 export type TabId = 'resumen' | 'ventas' | 'analytics' | 'productos' | 'mapa';
 
-const TABS: Array<{ id: TabId; label: string; icon: string }> = [
+export const TABS: Array<{ id: TabId; label: string; icon: string }> = [
   { id: 'resumen', label: 'Resumen', icon: '📊' },
   { id: 'ventas', label: 'Ventas', icon: '🧾' },
   { id: 'analytics', label: 'Analytics', icon: '📈' },
@@ -10,10 +10,11 @@ const TABS: Array<{ id: TabId; label: string; icon: string }> = [
   { id: 'mapa', label: 'Mapa', icon: '🗺️' },
 ];
 
+/** Barra inferior — solo mobile/tablet angosto (en lg+ se usa el sidebar). */
 export function TabBar({ activo, onChange }: { activo: TabId; onChange: (t: TabId) => void }) {
   return (
     <nav
-      className="fixed bottom-0 left-0 right-0 bg-white border-t border-cream-300 flex justify-around safe-bottom"
+      className="fixed bottom-0 left-0 right-0 bg-white border-t border-cream-300 flex justify-around safe-bottom lg:hidden z-10"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
       {TABS.map((t) => {
