@@ -157,6 +157,14 @@ export function CargarPedido({ nombre, rol }: { nombre: string; rol: string }) {
           <p className="text-2xs text-cream-100/80">{nombre}</p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => window.dispatchEvent(new Event('sta:install-open'))}
+            className="text-sm px-2 py-1 rounded bg-teresita-900/30 text-cream-50"
+            title="Usar como app (agregar a inicio)"
+            aria-label="Usar como app"
+          >
+            📱
+          </button>
           {rol === 'ADMIN' && (
             <button
               onClick={() => router.push('/')}

@@ -2,12 +2,17 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { TabBar, TABS, type TabId } from './TabBar';
+import { TabBar, ALL_TABS, type TabId } from './TabBar';
 import { TabResumen } from './TabResumen';
+import { TabCaja } from './TabCaja';
 import { TabVentas } from './TabVentas';
 import { TabAnalytics } from './TabAnalytics';
 import { TabProductos } from './TabProductos';
 import { TabMapa } from './TabMapa';
+import { TabClientes } from './TabClientes';
+import { TabInsumos } from './TabInsumos';
+import { TabEmpleados } from './TabEmpleados';
+import { TabMayoristas } from './TabMayoristas';
 
 export function Dashboard({ nombre, rol }: { nombre: string; rol?: string }) {
   const router = useRouter();
@@ -29,8 +34,8 @@ export function Dashboard({ nombre, rol }: { nombre: string; rol?: string }) {
             {rol ? ` · ${rol}` : ''}
           </p>
         </div>
-        <nav className="flex-1 py-3">
-          {TABS.map((t) => {
+        <nav className="flex-1 py-3 overflow-y-auto">
+          {ALL_TABS.map((t) => {
             const sel = t.id === tab;
             return (
               <button
@@ -56,6 +61,12 @@ export function Dashboard({ nombre, rol }: { nombre: string; rol?: string }) {
             + Cargar pedido
           </button>
           <button
+            onClick={() => window.dispatchEvent(new Event('sta:install-open'))}
+            className="w-full py-2 rounded-md text-cream-100/85 text-xs hover:bg-cream-50/10"
+          >
+            📱 Usar como app
+          </button>
+          <button
             onClick={logout}
             className="w-full py-2 rounded-md bg-teresita-900/40 text-cream-50 text-sm"
           >
@@ -77,6 +88,14 @@ export function Dashboard({ nombre, rol }: { nombre: string; rol?: string }) {
           </div>
           <div className="flex items-center gap-2">
             <button
+              onClick={() => window.dispatchEvent(new Event('sta:install-open'))}
+              className="text-sm px-2 py-1 rounded bg-teresita-900/30 text-cream-50"
+              title="Usar como app (agregar a inicio)"
+              aria-label="Usar como app"
+            >
+              📱
+            </button>
+            <button
               onClick={() => router.push('/cargar-pedido')}
               className="text-2xs px-2 py-1 rounded bg-cream-50 text-teresita-700 font-semibold"
               title="Cargar pedido (modo vendedor)"
@@ -95,10 +114,15 @@ export function Dashboard({ nombre, rol }: { nombre: string; rol?: string }) {
         <main className="flex-1 overflow-y-auto pb-20 lg:pb-8 safe-bottom">
           <div className="mx-auto w-full max-w-3xl lg:max-w-5xl">
             {tab === 'resumen' && <TabResumen />}
+            {tab === 'caja' && <TabCaja />}
             {tab === 'ventas' && <TabVentas />}
             {tab === 'analytics' && <TabAnalytics />}
-            {tab === 'productos' && <TabProductos />}
             {tab === 'mapa' && <TabMapa />}
+            {tab === 'productos' && <TabProductos />}
+            {tab === 'clientes' && <TabClientes />}
+            {tab === 'insumos' && <TabInsumos />}
+            {tab === 'empleados' && <TabEmpleados />}
+            {tab === 'mayoristas' && <TabMayoristas />}
           </div>
         </main>
       </div>
