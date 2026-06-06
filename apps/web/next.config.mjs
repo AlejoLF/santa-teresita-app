@@ -28,6 +28,22 @@ const nextConfig = {
     NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE: (process.env.VERCEL_GIT_COMMIT_MESSAGE ?? '').slice(0, 100),
     NEXT_PUBLIC_VERCEL_DEPLOY_TIME: new Date().toISOString(),
   },
+  // Headers de seguridad (mismo set que la PWA, que sí los tenía). X-Frame-Options
+  // DENY cierra clickjacking; nosniff evita MIME-sniffing; Referrer-Policy limita
+  // el leak. (Una CSP estricta queda como follow-up: Next inyecta scripts inline
+  // y requiere nonce/unsafe-inline afinado para no romper la app.)
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+        ],
+      },
+    ];
+  },
   // El package @sta/shared usa imports ESM con extensión .js que apuntan a .ts (NodeNext-style).
   // Webpack por defecto no hace ese mapping → le decimos cómo.
   webpack: (config) => {

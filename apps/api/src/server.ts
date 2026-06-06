@@ -92,26 +92,18 @@ export async function buildServer() {
     threshold: 1024,
     encodings: ['gzip', 'deflate'],
   });
-  // CORS: lista explícita + wildcard `*.vercel.app` para que cualquier
-  // preview deploy de Vercel pueda hablarle al API local. La cookie
-  // viaja con `credentials: true`, pero en cross-origin el web usa
-  // tokens en localStorage + Authorization header (las cookies cross-
-  // origin requieren SameSite=None+Secure y el API es HTTP).
+  // CORS: SOLO la lista explícita de API_CORS_ORIGINS. Seguridad (audit): antes
+  // se aceptaba cualquier `*.vercel.app` con `credentials:true` — y cualquiera
+  // puede deployar un proyecto a *.vercel.app, así que un atacante hospedaba
+  // `evil.vercel.app` y hacía requests con credenciales al API. Si necesitás un
+  // preview deploy, agregá su origen exacto a API_CORS_ORIGINS.
   const allowedExact = config.API_CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
   await app.register(cors, {
     origin: (origin, cb) => {
-      if (!origin) return cb(null, true); // requests sin Origin (Postman, server-to-server)
+      // Sin Origin = request no-browser (server-to-server, el propio .exe). CORS
+      // sólo aplica a browsers; no es un vector de ataque.
+      if (!origin) return cb(null, true);
       if (allowedExact.includes(origin)) return cb(null, true);
-      // Wildcard: cualquier subdominio *.vercel.app es aceptable. Esto
-      // permite preview deploys (PRs) y branches sin tener que actualizar
-      // la lista cada vez. El riesgo es bajo porque el API local está en
-      // 127.0.0.1 — solo accesible desde la máquina del usuario.
-      try {
-        const u = new URL(origin);
-        if (u.hostname.endsWith('.vercel.app')) return cb(null, true);
-      } catch {
-        /* malformed origin */
-      }
       cb(new Error(`Origin no permitido: ${origin}`), false);
     },
     credentials: true,

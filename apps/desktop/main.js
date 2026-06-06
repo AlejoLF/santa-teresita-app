@@ -813,6 +813,42 @@ function createMainWindow() {
     }
     return { action: 'deny' };
   });
+
+  // Guard de navegación TOP-LEVEL del frame principal. setWindowOpenHandler solo
+  // cubre window.open/ventanas nuevas, NO la navegación del frame existente. Sin
+  // esto, un XSS en el web o un config.json manipulado (webRemoteUrl) podía
+  // llevar el frame a un sitio atacante. Por contextIsolation no hay Node/RCE,
+  // pero podría phishear el PIN o abusar de la sesión. Permitimos solo: data:
+  // (página de error), loopback (web local) y el origen remoto configurado.
+  // Seguridad: H1 del audit.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      event.preventDefault();
+      return;
+    }
+    if (parsed.protocol === 'data:') return;
+    if (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') return;
+    const remoto = leerWebRemoteUrl();
+    if (remoto) {
+      try {
+        if (new URL(remoto).origin === parsed.origin) return;
+      } catch {
+        /* webRemoteUrl malformado → no permitir */
+      }
+    }
+    event.preventDefault();
+    log('will-navigate BLOQUEADO: ' + url);
+    // Si es un host externo conocido, lo abrimos en el browser del sistema.
+    const externo = ALLOWED_EXTERNAL_HOSTS.some(
+      (h) => parsed.hostname === h || parsed.hostname.endsWith('.' + h),
+    );
+    if (externo && (parsed.protocol === 'https:' || parsed.protocol === 'http:')) {
+      void shell.openExternal(url);
+    }
+  });
 }
 
 // ═══ Lifecycle ═════════════════════════════════════════════════════════════
