@@ -13,7 +13,11 @@ import {
   quitarItemDeVenta,
   editarItemDeVenta,
 } from '../services/venta.js';
-import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
+import {
+  getOrCreateSesionActual,
+  getSesionActualReadOnly,
+  FueraDeHorarioError,
+} from '../services/sesion-caja.js';
 import { recordAudit } from '../services/audit.js';
 import { aprobarConPinAdmin } from '../services/auth.js';
 import {
@@ -24,6 +28,22 @@ import {
 } from '../services/impresion.js';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta, EstadoPago } from '@sta/db';
+
+/**
+ * IDOR guard (A3 del audit): un VENDEDOR sólo puede ver/operar ventas de SU
+ * sesión actual; un ADMIN (o el agente virtual) cualquiera. Antes, los endpoints
+ * resolvían la venta sólo por UUID sin chequear a quién pertenece, así que un
+ * cajero podía editar/finalizar/anular ventas de otra sesión pasando el id.
+ * Los handlers responden 404 (no 403) en cross-scope para no filtrar existencia.
+ */
+async function ventaEnScope(
+  req: { usuario?: { rol: string } | null },
+  venta: { sesionCajaId: string | null },
+): Promise<boolean> {
+  if (req.usuario?.rol === 'ADMIN') return true;
+  const { sesion } = await getSesionActualReadOnly();
+  return !!sesion && venta.sesionCajaId === sesion.id;
+}
 
 export default async function ventasRoutes(fastify: FastifyInstance) {
   // POST /ventas — crea una venta nueva en estado PROCESADA.
@@ -62,6 +82,9 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       const params = req.params as { id: string };
       const venta = await getVentaCompleta(params.id);
       if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (!(await ventaEnScope(req, venta))) {
+        return reply.code(404).send({ error: 'Venta no encontrada' });
+      }
       return venta;
     },
   );
@@ -175,6 +198,9 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       };
       const venta = await prisma.venta.findUnique({ where: { id: params.id } });
       if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (!(await ventaEnScope(req, venta))) {
+        return reply.code(404).send({ error: 'Venta no encontrada' });
+      }
       if (venta.estado !== EstadoVenta.PROCESADA) {
         return reply
           .code(400)
@@ -234,6 +260,9 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       };
       const venta = await prisma.venta.findUnique({ where: { id: params.id } });
       if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (!(await ventaEnScope(req, venta))) {
+        return reply.code(404).send({ error: 'Venta no encontrada' });
+      }
 
       // Mapear el "repartidor" elegido a los campos del modelo:
       //   DAMIAN / OTRO_EMPLEADO → guardamos el nombre en empleadoNombre como override del snapshot
@@ -363,6 +392,9 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
 
       const venta = await prisma.venta.findUnique({ where: { id: params.id } });
       if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (!(await ventaEnScope(req, venta))) {
+        return reply.code(404).send({ error: 'Venta no encontrada' });
+      }
       if (venta.estado !== EstadoVenta.PROCESADA) {
         return reply.code(400).send({
           error: 'Solo se pueden agregar items a ventas en estado PROCESADA',
@@ -416,6 +448,9 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       const body = req.body as { productoId?: string; tipo?: 'SIMPLE' | 'DOBLE' };
       const venta = await prisma.venta.findUnique({ where: { id: params.id } });
       if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (!(await ventaEnScope(req, venta))) {
+        return reply.code(404).send({ error: 'Venta no encontrada' });
+      }
       if (venta.estado !== EstadoVenta.PROCESADA) {
         return reply.code(400).send({
           error: 'Solo se pueden agregar envíos a ventas en estado PROCESADA',
@@ -476,6 +511,9 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
 
       const venta = await prisma.venta.findUnique({ where: { id: params.id } });
       if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (!(await ventaEnScope(req, venta))) {
+        return reply.code(404).send({ error: 'Venta no encontrada' });
+      }
       if (venta.estado !== EstadoVenta.PROCESADA) {
         return reply.code(400).send({
           error: 'Solo se pueden editar items de ventas PROCESADAS',
@@ -516,6 +554,9 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
 
       const venta = await prisma.venta.findUnique({ where: { id: params.id } });
       if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (!(await ventaEnScope(req, venta))) {
+        return reply.code(404).send({ error: 'Venta no encontrada' });
+      }
       if (venta.estado !== EstadoVenta.PROCESADA) {
         return reply.code(400).send({
           error: 'Solo se pueden quitar items de ventas PROCESADAS',
@@ -555,6 +596,9 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
         include: { pagos: true },
       });
       if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (!(await ventaEnScope(req, venta))) {
+        return reply.code(404).send({ error: 'Venta no encontrada' });
+      }
       if (venta.estado !== EstadoVenta.PROCESADA) {
         return reply.code(400).send({ error: 'La venta no está en estado PROCESADA' });
       }
@@ -691,6 +735,9 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
 
       const venta = await prisma.venta.findUnique({ where: { id: params.id } });
       if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
+      if (!(await ventaEnScope(req, venta))) {
+        return reply.code(404).send({ error: 'Venta no encontrada' });
+      }
       if (venta.estado === EstadoVenta.ANULADA) {
         return reply.code(400).send({ error: 'La venta ya está anulada' });
       }
