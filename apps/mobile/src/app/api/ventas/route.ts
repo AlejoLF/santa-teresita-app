@@ -243,14 +243,31 @@ export async function POST(req: NextRequest) {
       sesionId = nuevaSesion.rows[0].id;
     }
 
-    // 2) Lista de precios por defecto (la primera activa)
-    const lista = await client.query<{ id: string }>(
-      `SELECT id::text FROM listas_precios WHERE activa = true ORDER BY nombre LIMIT 1`,
+    // 2) Lista de precios por CANAL (no "la primera activa" — así RAPPI/PYA/ML
+    //    usan su lista). Mismo criterio que el desktop (canal_default).
+    const CANAL_A_LISTA: Record<string, string> = {
+      MOSTRADOR: 'LOCAL_MOSTRADOR',
+      TELEFONO: 'LOCAL_MOSTRADOR',
+      WHATSAPP: 'LOCAL_MOSTRADOR',
+      WEB: 'LOCAL_MOSTRADOR',
+      RAPPI: 'RAPPI',
+      PEDIDOS_YA: 'PEDIDOS_YA',
+      MERCADO_LIBRE: 'MERCADO_LIBRE',
+      DELIVERATE: 'DELIVERATE',
+    };
+    const canalLista = CANAL_A_LISTA[body.canal] ?? 'LOCAL_MOSTRADOR';
+    const lista = await client.query<{ id: string; ajuste: string }>(
+      `SELECT id::text, COALESCE(ajuste_pct_default, 0)::text AS ajuste
+         FROM listas_precios
+        WHERE canal_default = $1::"CanalListaPrecios" AND activa = true
+        ORDER BY nombre LIMIT 1`,
+      [canalLista],
     );
     if (lista.rows.length === 0) {
-      throw new Error('No hay listas de precios activas');
+      throw new Error('No hay lista de precios activa para el canal ' + body.canal);
     }
     const listaPreciosId = lista.rows[0].id;
+    const ajustePct = Number(lista.rows[0].ajuste) || 0;
 
     // 3) Cuenta para el pago: si viene cuentaId la usamos; sino resolvemos por método.
     let cuentaId = body.cobro.cuentaId;
@@ -304,13 +321,46 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 5) Compute subtotal + descuento. Regla del local: efectivo = -10%.
+    // 5) Precios SERVER-SIDE. Seguridad (C3): NUNCA confiamos en
+    //    item.precioUnitario del body (un cliente mandaba 0.01 y vendía gratis).
+    //    Resolvemos precio_base + override de la lista por producto, igual que
+    //    el desktop. El delta de modificador en la PWA es 0.
+    const ids = [...new Set(body.items.map((it) => it.productoId))];
+    const prods = await client.query<{
+      id: string;
+      precio_base: string;
+      nombre: string;
+      forma_venta: string;
+      cocina_interviene: boolean;
+      precio_override: string | null;
+    }>(
+      `SELECT p.id::text, p.precio_base::text, p.nombre,
+              p.forma_venta::text AS forma_venta, tp.cocina_interviene,
+              (SELECT ppl.precio_efectivo::text FROM precios_por_lista ppl
+                WHERE ppl.producto_id = p.id AND ppl.lista_id = $1 LIMIT 1) AS precio_override
+         FROM productos p
+         JOIN tipos_producto tp ON tp.id = p.tipo_producto_id
+        WHERE p.id = ANY($2::uuid[])`,
+      [listaPreciosId, ids],
+    );
+    const prodMap = new Map(prods.rows.map((p) => [p.id, p]));
+    const precioServer = (productoId: string): number => {
+      const p = prodMap.get(productoId);
+      if (!p) throw new Error(`Producto no encontrado: ${productoId}`);
+      const base =
+        p.precio_override != null
+          ? Number(p.precio_override)
+          : Number(p.precio_base) * (1 + ajustePct / 100);
+      return Math.max(0, Math.round(base * 100) / 100);
+    };
+
     let subtotal = 0;
     for (const item of body.items) {
-      subtotal += Number(item.precioUnitario) * item.cantidad;
+      subtotal += precioServer(item.productoId) * item.cantidad;
     }
+    subtotal = Math.round(subtotal * 100) / 100;
     const aplicaDescEfectivo = body.cobro.metodo === 'EFECTIVO';
-    const descuento = aplicaDescEfectivo ? Math.round(subtotal * 0.10 * 100) / 100 : 0;
+    const descuento = aplicaDescEfectivo ? Math.round(subtotal * 0.1 * 100) / 100 : 0;
     const total = subtotal - descuento;
 
     // 6) Numero de orden del turno (atómico)
@@ -324,7 +374,9 @@ export async function POST(req: NextRequest) {
     const numeroOrdenTurno = numOrden.rows[0].ultimo_numero_orden;
 
     // 7) Insert venta (FINALIZADA directamente)
-    const tieneCocina = body.items.some((it) => it.opcionId); // heurística simple
+    const tieneCocina = body.items.some(
+      (it) => prodMap.get(it.productoId)?.cocina_interviene ?? false,
+    );
     const ventaIns = await client.query<{ id: string; numero: number }>(
       `INSERT INTO ventas (
         id, numero_orden_turno, canal, modalidad, estado, cliente_id, lista_precios_id,
@@ -359,29 +411,14 @@ export async function POST(req: NextRequest) {
     const ventaId = ventaIns.rows[0].id;
     const ventaNumero = ventaIns.rows[0].numero;
 
-    // 8) Items
+    // 8) Items — precio y datos del producto del SERVIDOR (prodMap), nunca del body.
     for (let i = 0; i < body.items.length; i++) {
       const item = body.items[i];
-      // snapshot del nombre — leemos producto + opcion
-      const prod = await client.query<{
-        nombre: string;
-        forma_venta: string;
-        cocina_interviene: boolean;
-      }>(
-        `SELECT p.nombre, p.forma_venta::text AS forma_venta, tp.cocina_interviene
-         FROM productos p
-         JOIN tipos_producto tp ON tp.id = p.tipo_producto_id
-         WHERE p.id = $1`,
-        [item.productoId],
-      );
-      if (prod.rows.length === 0) {
-        throw new Error(`Producto no encontrado: ${item.productoId}`);
-      }
-      const nombreSnap = item.opcionNombre
-        ? `${prod.rows[0].nombre} (${item.opcionNombre})`
-        : prod.rows[0].nombre;
-      const subtotalLinea =
-        Math.round(Number(item.precioUnitario) * item.cantidad * 100) / 100;
+      const p = prodMap.get(item.productoId);
+      if (!p) throw new Error(`Producto no encontrado: ${item.productoId}`);
+      const precioUnit = precioServer(item.productoId);
+      const nombreSnap = item.opcionNombre ? `${p.nombre} (${item.opcionNombre})` : p.nombre;
+      const subtotalLinea = Math.round(precioUnit * item.cantidad * 100) / 100;
       const modificadores = item.opcionId
         ? JSON.stringify([
             { opcionId: item.opcionId, nombre: item.opcionNombre, deltaPrecio: 0 },
@@ -403,19 +440,20 @@ export async function POST(req: NextRequest) {
           item.productoId,
           nombreSnap,
           item.cantidad,
-          prod.rows[0].forma_venta,
-          item.precioUnitario,
+          p.forma_venta,
+          precioUnit,
           modificadores,
           subtotalLinea,
           item.observacion ?? null,
           i,
-          prod.rows[0].cocina_interviene,
+          p.cocina_interviene,
         ],
       );
     }
 
-    // 9) Pago
-    const monto = Number(body.cobro.monto || total);
+    // 9) Pago — el monto registrado nunca puede ser menor al total server-side
+    //    (evita sub-reportar el cobro y descuadrar la caja).
+    const monto = Math.max(total, Number(body.cobro.monto) || total);
     const cambio = Number(body.cobro.cambioDado || 0);
     await client.query(
       `INSERT INTO pagos (
@@ -454,6 +492,11 @@ export async function POST(req: NextRequest) {
     //     re-chain local la recomputa con el salt local; lo prioritario es
     //     que la venta no se pierda durante el corte.
     const salt = process.env.AUDIT_HASH_SALT ?? '';
+    if (!salt) {
+      // El salt DEBE estar seteado en Vercel (ver DEPLOY-SERVIDOR-LOCAL.md). Sin
+      // él la fila de audit no es verificable hasta que el catch-up la re-chaine.
+      console.error('[ventas POST] AUDIT_HASH_SALT no configurada — audit cloud sin firmar (NO_SALT_CLOUD)');
+    }
     const tail = await client.query<{ hash_actual: string }>(
       `SELECT hash_actual FROM audit_log ORDER BY secuencia DESC LIMIT 1`,
     );
