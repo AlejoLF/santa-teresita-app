@@ -42,6 +42,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
           usuario: result.usuario,
           token: result.token,
           expiraAt: result.expiraAt.toISOString(),
+          debeCambiarPin: result.debeCambiarPin,
         });
       } catch (e) {
         if (e instanceof AuthError) {

@@ -40,6 +40,10 @@
 param(
   [switch]$NetworkOnly,
   [string[]]$Subnets,
+  # IPs exactas de las cajas (ej. "192.168.1.21","192.168.1.22"). Si se pasan,
+  # pg_hba + firewall se abren SOLO a esas IPs (/32) en vez de a toda la subred
+  # -> un cliente en el WiFi del local NO llega a la DB. Recomendado fuerte.
+  [string[]]$CajaIps,
   [string]$PrinterIp
 )
 
@@ -155,6 +159,20 @@ if ($Subnets -and $Subnets.Count -gt 0) {
   }
 }
 
+# -- 1.6 Targets de acceso LAN: IPs de cajas (/32) si se pasaron, sino subredes.
+# Seguridad (C2): abrir pg_hba/firewall a TODA la subred deja a cualquier
+# dispositivo del WiFi (un cliente del local) tocar Postgres. Con -CajaIps se
+# restringe a las IPs exactas de las cajas.
+if ($CajaIps -and $CajaIps.Count -gt 0) {
+  $accessTargets = @($CajaIps | ForEach-Object { if ($_ -match '/') { $_ } else { "$_/32" } })
+  Ok "Acceso LAN restringido a las cajas: $($accessTargets -join ', ')"
+} else {
+  $accessTargets = $lanSubnets
+  Warn "Sin -CajaIps: pg_hba/firewall se abren a TODA la subred ($($lanSubnets -join ', '))."
+  Warn "RECOMENDADO: pasar -CajaIps '192.168.1.21','192.168.1.22' (las IPs de las cajas)."
+  Warn "Un cliente en el WiFi del local NO deberia poder llegar a la DB."
+}
+
 # -- 2. Superusuario postgres + (full) rol/DB -------------------------
 # El superusuario 'postgres' hace falta para crear rol/DB y tocar
 # listen_addresses / pg_hba. Su password sale de .env (PG_SUPERUSER_PASSWORD)
@@ -193,19 +211,28 @@ if ($curListen -ne '*') {
   Ok "listen_addresses = '*' (aplica tras restart)"
 } else { Ok "listen_addresses ya es '*'" }
 
-# pg_hba.conf: una linea 'host' por subred LAN (idempotente)
+# pg_hba.conf: una linea 'host' por target, scopeada a la DB+rol de la app (NO
+# 'all all' -> el superusuario 'postgres' NO queda alcanzable desde la LAN, solo
+# el rol de la app sobre su base). Idempotente: limpia las lineas STA previas y
+# re-aplica (asi un re-run que pasa de subred a -CajaIps no deja la regla amplia).
 $hbaFile = SuperPsqlVal "SHOW hba_file"
 if ($hbaFile -and (Test-Path $hbaFile)) {
-  $hba = Get-Content $hbaFile -Raw
-  foreach ($sn in $lanSubnets) {
-    if ($hba -notmatch [Regex]::Escape($sn)) {
-      Add-Content -Path $hbaFile -Value "`r`n# STA LAN access (setup-mini-pc.ps1)`r`nhost    all    all    $sn    scram-sha-256"
-      Ok "pg_hba: permitido $sn"
-    } else { Ok "pg_hba: $sn ya estaba" }
+  $lineas = Get-Content $hbaFile
+  $limpias = @()
+  $skipNext = $false
+  foreach ($l in $lineas) {
+    if ($l -match '# STA LAN access') { $skipNext = $true; continue }
+    if ($skipNext) { $skipNext = $false; continue }  # la linea 'host' del marcador
+    $limpias += $l
+  }
+  Set-Content -Path $hbaFile -Value $limpias
+  foreach ($sn in $accessTargets) {
+    Add-Content -Path $hbaFile -Value "# STA LAN access (setup-mini-pc.ps1)`r`nhost    $pgDb    $pgUser    $sn    scram-sha-256"
+    Ok "pg_hba: permitido $pgUser@$pgDb desde $sn"
   }
   SuperPsql -c "SELECT pg_reload_conf()" | Out-Null
 } else {
-  Warn "No pude ubicar pg_hba.conf - configura el acceso LAN a mano (host all all <subred> scram-sha-256)."
+  Warn "No pude ubicar pg_hba.conf - configura el acceso LAN a mano (host $pgDb $pgUser <target> scram-sha-256)."
 }
 
 if ($pgNeedsRestart) {
@@ -297,20 +324,23 @@ if ($svc.Status -ne 'Running') {
 
 }  # -- fin bloque DB/service (solo install completa) --
 
-# -- 6. Firewall: 5432 y 3001 en TODAS las subredes LAN ---------------
-Info "Configurando firewall (todas las subredes LAN)..."
-if ($lanSubnets.Count -gt 0) {
+# -- 6. Firewall: 5432 y 3001 hacia los targets de acceso (cajas o subredes) ---
+Info "Configurando firewall (acceso LAN)..."
+# Limpiar reglas STA previas (asi un re-run que cambia subred -> cajas no deja
+# viejas reglas amplias dando vueltas).
+Get-NetFirewallRule -DisplayName 'STA Server TCP *' -ErrorAction SilentlyContinue |
+  Remove-NetFirewallRule -ErrorAction SilentlyContinue
+if ($accessTargets -and $accessTargets.Count -gt 0) {
   foreach ($p in 5432, 3001) {
-    foreach ($sn in $lanSubnets) {
+    foreach ($sn in $accessTargets) {
       $rn = "STA Server TCP $p ($sn)"
-      Remove-NetFirewallRule -DisplayName $rn -ErrorAction SilentlyContinue
       New-NetFirewallRule -DisplayName $rn -Direction Inbound -Action Allow `
         -Protocol TCP -LocalPort $p -RemoteAddress $sn | Out-Null
     }
   }
-  Ok "Firewall: 5432 + 3001 permitidos desde $($lanSubnets -join ', ')"
+  Ok "Firewall: 5432 + 3001 permitidos desde $($accessTargets -join ', ')"
 } else {
-  Warn "No detecte subredes LAN - configura el firewall a mano (5432 + 3001 por subred)."
+  Warn "No detecte targets de acceso - configura el firewall a mano (5432 + 3001)."
 }
 
 # -- 7. Verificacion --------------------------------------------------

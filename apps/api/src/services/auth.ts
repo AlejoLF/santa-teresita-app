@@ -31,7 +31,17 @@ interface LoginResult {
   token: string;
   usuario: Pick<Usuario, 'id' | 'nombre' | 'rol'>;
   expiraAt: Date;
+  /** true si el PIN es uno de los default sembrados / triviales — el front debe
+   *  forzar un cambio. Seguridad A7: PINs default 0001/0002/0003 sin rotacion. */
+  debeCambiarPin: boolean;
 }
+
+/** PINs default del seed + triviales obvios. Si un usuario sigue con uno, hay que
+ *  forzar el cambio (no se puede saber por el hash, pero sí en el login plano). */
+const PINS_DEBILES = new Set([
+  '0001', '0002', '0003', '0000', '1111', '2222', '3333', '4444', '5555',
+  '6666', '7777', '8888', '9999', '1234', '4321', '1212',
+]);
 
 /**
  * Anti-fuerza-bruta para login y aprobación con PIN. Como el login es
@@ -142,6 +152,7 @@ export async function login(pin: string, ctx: LoginContext): Promise<LoginResult
     token: tokenRaw,
     usuario: { id: match.id, nombre: match.nombre, rol: match.rol },
     expiraAt,
+    debeCambiarPin: PINS_DEBILES.has(pin),
   };
 }
 

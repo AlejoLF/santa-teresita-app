@@ -146,6 +146,17 @@ cd C:\sta-server
 powershell -ExecutionPolicy Bypass -File .\setup-mini-pc.ps1
 ```
 
+> 🔒 **Seguridad (muy recomendado): restringí el acceso a las IPs de las cajas.**
+> Sin `-CajaIps`, `pg_hba` y el firewall se abren a **toda la subred** — un cliente
+> conectado al WiFi del local podría llegar a la base de datos. Pasá las IPs
+> exactas de las cajas para limitarlo a ellas (y de paso el acceso queda scopeado
+> al rol/DB de la app, no al superusuario):
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File .\setup-mini-pc.ps1 -CajaIps "192.168.1.21","192.168.1.22","192.168.0.21"
+> ```
+> Reservá esas IPs fijas en cada router. Aun así, lo ideal es que las cajas estén
+> en una **VLAN/SSID separado** del WiFi de clientes.
+
 El script es idempotente (se puede re-correr). Hace:
 
 1. Verifica prereqs (Node, psql, postgres service, NSSM).
