@@ -55,6 +55,20 @@ export function getPrinterConfig(destino: DestinoImpresora): PrinterConfig {
   return runtimeConfig[destino];
 }
 
+/**
+ * Sanitiza texto del usuario/cliente antes de mandarlo a la comandera.
+ * ESC/POS es binario: los bytes de control (< 0x20, 0x7F) son COMANDOS, no
+ * texto. Un pedido cuyo nombre/dirección/indicaciones traiga esos bytes (un
+ * cliente o un webhook de RAPPI/PYA puede inyectarlos) podría cortar el ticket,
+ * resetear la impresora o abrir la gaveta. Los reemplazamos por espacio.
+ * Seguridad: ESC/POS command injection.
+ */
+function limpiar(s: unknown): string {
+  // Reemplaza bytes de control 0x00-0x1F y 0x7F (comandos ESC/POS) por espacio.
+  // eslint-disable-next-line no-control-regex
+  return String(s ?? '').replace(/[\x00-\x1f\x7f]/g, ' ');
+}
+
 export function makePrinter(destino: DestinoImpresora): ThermalPrinter {
   const cfg = runtimeConfig[destino];
   return new ThermalPrinter({
@@ -159,11 +173,11 @@ export async function imprimirComanda(
   for (const item of payload.items) {
     printer.setTextDoubleHeight();
     printer.bold(true);
-    printer.println(`## ${item.cantidad}  ${item.nombre}`);
+    printer.println(`## ${item.cantidad}  ${limpiar(item.nombre)}`);
     printer.bold(false);
     printer.setTextNormal();
     for (const m of item.modificadores) {
-      printer.println(`           > ${m}`);
+      printer.println(`           > ${limpiar(m)}`);
     }
     if (item.observacion) {
       // Observación GRANDE en la comanda — la cocinera tiene que verla a metros.
@@ -172,7 +186,7 @@ export async function imprimirComanda(
       printer.invert(true);
       printer.setTextDoubleHeight();
       printer.setTextSize(2, 2);
-      printer.println(`>> ${item.observacion.toUpperCase()}`);
+      printer.println(`>> ${limpiar(item.observacion).toUpperCase()}`);
       printer.setTextNormal();
       printer.invert(false);
       printer.bold(false);
@@ -196,28 +210,28 @@ export async function imprimirComanda(
     printer.newLine();
     if (d.clienteNombre) {
       printer.bold(true);
-      printer.println(`Cliente:  ${d.clienteNombre}`);
+      printer.println(`Cliente:  ${limpiar(d.clienteNombre)}`);
       printer.bold(false);
     }
     if (d.clienteTelefono) {
-      printer.println(`Tel:      ${d.clienteTelefono}`);
+      printer.println(`Tel:      ${limpiar(d.clienteTelefono)}`);
     }
     if (d.direccion) {
       printer.bold(true);
       printer.setTextDoubleHeight();
-      printer.println(d.direccion);
+      printer.println(limpiar(d.direccion));
       printer.setTextNormal();
       printer.bold(false);
     }
     if (d.indicaciones) {
-      printer.println(`Ref: ${d.indicaciones}`);
+      printer.println(`Ref: ${limpiar(d.indicaciones)}`);
     }
     if (d.horaPrometida) {
       printer.println(`Hora prometida: ${d.horaPrometida}`);
     }
     if (d.repartidor) {
       printer.bold(true);
-      printer.println(`Repartidor: ${d.repartidor}`);
+      printer.println(`Repartidor: ${limpiar(d.repartidor)}`);
       printer.bold(false);
     }
     printer.newLine();
@@ -332,8 +346,8 @@ export async function imprimirTicketCliente(payload: TicketClientePayload): Prom
   // ── Datos venta ──
   printer.alignLeft();
   printer.println(`Venta: ${payload.numeroVenta}`);
-  printer.println(`Cliente: ${payload.cliente}`);
-  printer.println(`Vendedor: ${payload.vendedor}`);
+  printer.println(`Cliente: ${limpiar(payload.cliente)}`);
+  printer.println(`Vendedor: ${limpiar(payload.vendedor)}`);
   printer.drawLine();
 
   // ── Tabla de items ──
@@ -342,7 +356,7 @@ export async function imprimirTicketCliente(payload: TicketClientePayload): Prom
   for (const it of payload.items) {
     const lineas = rowTabular(
       it.cantidad,
-      it.nombre,
+      limpiar(it.nombre),
       formatARS(it.precio),
       formatARS(it.subtotal),
     );
@@ -378,7 +392,7 @@ export async function imprimirTicketCliente(payload: TicketClientePayload): Prom
   }
   if (payload.repartidor) {
     printer.bold(true);
-    printer.println(`Repartidor: ${payload.repartidor}`);
+    printer.println(`Repartidor: ${limpiar(payload.repartidor)}`);
     printer.bold(false);
   }
   printer.newLine();
@@ -468,19 +482,19 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
   // ── Datos cliente ──
   printer.alignLeft();
   printer.bold(true);
-  printer.println(`Cliente: ${payload.cliente.nombre}`);
+  printer.println(`Cliente: ${limpiar(payload.cliente.nombre)}`);
   printer.bold(false);
   if (payload.cliente.telefono) {
-    printer.println(`Teléfono: ${payload.cliente.telefono}`);
+    printer.println(`Teléfono: ${limpiar(payload.cliente.telefono)}`);
   }
-  printer.println(`Dirección: ${payload.cliente.direccion}`);
+  printer.println(`Dirección: ${limpiar(payload.cliente.direccion)}`);
   if (payload.cliente.indicaciones) {
-    printer.println(`Indicaciones: ${payload.cliente.indicaciones}`);
+    printer.println(`Indicaciones: ${limpiar(payload.cliente.indicaciones)}`);
   }
   if (payload.empleadoNombre) {
-    printer.println(`Repartidor: ${payload.empleadoNombre}`);
+    printer.println(`Repartidor: ${limpiar(payload.empleadoNombre)}`);
   } else if (payload.empresaExterna) {
-    printer.println(`Repartidor: ${payload.empresaExterna}`);
+    printer.println(`Repartidor: ${limpiar(payload.empresaExterna)}`);
   }
   printer.drawLine();
 
@@ -490,7 +504,7 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
   for (const it of payload.items) {
     const lineas = rowTabular(
       it.cantidad,
-      it.nombre,
+      limpiar(it.nombre),
       formatARS(it.precioUnitario),
       formatARS(it.subtotal),
     );
@@ -551,7 +565,7 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
   printer.drawLine();
   printer.alignLeft();
   printer.println(`Impresión: ${formatFechaAR(payload.fecha)}`);
-  printer.println(`Usuario: ${payload.cajero}`);
+  printer.println(`Usuario: ${limpiar(payload.cajero)}`);
   printer.alignCenter();
   printer.println(`Venta #${payload.numeroVenta} en el programa`);
   printer.cut();

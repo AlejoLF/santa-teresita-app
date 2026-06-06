@@ -38,6 +38,14 @@ function fmtMoney(v: string | number): string {
   }).format(Number.isFinite(n) ? n : 0);
 }
 
+/** Escapa HTML — los campos del payload van al inbox por email; sin escapar,
+ * un texto con `<` o un onerror inyecta markup. */
+function esc(v: unknown): string {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function buildEmailHtml(p: CierrePayload): string {
   const fecha = new Date(p.fecha).toLocaleDateString('es-AR', {
     weekday: 'long',
@@ -117,19 +125,19 @@ function buildEmailHtml(p: CierrePayload): string {
         ])}
 
         ${seccionDesglose('🧾 Ventas por canal',
-          p.porCanal.map(c => [`${c.canal.replace('_', ' ')} (${c.cantidad})`, fmtMoney(c.monto)] as [string, string])
+          p.porCanal.map(c => [`${esc(c.canal.replace('_', ' '))} (${c.cantidad})`, fmtMoney(c.monto)] as [string, string])
         )}
 
         ${p.aportes.cantidad > 0 ? seccionDesglose(`➕ Aportes (${p.aportes.cantidad})`,
           [
-            ...p.aportes.items.map(a => [`${a.categoria}${a.descripcion ? ' — ' + a.descripcion : ''}`, fmtMoney(a.monto)] as [string, string]),
+            ...p.aportes.items.map(a => [`${esc(a.categoria)}${a.descripcion ? ' — ' + esc(a.descripcion) : ''}`, fmtMoney(a.monto)] as [string, string]),
             ['<strong>Subtotal aportes</strong>', `<strong>${fmtMoney(p.aportes.total)}</strong>`],
           ]
         ) : ''}
 
         ${p.egresos.cantidad > 0 ? seccionDesglose(`➖ Egresos (${p.egresos.cantidad})`,
           [
-            ...p.egresos.items.map(e => [`${e.categoria}${e.descripcion ? ' — ' + e.descripcion : ''}`, fmtMoney(e.monto)] as [string, string]),
+            ...p.egresos.items.map(e => [`${esc(e.categoria)}${e.descripcion ? ' — ' + esc(e.descripcion) : ''}`, fmtMoney(e.monto)] as [string, string]),
             ['<strong>Subtotal egresos</strong>', `<strong>${fmtMoney(p.egresos.total)}</strong>`],
           ]
         ) : ''}
@@ -137,14 +145,14 @@ function buildEmailHtml(p: CierrePayload): string {
         ${p.comentario ? `
           <div style="background:#F5F1E8; border-left:3px solid #1a3a1a; padding:12px 16px; margin-top:16px; font-size:13px; color:#3d3a35;">
             <div style="font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#7a7367; margin-bottom:4px;">Comentario</div>
-            ${p.comentario.replace(/\n/g, '<br/>')}
+            ${esc(p.comentario).replace(/\n/g, '<br/>')}
           </div>
         ` : ''}
       </div>
 
       <p style="font-size:12px; color:#7a7367; text-align:center; margin:16px 0;">
         Este email fue generado automáticamente desde la versión de demostración de Santa Teresita Pastas.
-        ${p.enviadoPor ? `<br/>Enviado por: ${p.enviadoPor}` : ''}
+        ${p.enviadoPor ? `<br/>Enviado por: ${esc(p.enviadoPor)}` : ''}
       </p>
     </div>
   </body>

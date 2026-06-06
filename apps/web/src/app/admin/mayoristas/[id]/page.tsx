@@ -112,6 +112,13 @@ export default function MayoristaDetallePage({
   const totalRango = enRango.reduce((acc, r) => acc + Number(r.total), 0);
 
   function imprimirResumen() {
+    // Escape HTML — nombre/cuit del cliente van a un document.write same-origin;
+    // sin escapar, un nombre con <img onerror=...> ejecuta JS y roba el token
+    // de localStorage. Seguridad: stored XSS via document.write.
+    const esc = (v: unknown) =>
+      String(v ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     const filas = enRango
       .map(
         (r) =>
@@ -120,15 +127,15 @@ export default function MayoristaDetallePage({
           ).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td></tr>`,
       )
       .join('');
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Resumen ${c.nombre}</title>
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Resumen ${esc(c.nombre)}</title>
       <style>body{font-family:system-ui,sans-serif;padding:24px;color:#1a1a1a}
       h1{font-size:18px;margin:0 0 4px} .sub{color:#666;font-size:13px;margin-bottom:16px}
       table{width:100%;border-collapse:collapse;font-size:13px}
       th,td{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left}
       th{text-transform:uppercase;font-size:11px;color:#666}
       .total{font-size:16px;font-weight:bold;text-align:right;margin-top:16px}</style></head>
-      <body><h1>Resumen de cuenta — ${c.nombre}</h1>
-      <div class="sub">${c.cuit ? 'CUIT ' + c.cuit + ' · ' : ''}Período ${new Date(
+      <body><h1>Resumen de cuenta — ${esc(c.nombre)}</h1>
+      <div class="sub">${c.cuit ? 'CUIT ' + esc(c.cuit) + ' · ' : ''}Período ${new Date(
         desde,
       ).toLocaleDateString('es-AR')} a ${new Date(hasta).toLocaleDateString('es-AR')} · ${
       enRango.length

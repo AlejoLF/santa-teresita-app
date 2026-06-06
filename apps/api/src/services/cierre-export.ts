@@ -356,6 +356,21 @@ function fmtMetodo(m: string): string {
   return m.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/**
+ * Escapa HTML para el email de cierre. Campos libres (observaciones de
+ * movimientos, nombres de categoría/cuenta) los carga la encargada y van al
+ * inbox del dueño — sin escapar, un texto con `<img onerror=...>` inyecta
+ * markup/HTML/XSS en el correo. Seguridad: evita stored-XSS-into-email.
+ */
+function escapeHtml(v: unknown): string {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Santa Teresita Pastas';
@@ -658,7 +673,7 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
     .slice(0, 20)
     .map(
       (m) =>
-        `<tr><td style="padding:4px 8px;font-size:11px">${m.hora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}</td><td style="padding:4px 8px;color:${m.tipo === 'EGRESO' ? '#' + ROJO.slice(2) : m.tipo === 'INGRESO' ? '#2C8C5A' : '#777'}">${m.tipo}</td><td style="padding:4px 8px">${m.categoria}</td><td style="padding:4px 8px;color:#777">${m.cuenta}</td><td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtMoney(Number(m.monto))}</td></tr>`,
+        `<tr><td style="padding:4px 8px;font-size:11px">${m.hora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}</td><td style="padding:4px 8px;color:${m.tipo === 'EGRESO' ? '#' + ROJO.slice(2) : m.tipo === 'INGRESO' ? '#2C8C5A' : '#777'}">${m.tipo}</td><td style="padding:4px 8px">${escapeHtml(m.categoria)}</td><td style="padding:4px 8px;color:#777">${escapeHtml(m.cuenta)}</td><td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtMoney(Number(m.monto))}</td></tr>`,
     )
     .join('');
 
@@ -724,8 +739,8 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
                 (m) => `<tr>
                   <td style="padding:4px 10px">
                     <span style="color:${m.tipo === 'INGRESO' ? '#2C8C5A' : '#' + ROJO.slice(2)};font-weight:500">${m.tipo === 'INGRESO' ? '+' : '−'}</span>
-                    <span style="color:#444;margin-left:6px">${m.categoria}</span>
-                    ${m.observacion ? `<span style="color:#888;font-size:11px;font-style:italic"> · ${m.observacion}</span>` : ''}
+                    <span style="color:#444;margin-left:6px">${escapeHtml(m.categoria)}</span>
+                    ${m.observacion ? `<span style="color:#888;font-size:11px;font-style:italic"> · ${escapeHtml(m.observacion)}</span>` : ''}
                   </td>
                   <td style="padding:4px 10px;text-align:right;font-family:monospace;color:${m.tipo === 'INGRESO' ? '#2C8C5A' : '#' + ROJO.slice(2)}">${fmtMoney(Number(m.monto))}</td>
                 </tr>`,
@@ -746,8 +761,8 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
               .map(
                 (m) => `<tr>
                   <td style="padding:4px 10px">
-                    <span style="color:#444">${m.categoria}</span>
-                    ${m.observacion ? `<span style="color:#888;font-size:11px;font-style:italic"> · ${m.observacion}</span>` : ''}
+                    <span style="color:#444">${escapeHtml(m.categoria)}</span>
+                    ${m.observacion ? `<span style="color:#888;font-size:11px;font-style:italic"> · ${escapeHtml(m.observacion)}</span>` : ''}
                   </td>
                   <td style="padding:4px 10px;text-align:right;font-family:monospace;color:#${ROJO.slice(2)}">${fmtMoney(Number(m.monto))}</td>
                 </tr>`,
