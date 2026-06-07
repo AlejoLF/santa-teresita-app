@@ -183,8 +183,11 @@ if (-not $pgSuperPass) {
   $sec = Read-Host "  Password del superusuario 'postgres' de PostgreSQL" -AsSecureString
   $pgSuperPass = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
 }
-function SuperPsql { $env:PGPASSWORD = $pgSuperPass; & psql -h $pgHost -p $pgPort -U postgres -d postgres @args }
-function SuperPsqlVal { param([string]$sql) $env:PGPASSWORD = $pgSuperPass; ((& psql -h $pgHost -p $pgPort -U postgres -d postgres -tAc $sql 2>$null) | Out-String).Trim() }
+# -w = nunca prompts de password (si falla la auth, ERROR inmediato en vez de
+# colgarse esperando input que en un script nadie tipea). Imprescindible para
+# que el provisioning no quede colgado indefinidamente.
+function SuperPsql { $env:PGPASSWORD = $pgSuperPass; & psql -w -h $pgHost -p $pgPort -U postgres -d postgres @args }
+function SuperPsqlVal { param([string]$sql) $env:PGPASSWORD = $pgSuperPass; ((& psql -w -h $pgHost -p $pgPort -U postgres -d postgres -tAc $sql 2>$null) | Out-String).Trim() }
 
 if (-not $NetworkOnly) {
   Info "Asegurando rol y base '$pgDb'..."
@@ -248,24 +251,18 @@ if (-not $NetworkOnly) {
 # -- 3. Migraciones (tracking por nombre, idempotente) ----------------
 Info "Aplicando migraciones SQL..."
 $env:PGPASSWORD = $pgPass   # de aca en mas conectamos como el rol de la app
-function PsqlDb($args) { $env:PGPASSWORD = $pgPass; & psql -h $pgHost -p $pgPort -U $pgUser -d $pgDb @args }
-PsqlDb @('-c', @'
-CREATE TABLE IF NOT EXISTS "_prisma_migrations" (
-  "id" VARCHAR(36) PRIMARY KEY,
-  "checksum" VARCHAR(64) NOT NULL DEFAULT '',
-  "finished_at" TIMESTAMPTZ,
-  "migration_name" VARCHAR(255) NOT NULL,
-  "logs" TEXT,
-  "rolled_back_at" TIMESTAMPTZ,
-  "started_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
-  "applied_steps_count" INTEGER NOT NULL DEFAULT 0
-);
-'@) | Out-Null
+# [string[]]$Cmd + @Cmd = splatting correcto (evita el footgun de nombrar el
+# parametro $args). -w = nunca cuelga por prompt de password.
+function PsqlDb([string[]]$Cmd) { $env:PGPASSWORD = $pgPass; & psql -w -h $pgHost -p $pgPort -U $pgUser -d $pgDb @Cmd }
+# _prisma_migrations en UNA sola linea: un -c multilinea (here-string) puede
+# colgar psql en algunas combinaciones PowerShell/Windows. '' = string vacio
+# escapado para PowerShell (4 comillas).
+PsqlDb @('-c', 'CREATE TABLE IF NOT EXISTS "_prisma_migrations" ("id" VARCHAR(36) PRIMARY KEY, "checksum" VARCHAR(64) NOT NULL DEFAULT '''', "finished_at" TIMESTAMPTZ, "migration_name" VARCHAR(255) NOT NULL, "logs" TEXT, "rolled_back_at" TIMESTAMPTZ, "started_at" TIMESTAMPTZ NOT NULL DEFAULT now(), "applied_steps_count" INTEGER NOT NULL DEFAULT 0);') | Out-Null
 
 $migFiles = Get-ChildItem "$DistDir\migrations\*.sql" | Sort-Object Name
 foreach ($f in $migFiles) {
   $name = $f.BaseName  # ej. 20260427202705_init
-  $done = & psql -h $pgHost -p $pgPort -U $pgUser -d $pgDb -tAc "SELECT 1 FROM _prisma_migrations WHERE migration_name='$name'" 2>$null
+  $done = & psql -w -h $pgHost -p $pgPort -U $pgUser -d $pgDb -tAc "SELECT 1 FROM _prisma_migrations WHERE migration_name='$name'" 2>$null
   if ($done -eq '1') { continue }
   Info "  aplicando $name"
   PsqlDb @('-v', 'ON_ERROR_STOP=1', '-f', $f.FullName) | Out-Null
@@ -278,7 +275,7 @@ Ok "Migraciones al dia"
 
 # -- 4. Seed (solo si la DB esta vacia) -------------------------------
 $env:PGPASSWORD = $pgPass
-$userCount = & psql -h $pgHost -p $pgPort -U $pgUser -d $pgDb -tAc "SELECT COUNT(*) FROM usuarios" 2>$null
+$userCount = & psql -w -h $pgHost -p $pgPort -U $pgUser -d $pgDb -tAc "SELECT COUNT(*) FROM usuarios" 2>$null
 if ($userCount -eq '0' -or [string]::IsNullOrWhiteSpace($userCount)) {
   Info "DB vacia -> corriendo seed..."
   $env:DATABASE_URL = $dbUrl

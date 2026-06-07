@@ -163,6 +163,20 @@ run(
 const seedDataSrc = path.join(REPO_ROOT, 'packages', 'db', 'prisma', 'seed-data');
 if (fs.existsSync(seedDataSrc)) copyDir(seedDataSrc, path.join(seedDir, 'seed-data'));
 
+// ── Seed: @prisma/client + .prisma (engine) en seed/node_modules ──
+// El seed importa @prisma/client (external en el bundle esbuild). Sin esto,
+// `node seed/seed.mjs` tira ERR_MODULE_NOT_FOUND porque @prisma vive en
+// api/node_modules y Node resuelve desde la ubicación del .mjs. Copiamos
+// @prisma + .prisma a seed/node_modules → seed auto-contenido y zip-safe
+// (no depende de junctions en el target).
+step('Linkeando @prisma/client en seed/node_modules (self-contained)');
+const seedNm = path.join(seedDir, 'node_modules');
+fs.mkdirSync(seedNm, { recursive: true });
+for (const dep of ['@prisma', '.prisma']) {
+  const depSrc = path.join(apiDest, 'node_modules', dep);
+  if (fs.existsSync(depSrc)) copyDir(depSrc, path.join(seedNm, dep));
+}
+
 // ── Artefactos del operador ──
 step('Copiando .env.example, README, todos los .ps1 de scripts/, DEPLOY playbook');
 for (const f of ['.env.example', 'README.md']) {
