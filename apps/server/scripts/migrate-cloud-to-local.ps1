@@ -37,9 +37,17 @@ function Info($m) { Write-Host "  $m" -ForegroundColor Cyan }
 function Ok($m)   { Write-Host "  OK  $m" -ForegroundColor Green }
 function Die($m)  { Write-Host "  XX  $m" -ForegroundColor Red; exit 1 }
 
-# -- Herramientas PG16 --
-$pgBin = (Get-ChildItem 'C:\Program Files\PostgreSQL\16\bin\psql.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).DirectoryName
-if (-not $pgBin) { Die 'No encontre PostgreSQL 16 (C:\Program Files\PostgreSQL\16\bin).' }
+# -- Herramientas PG: usar la version MAS NUEVA instalada --
+# pg_dump se niega a dumpear de un server mas nuevo que el (Supabase = PG17 ->
+# necesitamos pg_dump 17). psql/pg_restore 17 tambien sirven contra el local 16.
+$pgCands = Get-ChildItem 'C:\Program Files\PostgreSQL\*\bin\psql.exe' -ErrorAction SilentlyContinue | ForEach-Object {
+  $vstr = Split-Path (Split-Path $_.DirectoryName -Parent) -Leaf  # "9.6","16","17"
+  $major = 0; [void][int]::TryParse(($vstr -split '\.')[0], [ref]$major)
+  [PSCustomObject]@{ Major = $major; Dir = $_.DirectoryName }
+}
+$pgBin = ($pgCands | Sort-Object Major -Descending | Select-Object -First 1).Dir
+if (-not $pgBin) { Die 'No encontre PostgreSQL bin (C:\Program Files\PostgreSQL\*\bin).' }
+Info "Herramientas PG: $pgBin"
 $psql = "$pgBin\psql.exe"; $pgdump = "$pgBin\pg_dump.exe"; $pgrestore = "$pgBin\pg_restore.exe"
 
 # -- Conexion LOCAL (del .env) --
