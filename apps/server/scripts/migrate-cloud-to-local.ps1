@@ -61,7 +61,9 @@ $cHost = $matches[3]
 
 # Helper de conteo
 function Count-Table($conn, $useUri, $table) {
-  if ($useUri) { (& $psql -w "$conn" -tAc "SELECT count(*) FROM $table" 2>$null).Trim() }
+  # OJO: la URI de conexion va con -d (NO posicional): psql ignora el -c si la
+  # URI viene como argumento posicional en el medio.
+  if ($useUri) { (& $psql -w -d "$conn" -tAc "SELECT count(*) FROM $table" 2>$null).Trim() }
   else { $env:PGPASSWORD = $lPass; (& $psql -w -h $lHost -p $lPort -U $lUser -d $lDb -tAc "SELECT count(*) FROM $table" 2>$null).Trim() }
 }
 
@@ -99,7 +101,7 @@ $cloudDump = Join-Path $BackupDir "cloud-data-$stamp.dump"
 Info 'Dump de la nube (data-only)...'
 $dumpArgs = @('-w', '--data-only', '--schema=public', '--no-owner', '--no-privileges', '-F', 'c')
 foreach ($t in $Exclude) { $dumpArgs += @('--exclude-table', "public.$t") }
-$dumpArgs += @('-f', $cloudDump, "$cloudSession")
+$dumpArgs += @('-f', $cloudDump, '-d', "$cloudSession")
 & $pgdump @dumpArgs
 if ($LASTEXITCODE -ne 0) { Start-Service $Service -ErrorAction SilentlyContinue; Die 'pg_dump de la nube fallo.' }
 Ok ("Dump de la nube listo ({0} MB)" -f [math]::Round((Get-Item $cloudDump).Length / 1MB, 1))
