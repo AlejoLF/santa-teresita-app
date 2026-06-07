@@ -16,7 +16,7 @@
  * Versionado: independiente del .exe de las cajas (que usa tags v2.0.0-alpha.N).
  * Acá el prefijo `server-` evita choques.
  */
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +36,12 @@ function run(cmd, cwd = REPO_ROOT) {
 }
 function capture(cmd, cwd = REPO_ROOT) {
   return execSync(cmd, { cwd, shell: true }).toString().trim();
+}
+// execFile: args como ARRAY, sin shell → evita el quoting roto de cmd.exe con
+// paths que tienen espacios ("SANTA TERESITA APP").
+function execFile(file, args, cwd = REPO_ROOT) {
+  console.log(`$ ${file} ${args.join(' ')}`);
+  execFileSync(file, args, { stdio: 'inherit', cwd, shell: false });
 }
 
 const pkg = JSON.parse(fs.readFileSync(path.join(SERVER_DIR, 'package.json'), 'utf8'));
@@ -79,21 +85,29 @@ if (!fs.existsSync(path.join(DIST, 'api', 'server.mjs'))) {
 
 // 3. Empaquetar dist/ → zip (contenido al root del zip vía tar -C dist .)
 step('Empaquetando dist/ → zip');
-const zipName = `sta-server-${tag}.zip`;
+const zipName = `sta-${tag}.zip`;
 const zipPath = path.join(SERVER_DIR, zipName);
 fs.rmSync(zipPath, { force: true });
-// tar de Windows (bsdtar) crea zip con -a (formato por extensión). -C entra al
-// dir y `.` toma su contenido → entradas relativas (./api/..., ./migrations/...).
-run(`tar -a -cf "${zipPath}" -C "${DIST}" .`);
+// Compress-Archive (no tar): el tar de Git/MSYS en el PATH no escribe zip e
+// interpreta "D:" como host remoto. PowerShell zipea sin ambigüedad. -Path
+// dir\* mete el CONTENIDO al root del zip (api/, migrations/, seed/...).
+execFile('powershell', [
+  '-NoProfile',
+  '-Command',
+  `Compress-Archive -Path '${DIST}\\*' -DestinationPath '${zipPath}' -Force`,
+]);
 const sizeMb = (fs.statSync(zipPath).size / 1024 / 1024).toFixed(1);
 console.log(`  ${zipName} (${sizeMb} MB)`);
 
 // 4. Crear el GitHub Release con el zip como asset
 step('Creando GitHub Release');
-const notes = `Servidor local Santa Teresita v${version}.\\n\\nAuto-instalable: cada server lo baja con update-server.ps1 (tarea programada) o forzando \`.\\update-server.ps1 -Force\`.`;
-run(
-  `gh release create ${tag} "${zipPath}" --repo ${REPO} --title "Server v${version}" --notes "${notes}"`,
-);
+const notes = `Servidor local Santa Teresita v${version}. Auto-instalable: cada server lo baja con update-server.ps1 (tarea programada 4 AM) o forzando .\\update-server.ps1 -Force`;
+execFile('gh', [
+  'release', 'create', tag, zipPath,
+  '--repo', REPO,
+  '--title', `Server v${version}`,
+  '--notes', notes,
+]);
 
 // 5. Limpieza del zip local
 fs.rmSync(zipPath, { force: true });
