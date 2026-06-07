@@ -18,6 +18,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const net = require('net');
 const { autoUpdater } = require('electron-updater');
 
 // ═══ Configuración ═══════════════════════════════════════════════════════
@@ -247,21 +248,34 @@ function leerCloudDbUrl() {
 }
 
 /**
- * URL del Postgres del SERVER LOCAL LAN (mini PC). Solo se lee de
- * userData/config.json → `lanDbUrl` (es config por-máquina, no se bundlea).
+ * URL del Postgres del SERVER LOCAL LAN (mini PC). Orden:
+ *   1. userData/config.json → `lanDbUrl`  (override por-máquina).
+ *   2. Bundle resources/cloud-config.json → `lanDbUrl`  (permite apuntar TODAS
+ *      las cajas al server LAN vía un UPDATE del .exe, sin tocar cada máquina).
  * Si está presente, la caja opera contra el LAN (rápido) y cae a Supabase
- * (cloudDbUrl) read-only si el LAN no responde. Si NO está, comportamiento
- * legacy: un solo DATABASE_URL = Supabase. Ver docs/SERVIDOR-LOCAL.md §4.
+ * (cloudDbUrl) read-only + outbox si el LAN no responde. Si NO está,
+ * comportamiento legacy: un solo DATABASE_URL = Supabase. Ver SERVIDOR-LOCAL.md §4.
  */
 function leerLanDbUrl() {
   const userConfigPath = path.join(app.getPath('userData'), 'config.json');
-  if (!fs.existsSync(userConfigPath)) return null;
-  try {
-    const cfg = JSON.parse(fs.readFileSync(userConfigPath, 'utf8'));
-    return typeof cfg.lanDbUrl === 'string' && cfg.lanDbUrl ? cfg.lanDbUrl : null;
-  } catch {
-    return null;
+  if (fs.existsSync(userConfigPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(userConfigPath, 'utf8'));
+      if (typeof cfg.lanDbUrl === 'string' && cfg.lanDbUrl) return cfg.lanDbUrl;
+    } catch (e) {
+      log('Error leyendo lanDbUrl de config.json: ' + (e?.message ?? e));
+    }
   }
+  const bundleConfigPath = path.join(resourcesDir(), 'cloud-config.json');
+  if (fs.existsSync(bundleConfigPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(bundleConfigPath, 'utf8'));
+      if (typeof cfg.lanDbUrl === 'string' && cfg.lanDbUrl) return cfg.lanDbUrl;
+    } catch (e) {
+      log('Error leyendo lanDbUrl de cloud-config.json: ' + (e?.message ?? e));
+    }
+  }
+  return null;
 }
 
 /**
@@ -338,21 +352,55 @@ async function runSeed() {
 
 // ═══ API server ════════════════════════════════════════════════════════════
 
-function startApi(cloudDbUrl) {
+/**
+ * Test rápido de TCP: ¿el server LAN responde en host:port? Resuelve true/false,
+ * nunca rechaza. Se usa al boot para decidir local-first vs cloud-first.
+ */
+function tcpReachable(host, port, timeoutMs) {
+  return new Promise((resolve) => {
+    const sock = new net.Socket();
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      try { sock.destroy(); } catch {}
+      resolve(ok);
+    };
+    sock.setTimeout(timeoutMs);
+    sock.once('connect', () => done(true));
+    sock.once('timeout', () => done(false));
+    sock.once('error', () => done(false));
+    try { sock.connect(port, host); } catch { done(false); }
+  });
+}
+
+async function startApi(cloudDbUrl) {
   setSplashStatus('Iniciando servidor de la app...');
   const apiEntry = path.join(resourcesDir(), 'api', 'server.mjs');
   log('Spawning API: ' + apiEntry);
 
-  // Failover Fase 1B: si hay lanDbUrl configurado, la caja apunta al
-  // Postgres del server LAN (DATABASE_URL) y cae a Supabase read-only
-  // (STA_FALLBACK_DB_URL) si el LAN no responde. Sin lanDbUrl =
-  // comportamiento legacy cloud-first (un solo DATABASE_URL = Supabase).
-  const lanDbUrl = leerLanDbUrl();
+  // Failover Fase 1B + chequeo de ARRANQUE: si hay lanDbUrl pero el server LAN
+  // NO responde al boot (la caja está en otra red, o el server está apagado),
+  // caemos a cloud-first en vez de encolar ventas que nunca llegarían al LAN.
+  // Si el LAN responde → local-first (rápido + failover read-only a Supabase).
+  let lanDbUrl = leerLanDbUrl();
+  if (lanDbUrl) {
+    const m = lanDbUrl.match(/@([^:/]+):(\d+)/);
+    const lanHost = m ? m[1] : null;
+    const lanPort = m ? Number(m[2]) : 5432;
+    const reachable = lanHost ? await tcpReachable(lanHost, lanPort, 3000) : false;
+    if (!reachable) {
+      log(`Server LAN (${lanHost}:${lanPort}) NO responde al arranque → cloud-first (failover de arranque)`);
+      lanDbUrl = null;
+    } else {
+      log(`Server LAN (${lanHost}:${lanPort}) responde → local-first`);
+    }
+  }
   const dbUrlPrimaria = lanDbUrl ?? cloudDbUrl;
   if (lanDbUrl) {
     log('API → server LAN (DATABASE_URL=lan, failover a Supabase configurado)');
   } else {
-    log('API → cloud DB (Supabase) — sin server LAN configurado');
+    log('API → cloud DB (Supabase) — sin server LAN o LAN no alcanzable');
   }
 
   // Espejo de solo lectura: si está activado y la DB primaria es LOCAL
@@ -882,7 +930,7 @@ async function bootstrap() {
     const webRemoteUrl = leerWebRemoteUrl();
 
     setSplashStatus('Iniciando servicios...');
-    startApi(cloudUrl);
+    await startApi(cloudUrl);
     if (!webRemoteUrl) {
       log('Web mode: LOCAL (bundleado en .exe)');
       startWeb();

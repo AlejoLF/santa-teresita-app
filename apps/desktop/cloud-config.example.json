@@ -1,4 +1,6 @@
 {
-  "_comment": "Copiá este archivo a cloud-config.json (sin .example) y completá la connection string del pooler de Supabase. main.js lo lee en el primer arranque y la API se conecta a esa DB. NO commitear la versión sin .example — está en .gitignore.",
-  "cloudDbUrl": "postgresql://postgres.<PROJECT_REF>:<PASSWORD>@aws-X-<REGION>.pooler.supabase.com:6543/postgres"
+  "_comment": "Copiá este archivo a cloud-config.json (sin .example) y completá las connection strings. main.js lo lee en el primer arranque. NO commitear la versión sin .example — está en .gitignore.",
+  "cloudDbUrl": "postgresql://postgres.<PROJECT_REF>:<PASSWORD>@aws-X-<REGION>.pooler.supabase.com:6543/postgres",
+  "_lanDbUrl_comment": "OPCIONAL. Si se setea, TODAS las cajas que reciban este build operan local-first contra el server LAN (con failover a cloudDbUrl si el LAN no responde). Vacío/ausente = cloud-first. Permite el cutover por update, sin tocar cada máquina.",
+  "lanDbUrl": "postgresql://teresita:<PASSWORD>@<IP_DEL_SERVER_LAN>:5432/teresita?schema=public"
 }
