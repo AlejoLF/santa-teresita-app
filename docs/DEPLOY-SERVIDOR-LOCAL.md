@@ -556,7 +556,73 @@ Register-ScheduledTask -TaskName "STA pg_dump diario" -Action $action -Trigger $
 
 ---
 
-## 7. Apéndice: estructura de archivos
+## 7. Actualizaciones del server (remotas, sin AnyDesk)
+
+El mini PC se auto-actualiza desde **GitHub Releases** (`server-v*`). Dos canales,
+ambos los registra `update-server.ps1 -Install` (una sola vez en el server):
+
+| Canal | Tarea programada | Cuándo aplica | Para qué |
+|-|-|-|-|
+| **Nocturno** | `STA Server Update` (4 AM diaria) | cualquier release nuevo | deploy normal, sin interrumpir ventas |
+| **Inmediato** | `STA Server Update NOW` (cada 5 min) | solo releases marcados `--now` | hotfix urgente, entra en ~5 min |
+
+### Publicar una actualización (desde tu PC de dev)
+
+```bash
+# 1. Bumpeá la versión (el tag server-v<version> debe ser único)
+#    apps/server/package.json  →  "version": "1.1.0"
+
+# 2a. Deploy NORMAL → el server lo aplica a las 4 AM
+pnpm --filter @sta/server release
+
+# 2b. Deploy INMEDIATO → el server lo aplica en ~5 min (sin AnyDesk)
+pnpm --filter @sta/server release -- --now
+```
+
+`--now` agrega el token `STA_DEPLOY_NOW` al body del release. La tarea de 5 min
+corre en modo `-Now` y **solo** aplica releases con ese marcador; los releases
+normales los ignora (los toma la tarea de las 4 AM). Así un push no reinicia el
+server en pleno servicio salvo que vos lo decidas.
+
+### Qué hace el updater en cada corrida
+
+1. `pg_dump` de backup (quedan los últimos 10 en `backups\`).
+2. Para el servicio, reemplaza `api/ migrations/ seed/` **y los `.ps1`** (se
+   auto-actualiza), **conserva `.env` y la DB**.
+3. **Re-sincroniza el env de NSSM desde `.env`** (ver nota abajo).
+4. Aplica migraciones nuevas, reinicia, verifica `/health` (15 reintentos).
+5. Si algo falla → **ROLLBACK** automático al código anterior.
+
+Lock anti-solapamiento (`update.lock`) + `MultipleInstances IgnoreNew` evitan que
+la nocturna y la inmediata corran a la vez.
+
+### Forzar / operar a mano (en el server, `C:\sta-server`)
+
+```powershell
+.\update-server.ps1            # aplica la última si hay versión nueva
+.\update-server.ps1 -Force     # reinstala la última aunque sea la misma (re-deploy/recovery)
+.\update-server.ps1 -SyncEnv   # re-sincroniza NSSM env desde .env y reinicia (sin update)
+.\update-server.ps1 -Install   # (re)registra las 2 tareas programadas
+```
+
+### Nota sobre `.env` y NSSM
+
+NSSM **congela** las variables de entorno al registrar el servicio
+(`AppEnvironmentExtra`). El API lee `dist\.env` con `dotenv`, pero `dotenv` **no
+pisa** lo que NSSM ya inyectó en `process.env` → editar `.env` y reiniciar **no
+alcanza** (incidente real: el replicador quedó en `null`). Por eso el updater
+re-pushea `.env` a NSSM en cada corrida, y existe `.\update-server.ps1 -SyncEnv`
+para aplicar un cambio de `.env` al instante sin esperar un release.
+
+> **Bootstrap (una sola vez):** el updater instalado hoy (v1.0.0) no tiene el
+> canal inmediato ni el re-sync. Para activarlos hay que correr **una vez** en el
+> server, vía AnyDesk: copiar el nuevo `update-server.ps1` y ejecutar
+> `.\update-server.ps1 -Install`. De ahí en más el updater se auto-actualiza solo
+> (copia los `.ps1` nuevos en cada release) → no se vuelve a tocar el server a mano.
+
+---
+
+## 8. Apéndice: estructura de archivos
 
 ```
 C:\sta-server\                          ← el server LAN
@@ -576,7 +642,7 @@ Vercel (apps/mobile)                    ← la PWA del corte
   Env: SUPABASE_DB_URL_POOLED, AUTH_SECRET, AUDIT_HASH_SALT
 ```
 
-## 8. Referencias
+## 9. Referencias
 
 - Diseño y rationale: [`SERVIDOR-LOCAL.md`](SERVIDOR-LOCAL.md)
 - Gotchas (invariantes que NO romper): [`../CLAUDE.md`](../CLAUDE.md) sección

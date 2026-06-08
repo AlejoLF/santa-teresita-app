@@ -6,7 +6,13 @@
  * (tarea programada), baja ese asset y se auto-actualiza.
  *
  * Uso:
- *   pnpm --filter @sta/server release
+ *   pnpm --filter @sta/server release            → deploy NORMAL (entra a las 4 AM)
+ *   pnpm --filter @sta/server release -- --now    → deploy INMEDIATO (entra en ~5 min)
+ *
+ * `--now` marca el release con el token STA_DEPLOY_NOW en el body. La tarea
+ * "STA Server Update NOW" del mini PC (corre cada 5 min en modo -Now) solo
+ * aplica releases con ese marcador → un hotfix entra sin esperar la madrugada
+ * y SIN AnyDesk: alcanza con pushear/publicar a GitHub.
  *
  * Requisitos:
  *   - gh CLI instalado y autenticado (`gh auth login`).
@@ -47,8 +53,10 @@ function execFile(file, args, cwd = REPO_ROOT) {
 const pkg = JSON.parse(fs.readFileSync(path.join(SERVER_DIR, 'package.json'), 'utf8'));
 const version = pkg.version;
 const tag = `server-v${version}`;
+// --now / -n → release inmediato (lo aplica la tarea de 5 min, no la de las 4 AM).
+const immediate = process.argv.slice(2).some((a) => a === '--now' || a === '-n');
 
-step(`Release ${tag}`);
+step(`Release ${tag}${immediate ? '  [INMEDIATO]' : ''}`);
 
 // 0. gh disponible + autenticado
 try {
@@ -101,11 +109,16 @@ console.log(`  ${zipName} (${sizeMb} MB)`);
 
 // 4. Crear el GitHub Release con el zip como asset
 step('Creando GitHub Release');
-const notes = `Servidor local Santa Teresita v${version}. Auto-instalable: cada server lo baja con update-server.ps1 (tarea programada 4 AM) o forzando .\\update-server.ps1 -Force`;
+// El token STA_DEPLOY_NOW en el body es lo que dispara el canal inmediato del
+// mini PC (update-server.ps1 -Now lo busca). Sin él = solo entra a las 4 AM.
+const baseNotes = `Servidor local Santa Teresita v${version}. Auto-instalable: cada server lo baja con update-server.ps1 (tarea 4 AM) o forzando .\\update-server.ps1 -Force`;
+const notes = immediate
+  ? `STA_DEPLOY_NOW\n\n${baseNotes}\n\n**Despliegue INMEDIATO**: la tarea "STA Server Update NOW" (cada 5 min) lo aplica sin esperar las 4 AM.`
+  : baseNotes;
 execFile('gh', [
   'release', 'create', tag, zipPath,
   '--repo', REPO,
-  '--title', `Server v${version}`,
+  '--title', `Server v${version}${immediate ? ' (inmediato)' : ''}`,
   '--notes', notes,
 ]);
 
@@ -113,4 +126,9 @@ execFile('gh', [
 fs.rmSync(zipPath, { force: true });
 
 step(`✓ Release ${tag} publicado`);
-console.log('  Los servers se actualizan solos (4 AM) o forzando: .\\update-server.ps1 -Force');
+if (immediate) {
+  console.log('  INMEDIATO: el mini PC lo aplica en ~5 min (tarea "STA Server Update NOW"). Sin AnyDesk.');
+} else {
+  console.log('  NORMAL: el mini PC lo aplica a las 4 AM. Para que entre YA: republicá con  -- --now');
+  console.log('  (o, manual en el server: .\\update-server.ps1 -Force)');
+}
