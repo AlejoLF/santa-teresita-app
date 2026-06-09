@@ -23,6 +23,7 @@ import analyticsRoutes from './routes/analytics.js';
 import syncRoutes from './routes/sync.js';
 import { startOutboxFlusher } from './services/outbox-flusher.js';
 import { startReplicator } from './services/replicator.js';
+import { startGeocoder } from './services/geocoder.js';
 import { runCatchUp } from './services/catch-up.js';
 import { runMirrorSyncOnce } from './services/mirror-sync.js';
 import { startDbRouter, dbRouterEnabled, dbState } from './services/db-router.js';
@@ -294,6 +295,11 @@ try {
   // Replicator local → Supabase. Solo arranca si STA_ROLE=server +
   // REPLICATE_TO_URL configurado (el mini PC). En las cajas es no-op.
   startReplicator();
+
+  // Geocoder batch (Nominatim): resuelve lat/lng de direcciones de delivery
+  // pendientes. Solo en el server (única instancia, 1 req/seg) — los updates
+  // van con audit→outbox y el replicator los empuja a Supabase. No-op en cajas.
+  startGeocoder();
 
   // DB router de la caja (failover LAN→Supabase). Solo activo si
   // STA_FALLBACK_DB_URL está configurado. En el server / .exe legacy: no-op.

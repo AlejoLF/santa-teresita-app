@@ -197,9 +197,9 @@ export function TabMapa(props: TabProps) {
         {data.geocodingPendiente > 0 && (
           <div className="bg-saffron-100 border-l-4 border-saffron-600 p-2 mb-3 text-xs">
             ⚠ Hay <strong>{fmtNum(data.geocodingPendiente)}</strong> direcciones de los últimos 90 días sin geocodificar.
-            Aparecerán en el mapa cuando un job batch las procese vía Nominatim
-            (próxima iteración). Las nuevas ventas que se cargan ahora se
-            geocodifican on-write.
+            El server las procesa automáticamente (Nominatim, cada ~10 min) y van
+            apareciendo en el mapa solas. Las que no se puedan resolver tras 3
+            intentos quedan marcadas y dejan de contarse acá.
           </div>
         )}
 

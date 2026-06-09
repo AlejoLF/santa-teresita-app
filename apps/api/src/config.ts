@@ -44,6 +44,12 @@ const ConfigSchema = z.object({
   //   solo lectura. Lo usa la máquina del dueño para ver producción en local
   //   sin fetchear todo el tiempo. En las cajas reales NO se setea.
   STA_MIRROR_SOURCE_URL: z.string().optional(),
+  // STA_GEOCODER: fuerza el job de geocoding (Nominatim) aunque STA_ROLE no
+  //   sea 'server'. Para dev/standalone. En producción corre solo en el server.
+  STA_GEOCODER: z
+    .union([z.boolean(), z.string()])
+    .default(false)
+    .transform((v) => v === true || v === 'true' || v === '1'),
 });
 
 const parsed = ConfigSchema.safeParse(process.env);
