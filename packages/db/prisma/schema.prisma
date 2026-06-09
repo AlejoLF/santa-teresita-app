@@ -928,7 +928,10 @@ model Venta {
   usuarioAnulacionId String? @map("usuario_anulacion_id") @db.Uuid
   motivoAnulacion    String? @map("motivo_anulacion")
 
-  sesionCajaId      String    @map("sesion_caja_id") @db.Uuid
+  /// Opcional: las ventas vivas SIEMPRE la setean (invariante, ver CLAUDE.md).
+  /// NULL solo se permite para filas migradas (origen='innovo') vía CHECK en DB:
+  /// `sesion_caja_id IS NOT NULL OR origen = 'innovo'`.
+  sesionCajaId      String?   @map("sesion_caja_id") @db.Uuid
   fechaApertura     DateTime  @default(now()) @map("fecha_apertura")
   fechaFinalizacion DateTime? @map("fecha_finalizacion")
   fechaAnulacion    DateTime? @map("fecha_anulacion")
@@ -942,12 +945,17 @@ model Venta {
   ticketClienteImpreso      Boolean @default(false) @map("ticket_cliente_impreso")
   descuentoEfectivoAplicado Boolean @default(false) @map("descuento_efectivo_aplicado")
 
+  /// Procedencia de la fila. NULL/ausente = operación viva del programa.
+  /// 'innovo' = migrada del histórico de Innovo (no se encadena en el audit
+  /// hash-chain y puede no tener sesión de caja). Ver docs/MIGRACION-INNOVO.md.
+  origen String? @db.VarChar(20)
+
   cliente          Cliente?     @relation(fields: [clienteId], references: [id])
   listaPrecios     ListaPrecios @relation(fields: [listaPreciosId], references: [id])
   usuarioApertura  Usuario      @relation("VentaApertura", fields: [usuarioAperturaId], references: [id])
   usuarioCierre    Usuario?     @relation("VentaCierre", fields: [usuarioCierreId], references: [id])
   usuarioAnulacion Usuario?     @relation("VentaAnulacion", fields: [usuarioAnulacionId], references: [id])
-  sesionCaja       SesionCaja   @relation(fields: [sesionCajaId], references: [id])
+  sesionCaja       SesionCaja?  @relation(fields: [sesionCajaId], references: [id])
 
   items             ItemVenta[]
   pagos             Pago[]
@@ -1013,6 +1021,8 @@ model Cliente {
   observaciones   String?
   activo          Boolean     @default(true)
   creadoAt        DateTime    @default(now()) @map("creado_at")
+  /// 'innovo' = contacto importado del histórico de Innovo. NULL = nativo.
+  origen          String?     @db.VarChar(20)
 
   direcciones      Direccion[]
   ventas           Venta[]

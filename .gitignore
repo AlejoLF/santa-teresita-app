@@ -2,6 +2,11 @@
 node_modules/
 .pnpm-store/
 
+# Datos de migración Innovo — NUNCA commitear (repo público + PII de clientes
+# + dumps de 337 MB). Backups .7z, dumps SQL, CSV de mapeo. Trabajo local only.
+bases/
+innovo-dump/
+
 # Build output
 dist/
 build/
