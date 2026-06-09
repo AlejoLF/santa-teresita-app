@@ -1,7 +1,30 @@
 # Migración de datos Innovo → Santa Teresita
 
-Estado: **descubrimiento completo + borrador de mapeo listo para revisión.**
+Estado: **✅ MIGRACIÓN COMPLETA** — histórico cargado a Supabase 2026-06-09.
 Última actualización: 2026-06-09.
+
+## 0. Resultado final (cargado a Supabase)
+
+- **217.652 ventas + 453.392 items** históricos (2019-06 → 2026-05-31), mezclados
+  en las tablas vivas (`ventas`/`items_venta`) con `origen='innovo'`, mapeados a
+  nuestros productos. Facturado total $1.983M; por año coherente (2019 $7,7M →
+  2025 $792M). Cutover 2026-06-01 respetado: la data viva de junio (462 ventas)
+  intacta, sin duplicados (0 items huérfanos).
+- **781 contactos de delivery** → `clientes` (`origen='innovo'`, dedup por tel).
+- **10 productos nuevos** (9 postres `POS-*` + `OTROS-HIST`), inactivos, para anclar
+  el histórico.
+- Esquema: `origen` + `sesion_caja_id` nullable + CHECK (commit `7dd4843`).
+- **Reversible:** `DELETE FROM items_venta USING ventas WHERE ...` /
+  `DELETE FROM ventas WHERE origen='innovo'` deshace todo.
+- Loaders en `D:\innovo-migracion\loaders\` (fuera del repo).
+
+### Pendiente (opcional, follow-up)
+- Server LOCAL no tiene el histórico (se cargó solo a Supabase → lo ve la PWA de
+  stats; las cajas leen local y no lo necesitan). Si se quiere en el admin de
+  escritorio (que lee local), cargar igual al server + releasear binarios con el
+  Prisma nuevo (`sesionCajaId` opcional).
+- Pagos históricos NO migrados (requieren resolver la cadena premio de Innovo;
+  no afectan facturado/productos/canal). `total_pagado` = `total`.
 
 ## 1. Qué encontramos
 
