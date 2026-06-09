@@ -6,8 +6,9 @@
 //     irm <raw url> -OutFile C:\sta-temp\copia-historico-a-s1.mjs
 //     node copia-historico-a-s1.mjs
 // Lee DATABASE_URL (local) y REPLICATE_TO_URL (Supabase) de C:\sta-server\.env.
-// Idempotente (ON CONFLICT DO NOTHING). Reversible: las filas llevan
-// origen='innovo' / sesion centinela.
+// Idempotente (ON CONFLICT DO NOTHING). Usa json_populate_recordset (mapea
+// columnas + enums solo, sin enumerar). También copia categorias/tipos/listas
+// porque el migrate-cloud-to-local del cutover los dejó vacíos en S1.
 import pkg from 'pg';
 import fs from 'node:fs';
 const { Pool } = pkg;
@@ -17,38 +18,38 @@ const env = Object.fromEntries(
     .filter((l) => l.includes('=') && !l.trim().startsWith('#'))
     .map((l) => [l.slice(0, l.indexOf('=')).trim(), l.slice(l.indexOf('=') + 1).trim()]),
 );
-const localUrl = env.DATABASE_URL;
-const cloudUrl = env.REPLICATE_TO_URL;
-if (!localUrl || !cloudUrl) { console.error('Falta DATABASE_URL o REPLICATE_TO_URL en .env'); process.exit(1); }
+if (!env.DATABASE_URL || !env.REPLICATE_TO_URL) { console.error('Falta DATABASE_URL o REPLICATE_TO_URL en .env'); process.exit(1); }
+const local = new Pool({ connectionString: env.DATABASE_URL, max: 4 });
+const cloud = new Pool({ connectionString: env.REPLICATE_TO_URL, ssl: { rejectUnauthorized: false }, max: 4 });
 
-const local = new Pool({ connectionString: localUrl, max: 4 });
-const cloud = new Pool({ connectionString: cloudUrl, ssl: { rejectUnauthorized: false }, max: 4 });
+// Tabla chica: copia completa (o filtrada) en una.
+async function copyFull(table, where = 'true') {
+  const { rows } = await cloud.query(`SELECT row_to_json(t) j FROM ${table} t WHERE ${where}`);
+  if (rows.length === 0) { console.log(`  ${table}: 0 (nada en cloud)`); return; }
+  await local.query(
+    `INSERT INTO ${table} SELECT * FROM json_populate_recordset(null::${table}, $1::json) ON CONFLICT DO NOTHING`,
+    [JSON.stringify(rows.map((r) => r.j))],
+  );
+  console.log(`✓ ${table}: ${rows.length}`);
+}
 
-const VCOLS = 'id,numero,numero_orden_turno,canal,modalidad,estado,cliente_id,lista_precios_id,subtotal,descuento_total,recargo_canal,total,total_pagado,pc_origen,usuario_apertura_id,usuario_cierre_id,usuario_anulacion_id,motivo_anulacion,sesion_caja_id,fecha_apertura,fecha_finalizacion,fecha_anulacion,observaciones,id_externo_canal,payload_externo,tiene_cocina,comanda_impresa,ticket_cliente_impreso,descuento_efectivo_aplicado,origen';
-const VDEF = 'id uuid,numero int,numero_orden_turno int,canal text,modalidad text,estado text,cliente_id uuid,lista_precios_id uuid,subtotal numeric,descuento_total numeric,recargo_canal numeric,total numeric,total_pagado numeric,pc_origen text,usuario_apertura_id uuid,usuario_cierre_id uuid,usuario_anulacion_id uuid,motivo_anulacion text,sesion_caja_id uuid,fecha_apertura timestamp,fecha_finalizacion timestamp,fecha_anulacion timestamp,observaciones text,id_externo_canal text,payload_externo text,tiene_cocina boolean,comanda_impresa boolean,ticket_cliente_impreso boolean,descuento_efectivo_aplicado boolean,origen text';
-const VSEL = 'id,numero,numero_orden_turno,canal::"CanalVenta",modalidad::"ModalidadVenta",estado::"EstadoVenta",cliente_id,lista_precios_id,subtotal,descuento_total,recargo_canal,total,total_pagado,pc_origen,usuario_apertura_id,usuario_cierre_id,usuario_anulacion_id,motivo_anulacion,sesion_caja_id,fecha_apertura,fecha_finalizacion,fecha_anulacion,observaciones,id_externo_canal,payload_externo::jsonb,tiene_cocina,comanda_impresa,ticket_cliente_impreso,descuento_efectivo_aplicado,origen';
-const ICOLS = 'id,venta_id,producto_id,nombre_snapshot,cantidad,unidad,precio_unitario,delta_modificadores,subtotal,descuento_linea,total_linea,orden,cocina_interviene,creado_at';
-const IDEF = 'id uuid,venta_id uuid,producto_id uuid,nombre_snapshot text,cantidad numeric,unidad text,precio_unitario numeric,delta_modificadores numeric,subtotal numeric,descuento_linea numeric,total_linea numeric,orden int,cocina_interviene boolean,creado_at timestamp';
-const ISEL = 'id,venta_id,producto_id,nombre_snapshot,cantidad,unidad::"FormaVenta",precio_unitario,delta_modificadores,subtotal,descuento_linea,total_linea,orden,cocina_interviene,creado_at';
-
-// Lee de cloud por keyset (id) y escribe a local por lotes.
-async function copy(label, baseFrom, cols, def, sel, target, batch) {
+// Tabla grande: keyset por id, en lotes.
+async function copyBig(table, where, batch) {
   let last = '00000000-0000-0000-0000-000000000000', done = 0;
   for (;;) {
     const { rows } = await cloud.query(
-      `SELECT row_to_json(t) j, t.id::text id FROM (${baseFrom} AND t.id > $1 ORDER BY t.id LIMIT ${batch}) t`,
+      `SELECT row_to_json(t) j, t.id::text id FROM ${table} t WHERE (${where}) AND t.id > $1 ORDER BY t.id LIMIT ${batch}`,
       [last],
     );
     if (rows.length === 0) break;
-    const json = JSON.stringify(rows.map((r) => r.j));
     await local.query(
-      `INSERT INTO ${target} (${cols}) SELECT ${sel} FROM json_to_recordset($1::json) AS x(${def}) ON CONFLICT (id) DO NOTHING`,
-      [json],
+      `INSERT INTO ${table} SELECT * FROM json_populate_recordset(null::${table}, $1::json) ON CONFLICT DO NOTHING`,
+      [JSON.stringify(rows.map((r) => r.j))],
     );
     last = rows[rows.length - 1].id; done += rows.length;
-    if (done % (batch * 10) === 0) console.log(`  ${label}: ${done}`);
+    if (done % (batch * 10) === 0) console.log(`  ${table}: ${done}`);
   }
-  console.log(`✓ ${label}: ${done}`);
+  console.log(`✓ ${table}: ${done}`);
 }
 
 try {
@@ -59,27 +60,26 @@ try {
   await local.query(`ALTER TABLE ventas DROP CONSTRAINT IF EXISTS ventas_sesion_o_origen_chk`);
   await local.query(`ALTER TABLE ventas ADD CONSTRAINT ventas_sesion_o_origen_chk CHECK (sesion_caja_id IS NOT NULL OR origen = 'innovo')`);
 
-  console.log('2) 10 productos nuevos (postres + otros)...');
-  await copy('productos', `SELECT id,tipo_producto_id,nombre,forma_venta::text,precio_base,unidad_precio::text,codigo,activo FROM productos t WHERE (codigo LIKE 'POS-%' OR codigo='OTROS-HIST')`,
-    'id,tipo_producto_id,nombre,forma_venta,precio_base,unidad_precio,codigo,activo',
-    'id uuid,tipo_producto_id uuid,nombre text,forma_venta text,precio_base numeric,unidad_precio text,codigo text,activo boolean',
-    'id,tipo_producto_id,nombre,forma_venta::"FormaVenta",precio_base,unidad_precio::"UnidadPrecio",codigo,activo', 'productos', 50);
+  console.log('2) Catálogo de soporte (estaba vacío en S1)...');
+  await copyFull('categorias');
+  await copyFull('tipos_producto');
+  await copyFull('listas_precios');
 
-  console.log('3) Sesión centinela...');
-  await copy('sesion', `SELECT id,fecha,turno::text,horario_apertura,horario_cierre,existencia_inicial,existencia_final,usuario_apertura_id,usuario_cierre_id,aprobada_por_admin,estado::text,ultimo_numero_orden,observaciones,cerrada_anticipadamente FROM sesiones_caja t WHERE id='00000000-0000-0000-0000-000000000099'`,
-    'id,fecha,turno,horario_apertura,horario_cierre,existencia_inicial,existencia_final,usuario_apertura_id,usuario_cierre_id,aprobada_por_admin,estado,ultimo_numero_orden,observaciones,cerrada_anticipadamente',
-    'id uuid,fecha date,turno text,horario_apertura timestamp,horario_cierre timestamp,existencia_inicial numeric,existencia_final numeric,usuario_apertura_id uuid,usuario_cierre_id uuid,aprobada_por_admin boolean,estado text,ultimo_numero_orden int,observaciones text,cerrada_anticipadamente boolean',
-    'id,fecha,turno::"TurnoCaja",horario_apertura,horario_cierre,existencia_inicial,existencia_final,usuario_apertura_id,usuario_cierre_id,aprobada_por_admin,estado::"EstadoSesionCaja",ultimo_numero_orden,observaciones,cerrada_anticipadamente', 'sesiones_caja', 10);
+  console.log('3) 10 productos nuevos (postres + otros)...');
+  await copyFull('productos', `(codigo LIKE 'POS-%' OR codigo='OTROS-HIST')`);
 
-  console.log('4) Ventas históricas (217K)...');
-  await copy('ventas', `SELECT ${VCOLS.split(',').map((c)=>'t.'+c).join(',')} FROM ventas t WHERE t.origen='innovo'`, VCOLS, VDEF, VSEL, 'ventas', 1000);
+  console.log('4) Sesión centinela...');
+  await copyFull('sesiones_caja', `id='00000000-0000-0000-0000-000000000099'`);
 
-  console.log('5) Items históricos (453K)...');
-  await copy('items', `SELECT ${ICOLS.split(',').map((c)=>'t.'+c).join(',')} FROM items_venta t JOIN ventas v ON v.id=t.venta_id WHERE v.origen='innovo'`, ICOLS, IDEF, ISEL, 'items_venta', 2500);
+  console.log('5) Ventas históricas (217K)...');
+  await copyBig('ventas', `t.origen='innovo'`, 1000);
 
-  const chk = (await local.query(`SELECT count(*)::int v FROM ventas WHERE origen='innovo'`)).rows[0];
-  const chi = (await local.query(`SELECT count(*)::int i FROM items_venta i JOIN ventas v ON v.id=i.venta_id WHERE v.origen='innovo'`)).rows[0];
-  console.log(`\n✓ EN S1-LOCAL: ${chk.v} ventas históricas, ${chi.i} items.`);
+  console.log('6) Items históricos (453K)...');
+  await copyBig('items_venta', `EXISTS (SELECT 1 FROM ventas v WHERE v.id=t.venta_id AND v.origen='innovo')`, 2500);
+
+  const v = (await local.query(`SELECT count(*)::int n FROM ventas WHERE origen='innovo'`)).rows[0].n;
+  const i = (await local.query(`SELECT count(*)::int n FROM items_venta i JOIN ventas v ON v.id=i.venta_id WHERE v.origen='innovo'`)).rows[0].n;
+  console.log(`\n✓ EN S1-LOCAL: ${v} ventas históricas, ${i} items.`);
 } catch (e) {
   console.error('ERROR:', e.message); process.exitCode = 1;
 } finally {
