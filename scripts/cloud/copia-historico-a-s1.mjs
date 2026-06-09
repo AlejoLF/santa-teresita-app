@@ -1,7 +1,10 @@
 // Copia el histórico de Innovo de Supabase -> base LOCAL de S1.
-// Correr EN S1, desde C:\sta-server\api  (ahí resuelve `pg`):
-//     cd C:\sta-server\api
-//     node ..\copia-historico-a-s1.mjs        (o la ruta donde lo dejes)
+// OJO: el server NO tiene `pg` suelto (esbuild lo bundlea dentro de server.mjs).
+// Correr desde una carpeta temporal con `pg` instalado:
+//     mkdir C:\sta-temp -Force; cd C:\sta-temp
+//     npm init -y; npm install pg
+//     irm <raw url> -OutFile C:\sta-temp\copia-historico-a-s1.mjs
+//     node copia-historico-a-s1.mjs
 // Lee DATABASE_URL (local) y REPLICATE_TO_URL (Supabase) de C:\sta-server\.env.
 // Idempotente (ON CONFLICT DO NOTHING). Reversible: las filas llevan
 // origen='innovo' / sesion centinela.
