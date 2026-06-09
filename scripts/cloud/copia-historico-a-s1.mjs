@@ -65,8 +65,8 @@ try {
   await copyFull('tipos_producto');
   await copyFull('listas_precios');
 
-  console.log('3) 10 productos nuevos (postres + otros)...');
-  await copyFull('productos', `(codigo LIKE 'POS-%' OR codigo='OTROS-HIST')`);
+  console.log('3) Productos faltantes en S1 (los ya existentes se saltean)...');
+  await copyFull('productos'); // todos: ON CONFLICT salta los 343 existentes, agrega los ~14 que faltan
 
   console.log('4) Sesión centinela...');
   await copyFull('sesiones_caja', `id='00000000-0000-0000-0000-000000000099'`);
