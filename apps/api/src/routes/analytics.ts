@@ -1043,9 +1043,10 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         LIMIT 500
       `);
 
-      // Cuántas direcciones falta geocodificar. Excluye las que el geocoder
-      // ya marcó como irresolubles (geo_fallido tras 3 intentos) — esas no
-      // van a aparecer nunca y no son "pendientes".
+      // Cuántas direcciones falta geocodificar. Excluye las irresolubles:
+      // las que el geocoder marcó geo_fallido (agotó intentos) y las que no
+      // tienen texto de dirección (nada que geocodificar) — ninguna de esas
+      // es "pendiente".
       const pendientesRows = await prisma.$queryRaw<
         Array<{ pendientes: number }>
       >(Prisma.sql`
@@ -1054,6 +1055,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         JOIN ventas v ON v.id = d.venta_id
         WHERE NOT (d.direccion_snapshot ? 'lat')
           AND NOT (d.direccion_snapshot ? 'geo_fallido')
+          AND COALESCE(NULLIF(TRIM(d.direccion_snapshot->>'direccion'), ''), '') <> ''
           AND v.fecha_apertura >= (CURRENT_DATE - INTERVAL '90 days')
       `);
 

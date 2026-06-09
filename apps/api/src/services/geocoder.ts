@@ -27,7 +27,10 @@ import { recordAudit } from './audit.js';
 const SWEEP_INTERVAL_MS = 10 * 60 * 1000; // 10 min
 const FIRST_SWEEP_DELAY_MS = 20_000; // dejar que el server termine de arrancar
 const BATCH_POR_SWEEP = 30;
-const MAX_INTENTOS = 3;
+// 6 (antes 3): las que el normalizador v1 marcó geo_fallido con texto válido
+// se rescatan — el barrido las re-incluye hasta agotar este cap con las
+// variantes nuevas (num/n/c./diag + recorte de colas).
+const MAX_INTENTOS = 6;
 const NOMINATIM_DELAY_MS = 1_100; // ToS Nominatim: máx 1 req/seg
 const USER_AGENT = 'SantaTeresitaApp/1.0 (alejolafalce@gmail.com)';
 // Bounding box de Gran La Plata (lon W, lat N, lon E, lat S) — restringe
@@ -46,17 +49,30 @@ type Candidato = {
   intentos: number;
 };
 
-/** Variantes de query para una dirección platense (cruda + normalizada). */
+/**
+ * Variantes de query para una dirección platense. La normalizada va PRIMERO
+ * (mucho mejor hit-rate): extrae calle + altura y descarta la cola con ruido
+ * (piso, dpto, esq, "—", nombre del local…).
+ *
+ *   "c. 55 n496 piso 8 dpto 3 entre 4 y 5" → "Calle 55 496"
+ *   "48 num 657"                           → "Calle 48 657"
+ *   "diag 73 nro 450"                      → "Diagonal 73 450"
+ *   "44 num 158 —"                         → "Calle 44 158"
+ */
 function variantes(direccion: string): string[] {
   const out: string[] = [];
   const dir = direccion.replace(/\s+/g, ' ').trim();
-  out.push(dir);
-  // "12 nro 1234" / "12 n° 1234" / "12 1234" → "Calle 12 1234"
-  const m = dir.match(/^(\d{1,3})\s*(?:n°?\.?|nro\.?|nº|#)?\s*(\d{2,5})\b/i);
-  if (m && !/^calle/i.test(dir)) {
-    const norm = `Calle ${m[1]} ${m[2]}`;
-    if (norm.toLowerCase() !== dir.toLowerCase()) out.push(norm);
+  // Entre calle y altura DEBE haber un separador: un marcador ("nro 1234",
+  // "n496", "num 657", "#1234") o al menos un espacio ("26 1572"). Sin esto,
+  // "12 y 63" se partiría en calle 1 altura 2.
+  const m = dir.match(
+    /^(?:c(?:alle)?\.?\s+)?(?:(diag(?:onal)?|av(?:enida)?|avda)\.?\s+)?(\d{1,3})(?:\s*(?:nro|num|n[°ºo]?|nº|#)\.?\s*|\s+)(\d{1,5})\b/i,
+  );
+  if (m) {
+    const tipo = m[1] ? (/^d/i.test(m[1]) ? 'Diagonal' : 'Avenida') : 'Calle';
+    out.push(`${tipo} ${m[2]} ${m[3]}`);
   }
+  if (!out.some((v) => v.toLowerCase() === dir.toLowerCase())) out.push(dir);
   return out;
 }
 
@@ -83,6 +99,7 @@ async function actualizarSnapshot(
   id: string,
   extra: Record<string, unknown>,
   conAudit: boolean,
+  quitarKeys: string[] = [],
 ): Promise<void> {
   const row = await prisma.deliveryInfo.findUnique({ where: { id } });
   if (!row) return;
@@ -90,6 +107,7 @@ async function actualizarSnapshot(
     ...((row.direccionSnapshot as Record<string, unknown>) ?? {}),
     ...extra,
   };
+  for (const k of quitarKeys) delete snapshot[k];
   await prisma.$transaction(async (tx) => {
     await tx.deliveryInfo.update({
       where: { id },
@@ -118,6 +136,10 @@ export async function runGeocoderSweep(): Promise<{ ok: number; fail: number }> 
   let ok = 0;
   let fail = 0;
   try {
+    // Incluye también las geo_fallido CON texto y intentos < MAX_INTENTOS:
+    // rescate de las que un normalizador anterior marcó antes de tiempo.
+    // (Las geo_fallido SIN texto quedan afuera por el primer AND — no hay
+    // nada que geocodificar ahí.)
     const candidatos = await prisma.$queryRaw<Candidato[]>(Prisma.sql`
       SELECT
         d.id::text AS id,
@@ -125,8 +147,9 @@ export async function runGeocoderSweep(): Promise<{ ok: number; fail: number }> 
         COALESCE((d.direccion_snapshot->>'geo_intentos')::int, 0) AS intentos
       FROM delivery_info d
       JOIN ventas v ON v.id = d.venta_id
-      WHERE NOT (d.direccion_snapshot ? 'lat')
-        AND NOT (d.direccion_snapshot ? 'geo_fallido')
+      WHERE COALESCE(NULLIF(TRIM(d.direccion_snapshot->>'direccion'), ''), '') <> ''
+        AND NOT (d.direccion_snapshot ? 'lat')
+        AND COALESCE((d.direccion_snapshot->>'geo_intentos')::int, 0) < ${MAX_INTENTOS}
         AND v.fecha_apertura >= (CURRENT_DATE - INTERVAL '90 days')
       ORDER BY v.fecha_apertura DESC
       LIMIT ${BATCH_POR_SWEEP}
@@ -135,12 +158,8 @@ export async function runGeocoderSweep(): Promise<{ ok: number; fail: number }> 
     log(`barrido: ${candidatos.length} direcciones pendientes`);
 
     for (const c of candidatos) {
-      // Sin texto de dirección no hay nada que geocodificar → estado final.
-      if (!c.direccion) {
-        await actualizarSnapshot(c.id, { geo_fallido: true }, true);
-        fail++;
-        continue;
-      }
+      // El SQL garantiza dirección no vacía; esto es solo red de seguridad.
+      if (!c.direccion) continue;
       try {
         let hit: { lat: number; lng: number } | null = null;
         for (const q of variantes(c.direccion)) {
@@ -149,10 +168,12 @@ export async function runGeocoderSweep(): Promise<{ ok: number; fail: number }> 
           if (hit) break;
         }
         if (hit) {
+          // Si era un rescate (geo_fallido previo), limpiamos los flags.
           await actualizarSnapshot(
             c.id,
             { lat: hit.lat, lng: hit.lng, geo_fuente: 'nominatim', geo_at: new Date().toISOString() },
             true,
+            ['geo_fallido', 'geo_intentos'],
           );
           ok++;
         } else {
