@@ -318,7 +318,7 @@ export default function AdminDashboard() {
                 show={data.pendientes.facturasSinValidar > 0}
                 label={`${data.pendientes.facturasSinValidar} facturas cargadas por OCR sin validar`}
                 icon="🧾"
-                href="/admin/insumos"
+                href="/admin/facturas?estado=PENDIENTE_VALIDACION"
                 accent="warning"
               />
               <PendienteRow
