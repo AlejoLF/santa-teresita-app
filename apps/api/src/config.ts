@@ -50,6 +50,10 @@ const ConfigSchema = z.object({
     .union([z.boolean(), z.string()])
     .default(false)
     .transform((v) => v === true || v === 'true' || v === '1'),
+  // INGEST_API_TOKEN: Bearer token de máquina para el endpoint de ingesta de
+  //   facturas OCR (n8n local en el server → POST /api/v1/ingest/facturas).
+  //   Si falta, el endpoint responde 503 (deshabilitado). NO es el AUTH_SECRET.
+  INGEST_API_TOKEN: z.string().min(24).optional(),
 });
 
 const parsed = ConfigSchema.safeParse(process.env);
