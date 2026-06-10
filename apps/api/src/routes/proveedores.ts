@@ -455,6 +455,279 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // GET /admin/facturas — listado (inbox). Filtra por estado (ej. la bandeja
+  // de "sin validar" del flujo OCR). Liviano: para la lista, no el detalle.
+  fastify.get(
+    '/admin/facturas',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        querystring: z.object({
+          estado: z
+            .enum(['PENDIENTE_VALIDACION', 'PENDIENTE_PAGO', 'PAGADA_PARCIAL', 'PAGADA', 'ANULADA'])
+            .optional(),
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+        }),
+      },
+    },
+    async (req) => {
+      const q = req.query as { estado?: string; limit: number };
+      const facturas = await prisma.facturaRecibida.findMany({
+        where: q.estado ? { estado: q.estado as never } : undefined,
+        select: {
+          id: true,
+          numero: true,
+          puntoVenta: true,
+          tipoComprobante: true,
+          total: true,
+          estado: true,
+          origen: true,
+          ocrConfianza: true,
+          fechaEmision: true,
+          creadoAt: true,
+          proveedor: { select: { id: true, nombre: true } },
+          _count: { select: { items: true } },
+        },
+        // sin validar primero por más viejas (cola FIFO); el resto por carga.
+        orderBy: q.estado === 'PENDIENTE_VALIDACION' ? { creadoAt: 'asc' } : { creadoAt: 'desc' },
+        take: q.limit,
+      });
+      return {
+        facturas: facturas.map((f) => ({
+          ...f,
+          total: f.total.toString(),
+          ocrConfianza: f.ocrConfianza?.toString() ?? null,
+          itemsCount: f._count.items,
+          _count: undefined,
+        })),
+      };
+    },
+  );
+
+  // PATCH /admin/facturas/:id — corregir los datos de una factura ANTES de
+  // validar (el humano arregla lo que el OCR leyó mal). Solo en
+  // PENDIENTE_VALIDACION. Reemplaza items si vienen. NO toca pagos.
+  fastify.patch(
+    '/admin/facturas/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          proveedorId: z.string().uuid().optional(),
+          tipoComprobante: z
+            .enum(['FACTURA_A', 'FACTURA_B', 'FACTURA_C', 'FACTURA_X', 'NOTA_CREDITO', 'NOTA_DEBITO', 'TICKET', 'REMITO', 'OTRO'])
+            .optional(),
+          puntoVenta: z.string().max(20).nullable().optional(),
+          numero: z.string().min(1).max(40).optional(),
+          fechaEmision: z.string().optional(),
+          fechaVencimiento: z.string().nullable().optional(),
+          neto: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+          iva: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+          total: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+          observaciones: z.string().max(2000).nullable().optional(),
+          items: z
+            .array(
+              z.object({
+                insumoId: z.string().uuid().nullable().optional(),
+                descripcion: z.string().min(1).max(240),
+                cantidad: z.string().regex(/^\d+(\.\d{1,3})?$/),
+                unidad: z.string().min(1).max(20),
+                precioUnitario: z.string().regex(/^\d+(\.\d{1,4})?$/),
+                alicuotaIva: z.string().regex(/^\d+(\.\d{1,4})?$/).default('21'),
+                subtotal: z.string().regex(/^\d+(\.\d{1,2})?$/),
+              }),
+            )
+            .optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as Record<string, unknown> & {
+        items?: Array<{
+          insumoId?: string | null; descripcion: string; cantidad: string;
+          unidad: string; precioUnitario: string; alicuotaIva: string; subtotal: string;
+        }>;
+      };
+      const actual = await prisma.facturaRecibida.findUnique({
+        where: { id },
+        select: { id: true, estado: true, numero: true, total: true },
+      });
+      if (!actual) return reply.code(404).send({ error: 'Factura no encontrada' });
+      if (actual.estado !== EstadoFacturaRecibida.PENDIENTE_VALIDACION) {
+        return reply
+          .code(409)
+          .send({ error: 'Solo se puede editar una factura sin validar', estado: actual.estado });
+      }
+
+      const data: Record<string, unknown> = {};
+      if (body.proveedorId) data.proveedorId = body.proveedorId;
+      if (body.tipoComprobante) data.tipoComprobante = body.tipoComprobante;
+      if (body.puntoVenta !== undefined) data.puntoVenta = body.puntoVenta;
+      if (body.numero) data.numero = body.numero;
+      if (body.fechaEmision) {
+        data.fechaEmision = new Date(body.fechaEmision as string);
+        data.fechaComputo = new Date(body.fechaEmision as string);
+      }
+      if (body.fechaVencimiento !== undefined)
+        data.fechaVencimiento = body.fechaVencimiento ? new Date(body.fechaVencimiento as string) : null;
+      if (body.neto !== undefined) data.netoGravado = body.neto;
+      if (body.iva !== undefined) data.iva21 = body.iva;
+      if (body.total !== undefined) data.total = body.total;
+      if (body.observaciones !== undefined) data.observaciones = body.observaciones;
+
+      const updated = await prisma.$transaction(async (tx) => {
+        if (body.items) {
+          await tx.facturaItemRecibida.deleteMany({ where: { facturaId: id } });
+          data.items = {
+            create: body.items.map((it, idx) => ({
+              insumoId: it.insumoId ?? null,
+              descripcion: it.descripcion,
+              cantidad: it.cantidad,
+              unidad: it.unidad,
+              precioUnitario: it.precioUnitario,
+              alicuotaIva: it.alicuotaIva,
+              subtotal: it.subtotal,
+              orden: idx,
+            })),
+          };
+        }
+        const f = await tx.facturaRecibida.update({
+          where: { id },
+          data,
+          select: { id: true, numero: true, total: true },
+        });
+        await recordAudit({
+          tabla: 'facturas_recibidas',
+          registroId: id,
+          accion: 'UPDATE',
+          usuarioId: req.usuario!.id,
+          valorAnterior: { numero: actual.numero, total: actual.total.toString() },
+          valorNuevo: { numero: f.numero, total: f.total.toString(), itemsReemplazados: !!body.items },
+          contexto: { fuente: 'validacion-ocr-edit' },
+          tx,
+        });
+        return f;
+      });
+      return reply.send({ ok: true, id: updated.id });
+    },
+  );
+
+  // POST /admin/facturas/:id/validar — el humano ACEPTA la factura leída por
+  // OCR. PENDIENTE_VALIDACION → PENDIENTE_PAGO. Marca validadaAt + quién.
+  // Actualiza precio último por insumo (si hay items linkeados). NO genera
+  // ningún pago ni movimiento de cuenta — eso es el flujo de pago aparte.
+  fastify.post(
+    '/admin/facturas/:id/validar',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const factura = await prisma.facturaRecibida.findUnique({
+        where: { id },
+        select: {
+          id: true, estado: true, proveedorId: true, fechaEmision: true, numero: true,
+          items: { select: { insumoId: true, precioUnitario: true } },
+        },
+      });
+      if (!factura) return reply.code(404).send({ error: 'Factura no encontrada' });
+      if (factura.estado !== EstadoFacturaRecibida.PENDIENTE_VALIDACION) {
+        return reply.code(409).send({ error: 'La factura no está pendiente de validación', estado: factura.estado });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.facturaRecibida.update({
+          where: { id },
+          data: {
+            estado: EstadoFacturaRecibida.PENDIENTE_PAGO,
+            validadaAt: new Date(),
+            usuarioValidacionId: req.usuario!.id,
+          },
+        });
+        // Precio último por insumo+proveedor (solo items linkeados a un insumo).
+        for (const it of factura.items) {
+          if (!it.insumoId) continue;
+          const existing = await tx.insumoProveedor.findUnique({
+            where: { insumoId_proveedorId: { insumoId: it.insumoId, proveedorId: factura.proveedorId } },
+          });
+          if (!existing || !existing.fechaUltimoPrecio || existing.fechaUltimoPrecio < factura.fechaEmision) {
+            await tx.insumoProveedor.upsert({
+              where: { insumoId_proveedorId: { insumoId: it.insumoId, proveedorId: factura.proveedorId } },
+              create: {
+                insumoId: it.insumoId, proveedorId: factura.proveedorId,
+                precioUltimo: it.precioUnitario, fechaUltimoPrecio: factura.fechaEmision, esPrincipal: false,
+              },
+              update: { precioUltimo: it.precioUnitario, fechaUltimoPrecio: factura.fechaEmision },
+            });
+          }
+        }
+        await recordAudit({
+          tabla: 'facturas_recibidas',
+          registroId: id,
+          accion: 'UPDATE',
+          usuarioId: req.usuario!.id,
+          valorNuevo: { estado: 'PENDIENTE_PAGO', numero: factura.numero },
+          contexto: { fuente: 'validacion-ocr-aceptar' },
+          tx,
+        });
+      });
+      return reply.send({ ok: true, id, estado: 'PENDIENTE_PAGO' });
+    },
+  );
+
+  // POST /admin/facturas/:id/anular — rechazar (OCR basura / duplicado / error).
+  // Solo si no tiene pagos aplicados. → ANULADA.
+  fastify.post(
+    '/admin/facturas/:id/anular',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({ motivo: z.string().max(500).optional() }).optional(),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const motivo = (req.body as { motivo?: string } | undefined)?.motivo;
+      const factura = await prisma.facturaRecibida.findUnique({
+        where: { id },
+        select: { id: true, estado: true, totalPagado: true, numero: true, observaciones: true },
+      });
+      if (!factura) return reply.code(404).send({ error: 'Factura no encontrada' });
+      if (factura.estado === EstadoFacturaRecibida.ANULADA) {
+        return reply.send({ ok: true, id, estado: 'ANULADA' });
+      }
+      if (Number(factura.totalPagado) > 0.01) {
+        return reply.code(409).send({ error: 'No se puede anular una factura con pagos aplicados' });
+      }
+      await prisma.$transaction(async (tx) => {
+        await tx.facturaRecibida.update({
+          where: { id },
+          data: {
+            estado: EstadoFacturaRecibida.ANULADA,
+            observaciones: motivo
+              ? `${factura.observaciones ? factura.observaciones + ' | ' : ''}ANULADA: ${motivo}`
+              : factura.observaciones,
+          },
+        });
+        await recordAudit({
+          tabla: 'facturas_recibidas',
+          registroId: id,
+          accion: 'UPDATE',
+          usuarioId: req.usuario!.id,
+          valorAnterior: { estado: factura.estado },
+          valorNuevo: { estado: 'ANULADA', motivo: motivo ?? null },
+          contexto: { fuente: 'validacion-ocr-rechazar' },
+          tx,
+        });
+      });
+      return reply.send({ ok: true, id, estado: 'ANULADA' });
+    },
+  );
+
   // ──────────────────────────────────────────────────────────────────────
   //   INSUMOS (catálogo persistente)
   // ──────────────────────────────────────────────────────────────────────
