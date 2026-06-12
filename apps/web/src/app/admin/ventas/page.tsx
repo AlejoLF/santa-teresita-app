@@ -342,10 +342,10 @@ export default function VentasPage() {
               entry: data.cierreCajas.delivery.online,
             },
             {
-              label: 'Efectivo · DELIVERATE',
+              label: 'DELIVERATE (todos los métodos)',
               entry: data.cierreCajas.delivery.efectivoDeliverate,
               informativo: true,
-              hint: 'rinde semanal · NO entra a caja del día',
+              hint: 'rinde semanal neto de comisión · NO entra a caja del día',
             },
           ]}
         />

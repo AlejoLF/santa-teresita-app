@@ -10,6 +10,7 @@
 
 import ExcelJS from 'exceljs';
 import { prisma } from '@sta/db/client';
+import { esVentaDeliverate } from './clasificar-pago.js';
 
 interface SesionConTodo {
   id: string;
@@ -61,7 +62,9 @@ export interface CategoriaCobros {
   delivery: {
     efectivoDamian: number; // suma a caja
     online: number; // débito + transfer en pedidos por tel/wsp/web
-    efectivoDeliverate: number; // INFORMATIVO, no suma
+    /** TODO lo cobrado en ventas DELIVERATE (cualquier método). INFORMATIVO,
+     *  no suma: DELIVERATE lo rinde semanal descontando su porcentaje. */
+    efectivoDeliverate: number;
   };
   plataformas: {
     app: number; // cobrado por la app (RAPPI/PYA/MELI)
@@ -100,15 +103,19 @@ export function categorizarCobros(opts: {
     const esPlataforma =
       p.canal === 'RAPPI' || p.canal === 'PEDIDOS_YA' || p.canal === 'MERCADO_LIBRE';
 
-    if (esMostrador) {
+    // DELIVERATE va PRIMERO: la venta entra por su canal real (mostrador/
+    // teléfono/wsp) + modalidad DELIVERY_DELIVERATE. Si se chequea el canal
+    // antes, cae en "Efectivo Damián" o "Mostrador" — bug real reportado.
+    // TODO el cobro DELIVERATE (cualquier método) va a su discriminación:
+    // lo retiene DELIVERATE y lo rinde semanal con descuento de su servicio.
+    if (esDeliverate) {
+      c.delivery.efectivoDeliverate += p.monto;
+    } else if (esMostrador) {
       if (esEfectivo) c.mostrador.efectivo += p.monto;
       else if (esDebito) c.mostrador.debito += p.monto;
       else c.mostrador.creditoOtros += p.monto;
     } else if (esDeliveryLocal) {
       if (esEfectivo) c.delivery.efectivoDamian += p.monto;
-      else c.delivery.online += p.monto;
-    } else if (esDeliverate) {
-      if (esEfectivo) c.delivery.efectivoDeliverate += p.monto;
       else c.delivery.online += p.monto;
     } else if (esPlataforma) {
       if (esEfectivo) c.plataformas.efectivo += p.monto;
@@ -137,6 +144,8 @@ interface LineaMovimiento {
   hora: Date;
   tipo: string;
   categoria: string;
+  /** Nombre del empleado si el movimiento es de personal (sueldo/adelanto/comisión). */
+  empleado: string | null;
   cuenta: string;
   monto: string;
   observacion: string | null;
@@ -250,10 +259,28 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
     })),
   }));
 
+  // Movimientos de personal (sueldos/adelantos/comisiones) guardan el empleado
+  // en entidadId — lo resolvemos a nombre para que el email diga A QUIÉN se
+  // le pagó cada sueldo, no solo "Sueldos $X".
+  const entidadIds = [
+    ...new Set(movimientosRaw.map((m) => m.entidadId).filter((x): x is string => !!x)),
+  ];
+  const empleadosPorId = new Map<string, string>();
+  if (entidadIds.length > 0) {
+    const empleados = await prisma.empleado.findMany({
+      where: { id: { in: entidadIds } },
+      select: { id: true, nombre: true, apellido: true },
+    });
+    for (const e of empleados) {
+      empleadosPorId.set(e.id, `${e.nombre}${e.apellido ? ' ' + e.apellido : ''}`);
+    }
+  }
+
   const movimientos: LineaMovimiento[] = movimientosRaw.map((m) => ({
     hora: m.fechaComputo,
     tipo: m.tipo,
     categoria: m.categoria.nombre,
+    empleado: (m.entidadId && empleadosPorId.get(m.entidadId)) || null,
     cuenta:
       m.tipo === 'TRANSFERENCIA_INTERNA'
         ? `${m.cuentaOrigen?.nombre ?? '—'} → ${m.cuentaDestino?.nombre ?? '—'}`
@@ -280,9 +307,13 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
   const categorias = categorizarCobros({ pagos: pagosParaCategorizar });
 
   const totalCobrado = ventasFinalizadas.reduce((acc, v) => acc + Number(v.total), 0);
-  const totalEfectivo = Array.from(pagAgg.values())
-    .filter((p) => p.metodo === 'EFECTIVO')
-    .reduce((acc, p) => acc + p.total, 0);
+  // Efectivo del CAJÓN: excluye ventas DELIVERATE — ese efectivo lo cobró el
+  // repartidor de DELIVERATE y se rinde semanal, nunca pasó por la caja.
+  const totalEfectivo = ventasFinalizadas
+    .filter((v) => !esVentaDeliverate(v.canal, v.modalidad))
+    .flatMap((v) => v.pagos)
+    .filter((p) => p.estado === 'CONFIRMADO' && p.metodo === 'EFECTIVO')
+    .reduce((acc, p) => acc + Number(p.monto), 0);
   const totalNoEfectivo = Array.from(pagAgg.values())
     .filter((p) => p.metodo !== 'EFECTIVO')
     .reduce((acc, p) => acc + p.total, 0);
@@ -434,7 +465,7 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
   seccionLabel('Ventas');
   wsResumen.addRow(['Ventas finalizadas', data.resumen.ventasFinalizadas]);
   wsResumen.addRow(['Ventas anuladas', data.resumen.ventasAnuladas]);
-  wsResumen.addRow(['Total cobrado (todos los métodos)', fmtMoney(data.resumen.totalCobrado)]);
+  wsResumen.addRow(['Total vendido (todos los métodos)', fmtMoney(data.resumen.totalCobrado)]);
   wsResumen.addRow([
     '  · efectivo',
     `${fmtMoney(data.resumen.totalEfectivo)}  (${pctStr(data.resumen.totalEfectivo, data.resumen.totalCobrado)})`,
@@ -492,7 +523,7 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
   seccion('DELIVERY (local + WSP + web)', 'FFB7791F');
   linea('', 'Efectivo · Damián', cat.delivery.efectivoDamian);
   linea('', 'Transfer / Débito online', cat.delivery.online);
-  linea('', 'Efectivo · DELIVERATE (rinde semanal)', cat.delivery.efectivoDeliverate, {
+  linea('', 'DELIVERATE (rinde semanal, descuenta % del servicio)', cat.delivery.efectivoDeliverate, {
     informativo: true,
   });
   subtotal('Subtotal delivery', cat.totalDelivery);
@@ -584,7 +615,7 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
     const row = wsMov.addRow({
       hora: m.hora.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }),
       tipo: m.tipo,
-      categoria: m.categoria,
+      categoria: m.empleado ? `${m.categoria} → ${m.empleado}` : m.categoria,
       cuenta: m.cuenta,
       monto: fmtMoney(Number(m.monto)),
       observacion: m.observacion ?? '',
@@ -673,7 +704,7 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
     .slice(0, 20)
     .map(
       (m) =>
-        `<tr><td style="padding:4px 8px;font-size:11px">${m.hora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}</td><td style="padding:4px 8px;color:${m.tipo === 'EGRESO' ? '#' + ROJO.slice(2) : m.tipo === 'INGRESO' ? '#2C8C5A' : '#777'}">${m.tipo}</td><td style="padding:4px 8px">${escapeHtml(m.categoria)}</td><td style="padding:4px 8px;color:#777">${escapeHtml(m.cuenta)}</td><td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtMoney(Number(m.monto))}</td></tr>`,
+        `<tr><td style="padding:4px 8px;font-size:11px">${m.hora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}</td><td style="padding:4px 8px;color:${m.tipo === 'EGRESO' ? '#' + ROJO.slice(2) : m.tipo === 'INGRESO' ? '#2C8C5A' : '#777'}">${m.tipo}</td><td style="padding:4px 8px">${escapeHtml(m.categoria)}${m.empleado ? ` → ${escapeHtml(m.empleado)}` : ''}</td><td style="padding:4px 8px;color:#777">${escapeHtml(m.cuenta)}</td><td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtMoney(Number(m.monto))}</td></tr>`,
     )
     .join('');
 
@@ -713,7 +744,7 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
       ${seccionHeader('Delivery (local + WSP + web)', '#B7791F')}
       ${filaSimple('Efectivo · Damián', c.delivery.efectivoDamian, { sub: 'suma a caja' })}
       ${filaSimple('Transfer / Débito online', c.delivery.online)}
-      ${filaSimple('Efectivo · DELIVERATE', c.delivery.efectivoDeliverate, { sub: 'Suma al total vendido. DELIVERATE lo liquida la semana siguiente, no entra a la caja de hoy.', informativo: true })}
+      ${filaSimple('DELIVERATE (todos los métodos)', c.delivery.efectivoDeliverate, { sub: 'Suma al total vendido pero NO ingresa al efectivo de esta sesión: DELIVERATE retiene lo cobrado y hace una rendición semanal del dinero, descontando el porcentaje por su servicio de delivery.', informativo: true })}
       ${filaSubtotal('Subtotal delivery', c.totalDelivery)}
 
       ${seccionHeader('Plataformas (RAPPI · PYA · MELI)', '#2C5A8C')}
@@ -722,7 +753,7 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
       ${filaSubtotal('Subtotal plataformas', c.totalPlataformas)}
 
       <tr style="background:#1B3A2B;color:#fff;border-top:3px double #1B3A2B;">
-        <td style="padding:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;">TOTAL DEL DÍA<div style="font-size:11px;font-weight:400;font-style:italic;color:#cad7c1">excluye DELIVERATE (${fmtMoney(c.delivery.efectivoDeliverate)} a cobrar la semana)</div></td>
+        <td style="padding:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;">TOTAL DEL DÍA<div style="font-size:11px;font-weight:400;font-style:italic;color:#cad7c1">excluye DELIVERATE (${fmtMoney(c.delivery.efectivoDeliverate)} — lo rinde DELIVERATE en la semana, neto de su comisión)</div></td>
         <td style="padding:10px;text-align:right;font-family:monospace;font-size:16px;font-weight:600;">${fmtMoney(c.totalDelDia)}</td>
       </tr>
     </tbody>
@@ -762,6 +793,7 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
                 (m) => `<tr>
                   <td style="padding:4px 10px">
                     <span style="color:#444">${escapeHtml(m.categoria)}</span>
+                    ${m.empleado ? `<span style="color:#1B3A2B;font-weight:600"> → ${escapeHtml(m.empleado)}</span>` : ''}
                     ${m.observacion ? `<span style="color:#888;font-size:11px;font-style:italic"> · ${escapeHtml(m.observacion)}</span>` : ''}
                   </td>
                   <td style="padding:4px 10px;text-align:right;font-family:monospace;color:#${ROJO.slice(2)}">${fmtMoney(Number(m.monto))}</td>
@@ -804,7 +836,7 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
 </div>`;
 
   const text = `Cierre ${turnoStr} · ${fechaStr}
-Total cobrado: ${fmtMoney(data.resumen.totalCobrado)} (${data.resumen.ventasFinalizadas} ventas)
+Total vendido: ${fmtMoney(data.resumen.totalCobrado)} (${data.resumen.ventasFinalizadas} ventas)
 Efectivo: ${fmtMoney(data.resumen.totalEfectivo)} · No efectivo: ${fmtMoney(data.resumen.totalNoEfectivo)}
 Diferencia caja: ${fmtMoney(dif)}
 (Detalle completo en el Excel adjunto)`;

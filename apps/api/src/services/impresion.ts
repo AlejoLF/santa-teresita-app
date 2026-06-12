@@ -449,12 +449,19 @@ async function buildTicketDeliveryPayload(
     horaPrometida: venta.deliveryInfo?.horaPrometida
       ? venta.deliveryInfo.horaPrometida.toISOString()
       : null,
-    items: venta.items.map((it) => ({
-      cantidad: String(it.cantidad),
-      nombre: it.nombreSnapshot,
-      precioUnitario: Number(it.precioUnitario).toFixed(2),
-      subtotal: Number(it.totalLinea).toFixed(2),
-    })),
+    items: venta.items.map((it) => {
+      const mods = (it.modificadoresAplicados as Array<{ opcionNombre?: string }> | null) ?? [];
+      return {
+        cantidad: String(it.cantidad),
+        nombre: it.nombreSnapshot,
+        modificadores: mods
+          .map((m) => m?.opcionNombre)
+          .filter((x): x is string => typeof x === 'string'),
+        observacion: it.observacion ?? undefined,
+        precioUnitario: Number(it.precioUnitario).toFixed(2),
+        subtotal: Number(it.totalLinea).toFixed(2),
+      };
+    }),
     envio:
       venta.modalidad === 'DELIVERY_PROPIO' && Number(venta.recargoCanal) > 0
         ? Number(venta.recargoCanal).toFixed(2)
@@ -586,12 +593,19 @@ export async function encolarTicketClienteParaVenta(
     cliente: clienteNombre,
     vendedor: vendedorNombre,
     pcOrigen: venta.pcOrigen,
-    items: venta.items.map((it) => ({
-      cantidad: String(it.cantidad),
-      nombre: it.nombreSnapshot,
-      precio: Number(it.precioUnitario).toFixed(2),
-      subtotal: Number(it.totalLinea).toFixed(2),
-    })),
+    items: venta.items.map((it) => {
+      const mods = (it.modificadoresAplicados as Array<{ opcionNombre?: string }> | null) ?? [];
+      return {
+        cantidad: String(it.cantidad),
+        nombre: it.nombreSnapshot,
+        modificadores: mods
+          .map((m) => m?.opcionNombre)
+          .filter((x): x is string => typeof x === 'string'),
+        observacion: it.observacion ?? undefined,
+        precio: Number(it.precioUnitario).toFixed(2),
+        subtotal: Number(it.totalLinea).toFixed(2),
+      };
+    }),
     subtotal: subtotal.toFixed(2),
     descuento,
     total: Number(venta.total).toFixed(2),

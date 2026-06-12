@@ -11,7 +11,7 @@ import {
 } from '@sta/db';
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
-import { clasificarCanalBucket } from '../services/clasificar-pago.js';
+import { clasificarCanalBucket, esVentaDeliverate } from '../services/clasificar-pago.js';
 import {
   detectarCambiosListaPrecios,
   detectarCambiosProveedores,
@@ -1697,6 +1697,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           metodo: true,
           monto: true,
           cuenta: { select: { tipo: true, excluidaDeCierreCaja: true } },
+          venta: { select: { canal: true, modalidad: true } },
         },
       });
 
@@ -1747,7 +1748,13 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       ): boolean => !!c && c.tipo === 'EFECTIVO' && c.excluidaDeCierreCaja !== true;
 
       const totalEfectivo = pagosRaw
-        .filter((p) => esEfectivoCierre(p.cuenta))
+        .filter(
+          (p) =>
+            esEfectivoCierre(p.cuenta) &&
+            // El efectivo DELIVERATE lo cobra su repartidor y se rinde
+            // semanal — nunca entra al cajón, no cuenta para el esperado.
+            !esVentaDeliverate(p.venta?.canal, p.venta?.modalidad),
+        )
         .reduce((acc, p) => acc + Number(p.monto), 0);
 
       // Plata que SALIÓ de caja física por movimientos (egresos + transferencias internas saliendo).
@@ -1912,7 +1919,15 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         where: {
           estado: 'CONFIRMADO',
           cuenta: { tipo: 'EFECTIVO', excluidaDeCierreCaja: false },
-          venta: { sesionCajaId: sesion.id, estado: EstadoVenta.FINALIZADA },
+          venta: {
+            sesionCajaId: sesion.id,
+            estado: EstadoVenta.FINALIZADA,
+            // Ventas DELIVERATE: su efectivo lo cobra el repartidor de
+            // DELIVERATE (rinde semanal, neto de comisión) — nunca entra al
+            // cajón. Sin esta exclusión el esperado se infla y el cierre da
+            // "falta efectivo" fantasma por el monto exacto de esas ventas.
+            NOT: [{ modalidad: 'DELIVERY_DELIVERATE' }, { canal: 'DELIVERATE' }],
+          },
         },
       });
       const egresosCaja = await prisma.movimiento.aggregate({
@@ -2305,7 +2320,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           metodo: true,
           monto: true,
           cuenta: { select: { id: true, nombre: true, tipo: true, excluidaDeCierreCaja: true } },
-          venta: { select: { numero: true, numeroOrdenTurno: true, canal: true } },
+          venta: { select: { numero: true, numeroOrdenTurno: true, canal: true, modalidad: true } },
         },
       });
 
@@ -2350,7 +2365,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         c: { tipo: string; excluidaDeCierreCaja?: boolean } | null | undefined,
       ): boolean => !!c && c.tipo === 'EFECTIVO' && c.excluidaDeCierreCaja !== true;
 
-      const cobrosEfectivo = pagos.filter((p) => afectaCierre(p.cuenta));
+      // DELIVERATE no cuenta como efectivo del cajón (rinde semanal) — sus
+      // pagos van al bloque informativo aunque la cuenta sea EFECTIVO.
+      const cobrosEfectivo = pagos.filter(
+        (p) => afectaCierre(p.cuenta) && !esVentaDeliverate(p.venta?.canal, p.venta?.modalidad),
+      );
       const totalCobrosEfectivo = cobrosEfectivo.reduce((acc, p) => acc + Number(p.monto), 0);
       const ingresosCaja = movs.filter(
         (m) =>
@@ -2369,8 +2388,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const esperadaCalculada =
         existenciaInicial + totalCobrosEfectivo + totalIngresosCaja - totalEgresosCaja;
 
-      // Pagos no-efectivo (info — no afectan caja física)
-      const pagosNoEfectivo = pagos.filter((p) => !afectaCierre(p.cuenta));
+      // Pagos no-efectivo (info — no afectan caja física). Incluye los pagos
+      // DELIVERATE aunque su cuenta sea EFECTIVO (van como informativos).
+      const pagosNoEfectivo = pagos.filter(
+        (p) => !afectaCierre(p.cuenta) || esVentaDeliverate(p.venta?.canal, p.venta?.modalidad),
+      );
       // Movimientos que NO afectan caja (egresos/ingresos contra banco o cuenta excluida).
       const movsNoAfectanCaja = movs.filter(
         (m) => !afectaCierre(m.cuentaOrigen) && !afectaCierre(m.cuentaDestino),
@@ -2693,7 +2715,16 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         for (const p of v.pagos) {
           if (q.metodo && p.metodo !== q.metodo) continue;
           const monto = Number(p.monto);
-          if (bucket === 'mostrador' && !esDeliveryLocal) {
+          // DELIVERATE va PRIMERO: la venta entra por su canal real (mostrador/
+          // teléfono/wsp) + modalidad DELIVERY_DELIVERATE. Si se chequea el
+          // canal antes, su efectivo cae en "Efectivo Damián" o "Mostrador" e
+          // infla el efectivo en caja (bug real reportado por el dueño).
+          // TODO el cobro DELIVERATE (cualquier método) va a su discriminación:
+          // rinde semanal, neto de la comisión del servicio. NO suma a caja.
+          if (esDeliverate) {
+            deliveryEfectivoDeliverate += monto;
+            countDeliverateEf += 1;
+          } else if (bucket === 'mostrador' && !esDeliveryLocal) {
             if (p.metodo === 'EFECTIVO') {
               mostradorEfectivo += monto;
               countMostradorEf += 1;
@@ -2709,16 +2740,6 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               deliveryEfectivoDamian += monto;
               countDamianEf += 1;
             } else {
-              deliveryOnline += monto;
-              countDeliveryOnline += 1;
-            }
-          } else if (esDeliverate) {
-            // DELIVERATE: contamos efectivo informativo (no suma a caja)
-            if (p.metodo === 'EFECTIVO') {
-              deliveryEfectivoDeliverate += monto;
-              countDeliverateEf += 1;
-            } else {
-              // Si DELIVERATE alguna vez paga online, va a "Online" del bucket delivery
               deliveryOnline += monto;
               countDeliveryOnline += 1;
             }

@@ -113,6 +113,17 @@ function pasoIncremento(unidadPrecio: string): number {
   return unidadPrecio === 'POR_KILO' ? 100 : 1;
 }
 
+/**
+ * Cantidad inicial al agregar al carrito. Productos por peso (POR_KILO, ej.
+ * Pan) SIN cantidad default arrancan en 0 = casilla de peso VACÍA: la cajera
+ * tipea los gramos reales en vez de borrar un "1" que no significa nada.
+ * El envío del pedido se bloquea mientras haya items en 0 (ver procesarPedido).
+ */
+function cantidadInicial(p: { cantidadDefault: string | null; unidadPrecio: string }): number {
+  if (p.cantidadDefault) return Number(p.cantidadDefault);
+  return p.unidadPrecio === 'POR_KILO' ? 0 : 1;
+}
+
 // Reutilizamos el cálculo canónico del cart store (que delega al shared).
 // Mantenemos el nombre local para no tocar todas las llamadas.
 const calcSubtotal = subtotalItem;
@@ -685,7 +696,7 @@ export default function CargarPedidoPage() {
         categoriaNombre: p.tipoProducto.categoria.nombre,
         formaVenta: p.formaVenta,
         unidadPrecio: p.unidadPrecio,
-        cantidad: p.cantidadDefault ? Number(p.cantidadDefault) : 1,
+        cantidad: cantidadInicial(p),
         precioUnitario: Number(p.precioBase),
         modificadores: [],
         cocinaInterviene: p.tipoProducto.cocinaInterviene,
@@ -720,7 +731,7 @@ export default function CargarPedidoPage() {
             categoriaNombre: res.producto.tipoProducto.categoria.nombre,
             formaVenta: res.producto.formaVenta,
             unidadPrecio: res.producto.unidadPrecio,
-            cantidad: res.producto.cantidadDefault ? Number(res.producto.cantidadDefault) : 1,
+            cantidad: cantidadInicial(res.producto),
             precioUnitario: Number(res.producto.precioBase),
             modificadores: [],
             cocinaInterviene: res.producto.tipoProducto.cocinaInterviene,
@@ -753,7 +764,7 @@ export default function CargarPedidoPage() {
       categoriaNombre: p.tipoProducto.categoria.nombre,
       formaVenta: p.formaVenta,
       unidadPrecio: p.unidadPrecio,
-      cantidad: p.cantidadDefault ? Number(p.cantidadDefault) : 1,
+      cantidad: cantidadInicial(p),
       precioUnitario: Number(p.precioBase) + Number(sabor.deltaPrecio || 0),
       modificadores: [
         {
@@ -771,6 +782,15 @@ export default function CargarPedidoPage() {
   // Modo de envío: 'enviar' (queda en lista) | 'cobrar' (va directo a método de pago) | 'nuevo' (envía y limpia para cargar otro)
   async function procesarPedido(modo: 'enviar' | 'cobrar' | 'nuevo') {
     if (cart.items.length === 0 || enviando) return;
+    // Items por peso con la casilla vacía (cantidad 0): no se puede enviar
+    // hasta tipear el peso real. Ver cantidadInicial().
+    const sinPeso = cart.items.filter((i) => i.cantidad <= 0);
+    if (sinPeso.length > 0) {
+      setError(
+        `Falta cargar el peso de: ${sinPeso.map((i) => i.productoNombre).join(', ')}`,
+      );
+      return;
+    }
     setEnviando(true);
     setError(null);
     const itemsPayload = cart.items.map((i) => ({
@@ -1759,12 +1779,25 @@ function CartItemRow({ item, esParteDePaquete, esPrimeroDelPaquete }: {
           type="number"
           step={paso}
           min={paso}
-          value={item.cantidad}
+          // cantidad 0 = "peso sin cargar" (productos por peso, ej. Pan):
+          // casilla vacía + borde rojo. El envío se bloquea hasta tipear peso.
+          value={item.cantidad === 0 ? '' : item.cantidad}
+          placeholder={unidadCant === 'g' ? 'peso' : ''}
+          autoFocus={item.cantidad === 0}
           onChange={(e) => {
+            if (e.target.value === '') {
+              cart.editar(item.uid, { cantidad: 0 });
+              return;
+            }
             const v = Number(e.target.value);
             if (Number.isFinite(v) && v > 0) cart.editar(item.uid, { cantidad: v });
           }}
-          className="w-24 text-center text-md font-mono py-1.5 rounded border border-cream-300 bg-white"
+          className={cn(
+            'w-24 text-center text-md font-mono py-1.5 rounded border bg-white',
+            item.cantidad === 0
+              ? 'border-pomodoro-500 ring-2 ring-pomodoro-200'
+              : 'border-cream-300',
+          )}
         />
         <span className="text-sm text-ink-500 font-mono w-12">{unidadCant}</span>
         <button

@@ -15,6 +15,22 @@
  */
 export type CanalBucket = 'mostrador' | 'delivery_propio' | 'deliverate' | 'plataforma';
 
+/**
+ * Venta entregada por DELIVERATE: la plata (cualquier método) la retiene
+ * DELIVERATE y la rinde semanalmente descontando el porcentaje de su servicio.
+ * NO debe contarse como efectivo del cajón ni sumar a la caja del turno.
+ * Chequear SIEMPRE esta condición ANTES que canal (la venta entra por su canal
+ * real — mostrador/teléfono/whatsapp — y se marca por modalidad). Incidente
+ * real: ventas DELIVERATE por TELEFONO caían en "Efectivo · Damián" e
+ * inflaban la recaudación esperada del cierre.
+ */
+export function esVentaDeliverate(
+  canal?: string | null,
+  modalidad?: string | null,
+): boolean {
+  return modalidad === 'DELIVERY_DELIVERATE' || canal === 'DELIVERATE';
+}
+
 export function clasificarCanalBucket(
   canal: string | null | undefined,
   modalidad?: string | null,

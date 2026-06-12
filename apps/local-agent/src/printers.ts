@@ -258,7 +258,15 @@ export interface TicketClientePayload {
   vendedor: string;
   pcOrigen: string;
   /** Items con valores numéricos como string sin formatear (ej: "1234.56"). */
-  items: Array<{ cantidad: string; nombre: string; precio: string; subtotal: string }>;
+  items: Array<{
+    cantidad: string;
+    nombre: string;
+    /** Sabor/tipo elegido (ej. "Carne", "Salsa Príncipe"). Sale debajo del nombre. */
+    modificadores?: string[];
+    observacion?: string;
+    precio: string;
+    subtotal: string;
+  }>;
   subtotal: string;
   descuento?: { pct: number; monto: string } | null;
   total: string;
@@ -361,6 +369,13 @@ export async function imprimirTicketCliente(payload: TicketClientePayload): Prom
       formatARS(it.subtotal),
     );
     for (const linea of lineas) printer.println(linea);
+    // Sabor/tipo elegido — debajo del item, indentado ("  > Carne").
+    for (const m of it.modificadores ?? []) {
+      printer.println(`      > ${limpiar(m)}`);
+    }
+    if (it.observacion) {
+      printer.println(`      * ${limpiar(it.observacion)}`);
+    }
   }
   printer.drawLine();
 
@@ -442,6 +457,9 @@ export interface TicketDeliveryPayload {
   items: Array<{
     cantidad: string;
     nombre: string;
+    /** Sabor/tipo elegido (ej. "Carne", "Salsa Príncipe"). Sale debajo del nombre. */
+    modificadores?: string[];
+    observacion?: string;
     precioUnitario: string;
     subtotal: string;
   }>;
@@ -509,6 +527,13 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
       formatARS(it.subtotal),
     );
     for (const linea of lineas) printer.println(linea);
+    // Sabor/tipo elegido — debajo del item, indentado ("  > Carne").
+    for (const m of it.modificadores ?? []) {
+      printer.println(`      > ${limpiar(m)}`);
+    }
+    if (it.observacion) {
+      printer.println(`      * ${limpiar(it.observacion)}`);
+    }
   }
   if (payload.envio && Number(payload.envio) > 0) {
     const envioLineas = rowTabular(
