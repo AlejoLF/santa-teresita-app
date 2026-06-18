@@ -479,9 +479,13 @@ async function buildTicketDeliveryPayload(
  * "*** CANCELADA ***" en todas las comanderas donde se imprimió el original
  * para que el operador en cada estación tache el pedido.
  *
- * Filtra DELIVERY si la venta no fue finalizada — sólo se encola el ticket
- * delivery al finalizar (con el pago real), así que si la anularon antes de
- * cobrar, no hay nada que cancelar en la comandera de delivery.
+ * La COCINA se imprime al ENVIAR (crear/agregar items), así que si se anula
+ * una venta con items de cocina —finalizada o no— hay que mandarle la
+ * cancelación a la comandera de cocina para que tachen el pedido. En cambio
+ * el TICKET_CLIENTE y el TICKET_DELIVERY recién salen al finalizar (con el
+ * pago real): si la venta nunca se finalizó, esos nunca se imprimieron y no
+ * hay nada que cancelar ahí. Por eso, si no está finalizada, dejamos sólo
+ * COCINA en los destinos.
  */
 export async function encolarComandasCanceladas(
   ventaId: string,
@@ -493,13 +497,11 @@ export async function encolarComandasCanceladas(
   });
   if (!venta) return [];
 
-  // Todos los tickets físicos (cocina + cliente + delivery) se imprimen al
-  // FINALIZAR. Si la venta nunca se finalizó, no se imprimió NADA → no hay
-  // nada que cancelar. (Antes la cocina se imprimía al crear, así que se
-  // filtraba sólo DELIVERY; ahora se descarta todo si no hubo finalización.)
-  if (!venta.fechaFinalizacion) return [];
-
-  const destinos = determinarDestinos(venta.canal, venta.tieneCocina);
+  let destinos = determinarDestinos(venta.canal, venta.tieneCocina);
+  if (!venta.fechaFinalizacion) {
+    // No finalizada → sólo imprimió la comanda de cocina (al enviar).
+    destinos = destinos.filter((d) => d === 'COCINA');
+  }
   if (destinos.length === 0) return [];
 
   const payload = await buildComandaPayload(ventaId, tx);

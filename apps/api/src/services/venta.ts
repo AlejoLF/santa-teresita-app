@@ -12,6 +12,7 @@ import type { ItemNuevo, VentaNueva } from '@sta/shared';
 import { subtotalItem } from '@sta/shared';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
 import { recordAudit } from './audit.js';
+import { encolarComandasParaVenta } from './impresion.js';
 
 /**
  * Crea una venta en estado PROCESADA, con items snapshot del precio.
@@ -229,12 +230,14 @@ export async function crearVenta(args: {
       tx,
     });
 
-    // NO se encola la comanda de cocina acá. Se encola al FINALIZAR (cobrar) —
-    // ver routes/ventas.ts. Motivo: si el pedido se arma de a poco (crear con
-    // 1 item, luego agregar items uno por uno), encolar en cada paso hacía que
-    // la impresora sacara una comanda parcial por item (1, luego 2, luego 3...
-    // items) porque imprime en <1s, antes del siguiente agregado. Bug real:
-    // venta 274. Al finalizar sale UNA comanda completa.
+    // Encolar la comanda de COCINA al ENVIAR (crear), no al cobrar: la cocina
+    // tiene que empezar a producir apenas entra el pedido, aunque todavía no
+    // se haya cobrado (mostrador "enviar a cocina", o cualquier canal con
+    // items que cocinan). El bug de comandas parciales (venta 274, armar el
+    // pedido de a poco) lo cubre el dedup de encolarComandasParaVenta: si ya
+    // hay una comanda PENDIENTE sin imprimir, la actualiza en vez de duplicar.
+    // El TICKET_CLIENTE y el TICKET_DELIVERY sí salen al finalizar (con el pago).
+    await encolarComandasParaVenta(venta.id, tx);
     return venta;
   });
 }
@@ -368,9 +371,11 @@ export async function agregarItemsAVenta(args: {
       },
     });
 
-    // NO se re-encola comanda de cocina al agregar items. La comanda sale
-    // completa al finalizar (ver routes/ventas.ts). Antes, cada agregado
-    // disparaba una comanda parcial si la anterior ya se había impreso.
+    // Re-encolar la comanda de COCINA con los items nuevos: la cocina tiene
+    // que ver lo agregado al toque, sin esperar al cobro. El dedup colapsa
+    // disparos en ráfaga; si la comanda anterior ya se imprimió, sale una
+    // nueva completa (la cocina ve el pedido actualizado).
+    await encolarComandasParaVenta(ventaId, tx);
     return updated;
   });
 }

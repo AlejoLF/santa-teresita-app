@@ -272,7 +272,7 @@ export default function VentasPage() {
       {/* KPIs */}
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
         <KpiCard
-          label="Total cobrado"
+          label="Total vendido"
           value={data.kpis.totalCobrado}
           accent="success"
           hint={`${data.kpis.cantidadVentas} ventas`}

@@ -244,7 +244,7 @@ export default function AdminDashboard() {
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
         <button onClick={() => setDrillDown('ventas')} className="text-left">
           <KpiCard
-            label="Ventas"
+            label="Total vendido"
             value={v.monto}
             trend={trend}
             hint={`${v.cantidad} ventas · click para desglose`}

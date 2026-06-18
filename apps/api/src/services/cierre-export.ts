@@ -144,12 +144,18 @@ interface LineaMovimiento {
   hora: Date;
   tipo: string;
   categoria: string;
-  /** Nombre del empleado si el movimiento es de personal (sueldo/adelanto/comisión). */
-  empleado: string | null;
+  /** Nombre de la entidad ligada al movimiento (empleado en sueldos/adelantos,
+   *  proveedor en compras/insumos) resuelto de entidadId. */
+  entidad: string | null;
   cuenta: string;
   monto: string;
   observacion: string | null;
   usuario: string;
+  /** true si el movimiento entró o salió del efectivo físico del turno
+   *  (cuenta tipo EFECTIVO no excluida del cierre). */
+  afectaCaja: boolean;
+  /** Efecto neto sobre la caja física: +1 entra, -1 sale, 0 no toca. */
+  signoCaja: number;
 }
 
 export interface CierreData {
@@ -159,6 +165,19 @@ export interface CierreData {
   movimientos: LineaMovimiento[];
   /** Cobros categorizados como los entiende la encargada (sin discriminar cuentas). */
   categorias: CategoriaCobros;
+  /** Reconciliación del efectivo físico del turno (cuadre de caja). */
+  caja: {
+    existenciaInicial: number;
+    /** Ventas cobradas en efectivo a la Caja física (no DELIVERATE). */
+    cobradoEfectivo: number;
+    /** Neto de movimientos sobre la caja física (ingresos − egresos). */
+    movimientosNeto: number;
+    esperada: number;
+    contada: number;
+    diferencia: number;
+  };
+  /** Top productos vendidos en ESTA sesión (por facturación), como analytics. */
+  topProductos: Array<{ nombre: string; cantidad: number; monto: number; ocurrencias: number }>;
   resumen: {
     ventasFinalizadas: number;
     ventasAnuladas: number;
@@ -198,21 +217,31 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
         },
       },
       pagos: {
-        include: { cuenta: { select: { nombre: true } } },
+        include: {
+          cuenta: { select: { nombre: true, tipo: true, excluidaDeCierreCaja: true } },
+        },
       },
     },
   });
 
   const movimientosRaw = await prisma.movimiento.findMany({
-    where: { sesionCajaId: sesionId },
+    // Solo CONFIRMADO: mismo criterio que el cálculo de cierre en admin.ts, y
+    // no listamos movimientos anulados/pendientes en el email.
+    where: { sesionCajaId: sesionId, estado: 'CONFIRMADO' as never },
     orderBy: { fechaComputo: 'asc' },
     include: {
       categoria: { select: { nombre: true } },
-      cuentaOrigen: { select: { nombre: true } },
-      cuentaDestino: { select: { nombre: true } },
+      cuentaOrigen: { select: { nombre: true, tipo: true, excluidaDeCierreCaja: true } },
+      cuentaDestino: { select: { nombre: true, tipo: true, excluidaDeCierreCaja: true } },
       usuario: { select: { nombre: true } },
     },
   });
+
+  // Efectivo del CAJÓN del turno: cuenta tipo EFECTIVO NO excluida (descarta
+  // "Efectivo acumulado" del dueño). Mismo criterio que el cierre en admin.ts.
+  const esCajaSesion = (
+    c: { tipo: string; excluidaDeCierreCaja: boolean } | null | undefined,
+  ): boolean => !!c && c.tipo === 'EFECTIVO' && c.excluidaDeCierreCaja !== true;
 
   // Pagos agregados por (metodo, cuenta)
   const pagAgg = new Map<string, LineaPago>();
@@ -259,36 +288,49 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
     })),
   }));
 
-  // Movimientos de personal (sueldos/adelantos/comisiones) guardan el empleado
-  // en entidadId — lo resolvemos a nombre para que el email diga A QUIÉN se
-  // le pagó cada sueldo, no solo "Sueldos $X".
+  // entidadId liga el movimiento a un EMPLEADO (sueldos/adelantos/comisiones)
+  // o a un PROVEEDOR (insumos/compras). Resolvemos contra ambas tablas para
+  // que el email diga A QUIÉN: "Sueldos → Damián", "Insumos → Distribuidora X".
   const entidadIds = [
     ...new Set(movimientosRaw.map((m) => m.entidadId).filter((x): x is string => !!x)),
   ];
-  const empleadosPorId = new Map<string, string>();
+  const entidadPorId = new Map<string, string>();
   if (entidadIds.length > 0) {
-    const empleados = await prisma.empleado.findMany({
-      where: { id: { in: entidadIds } },
-      select: { id: true, nombre: true, apellido: true },
-    });
+    const [empleados, proveedores] = await Promise.all([
+      prisma.empleado.findMany({
+        where: { id: { in: entidadIds } },
+        select: { id: true, nombre: true, apellido: true },
+      }),
+      prisma.proveedor.findMany({
+        where: { id: { in: entidadIds } },
+        select: { id: true, nombre: true },
+      }),
+    ]);
     for (const e of empleados) {
-      empleadosPorId.set(e.id, `${e.nombre}${e.apellido ? ' ' + e.apellido : ''}`);
+      entidadPorId.set(e.id, `${e.nombre}${e.apellido ? ' ' + e.apellido : ''}`);
     }
+    for (const p of proveedores) entidadPorId.set(p.id, p.nombre);
   }
 
-  const movimientos: LineaMovimiento[] = movimientosRaw.map((m) => ({
-    hora: m.fechaComputo,
-    tipo: m.tipo,
-    categoria: m.categoria.nombre,
-    empleado: (m.entidadId && empleadosPorId.get(m.entidadId)) || null,
-    cuenta:
-      m.tipo === 'TRANSFERENCIA_INTERNA'
-        ? `${m.cuentaOrigen?.nombre ?? '—'} → ${m.cuentaDestino?.nombre ?? '—'}`
-        : m.cuentaOrigen?.nombre ?? m.cuentaDestino?.nombre ?? '—',
-    monto: m.monto.toString(),
-    observacion: m.observacion,
-    usuario: m.usuario.nombre,
-  }));
+  const movimientos: LineaMovimiento[] = movimientosRaw.map((m) => {
+    const entra = esCajaSesion(m.cuentaDestino); // ingreso/transfer hacia la caja
+    const sale = esCajaSesion(m.cuentaOrigen); // egreso/transfer desde la caja
+    return {
+      hora: m.fechaComputo,
+      tipo: m.tipo,
+      categoria: m.categoria.nombre,
+      entidad: (m.entidadId && entidadPorId.get(m.entidadId)) || null,
+      cuenta:
+        m.tipo === 'TRANSFERENCIA_INTERNA'
+          ? `${m.cuentaOrigen?.nombre ?? '—'} → ${m.cuentaDestino?.nombre ?? '—'}`
+          : m.cuentaOrigen?.nombre ?? m.cuentaDestino?.nombre ?? '—',
+      monto: m.monto.toString(),
+      observacion: m.observacion,
+      usuario: m.usuario.nombre,
+      afectaCaja: entra || sale,
+      signoCaja: entra ? 1 : sale ? -1 : 0,
+    };
+  });
 
   const ventasFinalizadas = ventasRaw.filter((v) => v.estado === 'FINALIZADA');
   const ventasAnuladas = ventasRaw.filter((v) => v.estado === 'ANULADA');
@@ -307,12 +349,14 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
   const categorias = categorizarCobros({ pagos: pagosParaCategorizar });
 
   const totalCobrado = ventasFinalizadas.reduce((acc, v) => acc + Number(v.total), 0);
-  // Efectivo del CAJÓN: excluye ventas DELIVERATE — ese efectivo lo cobró el
-  // repartidor de DELIVERATE y se rinde semanal, nunca pasó por la caja.
+  // Efectivo que entró al CAJÓN del turno: pagos a cuenta tipo EFECTIVO no
+  // excluida (Caja física), excluyendo DELIVERATE (lo cobra su repartidor y
+  // rinde semanal). Mismo criterio que recaudacionEsperada en admin.ts → la
+  // sección de cuadre de caja del email suma exactamente al valor guardado.
   const totalEfectivo = ventasFinalizadas
     .filter((v) => !esVentaDeliverate(v.canal, v.modalidad))
     .flatMap((v) => v.pagos)
-    .filter((p) => p.estado === 'CONFIRMADO' && p.metodo === 'EFECTIVO')
+    .filter((p) => p.estado === 'CONFIRMADO' && esCajaSesion(p.cuenta))
     .reduce((acc, p) => acc + Number(p.monto), 0);
   const totalNoEfectivo = Array.from(pagAgg.values())
     .filter((p) => p.metodo !== 'EFECTIVO')
@@ -324,6 +368,34 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
     .filter((m) => m.tipo === 'INGRESO')
     .reduce((acc, m) => acc + Number(m.monto), 0);
   const descuentos = ventasFinalizadas.reduce((acc, v) => acc + Number(v.descuentoTotal), 0);
+
+  // ── Cuadre del efectivo físico del turno ──
+  // Solo movimientos que tocaron la caja (afectaCaja), con su signo. Esto es
+  // lo que la encargada espera ver, sin mezclar transferencias de banco/wallet.
+  const existenciaInicialNum = Number(sesion.existenciaInicial);
+  const movimientosCajaNeto = movimientos
+    .filter((m) => m.afectaCaja)
+    .reduce((acc, m) => acc + m.signoCaja * Number(m.monto), 0);
+  const esperadaCaja = existenciaInicialNum + totalEfectivo + movimientosCajaNeto;
+  const contadaCaja = sesion.existenciaFinal != null ? Number(sesion.existenciaFinal) : 0;
+  const diferenciaCaja = contadaCaja - esperadaCaja;
+
+  // ── Top productos de ESTA sesión (por facturación, como analytics) ──
+  const prodAgg = new Map<string, { nombre: string; cantidad: number; monto: number; ocurrencias: number }>();
+  for (const v of ventasFinalizadas) {
+    const vistos = new Set<string>();
+    for (const it of v.items) {
+      const key = it.nombreSnapshot;
+      const cur = prodAgg.get(key) ?? { nombre: key, cantidad: 0, monto: 0, ocurrencias: 0 };
+      cur.cantidad += Number(it.cantidad);
+      cur.monto += Number(it.totalLinea);
+      if (!vistos.has(key)) { cur.ocurrencias += 1; vistos.add(key); }
+      prodAgg.set(key, cur);
+    }
+  }
+  const topProductos = [...prodAgg.values()]
+    .sort((a, b) => b.monto - a.monto)
+    .slice(0, 12);
 
   return {
     sesion: {
@@ -348,6 +420,15 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
     ),
     movimientos,
     categorias,
+    caja: {
+      existenciaInicial: existenciaInicialNum,
+      cobradoEfectivo: totalEfectivo,
+      movimientosNeto: movimientosCajaNeto,
+      esperada: esperadaCaja,
+      contada: contadaCaja,
+      diferencia: diferenciaCaja,
+    },
+    topProductos,
     resumen: {
       ventasFinalizadas: ventasFinalizadas.length,
       ventasAnuladas: ventasAnuladas.length,
@@ -615,7 +696,7 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
     const row = wsMov.addRow({
       hora: m.hora.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }),
       tipo: m.tipo,
-      categoria: m.empleado ? `${m.categoria} → ${m.empleado}` : m.categoria,
+      categoria: m.entidad ? `${m.categoria} → ${m.entidad}` : m.categoria,
       cuenta: m.cuenta,
       monto: fmtMoney(Number(m.monto)),
       observacion: m.observacion ?? '',
@@ -624,6 +705,26 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
     if (m.tipo === 'EGRESO') row.font = { color: { argb: ROJO } };
     else if (m.tipo === 'INGRESO') row.font = { color: { argb: '2C8C5A' } };
   }
+
+  // ── Sheet: Top productos (de esta sesión, por facturación) ──
+  const wsTop = wb.addWorksheet('Top productos');
+  wsTop.columns = [
+    { header: '#', key: 'pos', width: 6 },
+    { header: 'Producto', key: 'nombre', width: 40 },
+    { header: 'Unidades', key: 'cantidad', width: 14 },
+    { header: 'Ventas (ocurrencias)', key: 'ocurrencias', width: 20 },
+    { header: 'Facturado', key: 'monto', width: 16 },
+  ];
+  estiloHeader(wsTop.getRow(1));
+  data.topProductos.forEach((p, i) => {
+    wsTop.addRow({
+      pos: i + 1,
+      nombre: p.nombre,
+      cantidad: Number.isInteger(p.cantidad) ? p.cantidad : Number(p.cantidad.toFixed(2)),
+      ocurrencias: p.ocurrencias,
+      monto: fmtMoney(p.monto),
+    });
+  });
 
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
@@ -659,27 +760,36 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
   });
   const turnoStr = data.sesion.turno === 'MANANA' ? 'Mañana' : 'Tarde';
   const subject = `Cierre ${turnoStr} · ${fechaStr} · ${fmtMoney(data.resumen.totalCobrado)}`;
-  const dif = Number(data.sesion.diferencia ?? 0);
+  // Diferencia = cuadre calculado del efectivo (mismo que la sección #7), así
+  // el hero, el tono y el detalle del email son siempre consistentes entre sí.
+  // Para cierres con v1.1.3+ coincide con el valor guardado en la sesión.
+  const dif = data.caja.diferencia;
   const difTone = Math.abs(dif) < 0.01 ? '#2C8C5A' : dif < 0 ? ROJO : '#B7791F';
 
   const c = data.categorias;
-  // Movimientos separados: Empleados (sueldos/adelantos/comisiones) vs el resto (Aportes y egresos)
-  const esCategoriaEmpleado = (cat: string) =>
-    /sueldo|adelanto a empleado|comisi/i.test(cat);
-  const movsEmpleados = data.movimientos.filter((m) => esCategoriaEmpleado(m.categoria));
-  const movsAportesEgresos = data.movimientos.filter(
-    (m) => !esCategoriaEmpleado(m.categoria),
-  );
-  const totalEmpleados = movsEmpleados.reduce(
-    (acc, m) => acc + Number(m.monto),
+  const caja = data.caja;
+  // Movimientos partidos por CUENTA (no por categoría): los que tocaron el
+  // efectivo físico del turno vs los del resto de las cuentas. Así el cuadre
+  // de la caja no se mezcla con tarjetas / transferencias / bancos.
+  const movsCaja = data.movimientos.filter((m) => m.afectaCaja);
+  const movsOtras = data.movimientos.filter((m) => !m.afectaCaja);
+  const netoOtras = movsOtras.reduce(
+    (acc, m) =>
+      acc + (m.tipo === 'INGRESO' ? Number(m.monto) : m.tipo === 'EGRESO' ? -Number(m.monto) : 0),
     0,
   );
-  const totalAportes = movsAportesEgresos
-    .filter((m) => m.tipo === 'INGRESO')
-    .reduce((acc, m) => acc + Number(m.monto), 0);
-  const totalEgresosOtros = movsAportesEgresos
-    .filter((m) => m.tipo === 'EGRESO')
-    .reduce((acc, m) => acc + Number(m.monto), 0);
+  const fmtCant = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
+  // "Categoría → Entidad · observación" — Entidad = empleado (sueldos) o
+  // proveedor (insumos/compras), resuelto de entidadId.
+  const etiquetaMov = (m: LineaMovimiento) => {
+    const ent = m.entidad
+      ? ` <span style="color:#1B3A2B;font-weight:600">→ ${escapeHtml(m.entidad)}</span>`
+      : '';
+    const obs = m.observacion
+      ? ` <span style="color:#888;font-size:11px;font-style:italic">· ${escapeHtml(m.observacion)}</span>`
+      : '';
+    return `${escapeHtml(m.categoria)}${ent}${obs}`;
+  };
 
   // Fila simple de un bucket
   const filaSimple = (label: string, total: number, opts: { sub?: string; bold?: boolean; informativo?: boolean } = {}) => {
@@ -699,14 +809,6 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
     `<tr style="background:${color};color:#fff;">
       <td colspan="2" style="padding:6px 10px;font-weight:600;text-transform:uppercase;font-size:12px;letter-spacing:.5px;">${label}</td>
     </tr>`;
-
-  const filasMov = data.movimientos
-    .slice(0, 20)
-    .map(
-      (m) =>
-        `<tr><td style="padding:4px 8px;font-size:11px">${m.hora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}</td><td style="padding:4px 8px;color:${m.tipo === 'EGRESO' ? '#' + ROJO.slice(2) : m.tipo === 'INGRESO' ? '#2C8C5A' : '#777'}">${m.tipo}</td><td style="padding:4px 8px">${escapeHtml(m.categoria)}${m.empleado ? ` → ${escapeHtml(m.empleado)}` : ''}</td><td style="padding:4px 8px;color:#777">${escapeHtml(m.cuenta)}</td><td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtMoney(Number(m.monto))}</td></tr>`,
-    )
-    .join('');
 
   const html = `
 <div style="font-family:'Helvetica Neue',Arial,sans-serif;max-width:680px;margin:0 auto;padding:24px;color:#111;">
@@ -759,71 +861,73 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
     </tbody>
   </table>
 
-  <h2 style="font-size:14px;color:#1B3A2B;margin:18px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px;">Aportes y egresos del turno</h2>
+  <h2 style="font-size:14px;color:#1B3A2B;margin:18px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px;">Efectivo de caja del turno</h2>
+  <p style="font-size:11px;color:#777;margin:0 0 6px;">Solo lo que entró o salió del cajón físico. Tarjetas, transferencias y bancos van en la sección siguiente.</p>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <tbody>
+      <tr><td style="padding:4px 10px;color:#777">Existencia inicial</td><td style="padding:4px 10px;text-align:right;font-family:monospace">${fmtMoney(caja.existenciaInicial)}</td></tr>
+      <tr><td style="padding:4px 10px;color:#2C8C5A">+ Ventas cobradas en efectivo</td><td style="padding:4px 10px;text-align:right;font-family:monospace;color:#2C8C5A">+${fmtMoney(caja.cobradoEfectivo)}</td></tr>
+      ${movsCaja
+        .map((m) => {
+          const pos = m.signoCaja > 0;
+          const col = pos ? '#2C8C5A' : '#' + ROJO.slice(2);
+          return `<tr>
+            <td style="padding:4px 10px"><span style="color:${col};font-weight:500">${pos ? '+' : '−'}</span> ${etiquetaMov(m)}</td>
+            <td style="padding:4px 10px;text-align:right;font-family:monospace;color:${col}">${pos ? '+' : '−'}${fmtMoney(Number(m.monto))}</td>
+          </tr>`;
+        })
+        .join('')}
+      <tr style="background:#F8F2E2;border-top:1px solid #1B3A2B;"><td style="padding:8px 10px;font-weight:600;color:#1B3A2B">= Esperada en caja</td><td style="padding:8px 10px;text-align:right;font-family:monospace;font-weight:600;color:#1B3A2B">${fmtMoney(caja.esperada)}</td></tr>
+      <tr><td style="padding:4px 10px;color:#777">Contada por la encargada (cierre)</td><td style="padding:4px 10px;text-align:right;font-family:monospace">${fmtMoney(caja.contada)}</td></tr>
+      <tr><td style="padding:6px 10px;font-weight:600">Diferencia</td><td style="padding:6px 10px;text-align:right;font-family:monospace;font-weight:600;color:${difTone}">${fmtMoney(caja.diferencia)}</td></tr>
+    </tbody>
+  </table>
+
+  <h2 style="font-size:14px;color:#1B3A2B;margin:18px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px;">Movimientos en otras cuentas</h2>
+  <p style="font-size:11px;color:#777;margin:0 0 6px;">Tarjeta, transferencias, billeteras, bancos y efectivo de cajas anteriores. No entran al cuadre del efectivo del turno.</p>
   <table style="width:100%;border-collapse:collapse;font-size:13px;">
     <tbody>
       ${
-        movsAportesEgresos.length === 0
-          ? `<tr><td style="padding:8px 10px;color:#999;font-style:italic;">Sin aportes ni egresos del turno fuera de empleados.</td></tr>`
-          : movsAportesEgresos
+        movsOtras.length === 0
+          ? `<tr><td style="padding:8px 10px;color:#999;font-style:italic;">Sin movimientos en otras cuentas este turno.</td></tr>`
+          : movsOtras
+              .map((m) => {
+                const esIng = m.tipo === 'INGRESO';
+                const esTransf = m.tipo === 'TRANSFERENCIA_INTERNA';
+                const col = esTransf ? '#777' : esIng ? '#2C8C5A' : '#' + ROJO.slice(2);
+                const marker = esTransf ? '⇄' : esIng ? '+' : '−';
+                return `<tr>
+                  <td style="padding:4px 10px"><span style="color:${col};font-weight:500">${marker}</span> ${etiquetaMov(m)}<div style="font-size:11px;color:#999">${escapeHtml(m.cuenta)}</div></td>
+                  <td style="padding:4px 10px;text-align:right;font-family:monospace;color:${col}">${esTransf ? '' : marker}${fmtMoney(Number(m.monto))}</td>
+                </tr>`;
+              })
+              .join('')
+      }
+      ${movsOtras.length > 0 ? filaSubtotal('Neto otras cuentas (ingresos − egresos)', netoOtras) : ''}
+    </tbody>
+  </table>
+
+  <h2 style="font-size:14px;color:#1B3A2B;margin:18px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px;">Top productos vendidos</h2>
+  <p style="font-size:11px;color:#777;margin:0 0 6px;">Más vendidos de esta sesión (${turnoStr}), por facturación.</p>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <thead><tr style="background:#1B3A2B;color:#fff;"><th style="padding:6px 8px;text-align:left;">#</th><th style="padding:6px 8px;text-align:left;">Producto</th><th style="padding:6px 8px;text-align:right;">Unid.</th><th style="padding:6px 8px;text-align:right;">Facturado</th></tr></thead>
+    <tbody>
+      ${
+        data.topProductos.length === 0
+          ? `<tr><td colspan="4" style="padding:8px;color:#999;font-style:italic;">Sin ventas en esta sesión.</td></tr>`
+          : data.topProductos
               .map(
-                (m) => `<tr>
-                  <td style="padding:4px 10px">
-                    <span style="color:${m.tipo === 'INGRESO' ? '#2C8C5A' : '#' + ROJO.slice(2)};font-weight:500">${m.tipo === 'INGRESO' ? '+' : '−'}</span>
-                    <span style="color:#444;margin-left:6px">${escapeHtml(m.categoria)}</span>
-                    ${m.observacion ? `<span style="color:#888;font-size:11px;font-style:italic"> · ${escapeHtml(m.observacion)}</span>` : ''}
-                  </td>
-                  <td style="padding:4px 10px;text-align:right;font-family:monospace;color:${m.tipo === 'INGRESO' ? '#2C8C5A' : '#' + ROJO.slice(2)}">${fmtMoney(Number(m.monto))}</td>
+                (p, i) => `<tr style="border-bottom:1px solid #eee">
+                  <td style="padding:4px 8px;color:#777">${i + 1}</td>
+                  <td style="padding:4px 8px">${escapeHtml(p.nombre)}</td>
+                  <td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtCant(p.cantidad)}</td>
+                  <td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtMoney(p.monto)}</td>
                 </tr>`,
               )
               .join('')
       }
-      ${movsAportesEgresos.length > 0 ? filaSubtotal('Aportes − Egresos (otros)', totalAportes - totalEgresosOtros) : ''}
     </tbody>
   </table>
-
-  <h2 style="font-size:14px;color:#1B3A2B;margin:18px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px;">Empleados (sueldos / adelantos / comisiones)</h2>
-  <table style="width:100%;border-collapse:collapse;font-size:13px;">
-    <tbody>
-      ${
-        movsEmpleados.length === 0
-          ? `<tr><td style="padding:8px 10px;color:#999;font-style:italic;">Sin pagos a empleados en el turno.</td></tr>`
-          : movsEmpleados
-              .map(
-                (m) => `<tr>
-                  <td style="padding:4px 10px">
-                    <span style="color:#444">${escapeHtml(m.categoria)}</span>
-                    ${m.empleado ? `<span style="color:#1B3A2B;font-weight:600"> → ${escapeHtml(m.empleado)}</span>` : ''}
-                    ${m.observacion ? `<span style="color:#888;font-size:11px;font-style:italic"> · ${escapeHtml(m.observacion)}</span>` : ''}
-                  </td>
-                  <td style="padding:4px 10px;text-align:right;font-family:monospace;color:#${ROJO.slice(2)}">${fmtMoney(Number(m.monto))}</td>
-                </tr>`,
-              )
-              .join('')
-      }
-      ${movsEmpleados.length > 0 ? filaSubtotal('Total empleados', totalEmpleados) : ''}
-    </tbody>
-  </table>
-
-  <h2 style="font-size:14px;color:#1B3A2B;margin:18px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px;">Recaudación esperada</h2>
-  <table style="width:100%;border-collapse:collapse;font-size:13px;">
-    <tr><td style="padding:4px 8px;color:#777">Existencia inicial</td><td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtMoney(data.sesion.existenciaInicial)}</td></tr>
-    <tr><td style="padding:4px 8px;color:#777">+ cobrado efectivo</td><td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtMoney(data.resumen.totalEfectivo)}</td></tr>
-    <tr><td style="padding:4px 8px;color:#777">+ ingresos del turno</td><td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtMoney(data.resumen.ingresos)}</td></tr>
-    <tr><td style="padding:4px 8px;color:#777">− egresos del turno</td><td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtMoney(data.resumen.egresos)}</td></tr>
-    <tr style="border-top:1px solid #ddd;font-weight:600;"><td style="padding:6px 8px">= Esperada en caja</td><td style="padding:6px 8px;text-align:right;font-family:monospace">${fmtMoney(data.sesion.recaudacionEsperada ?? '0')}</td></tr>
-    <tr><td style="padding:4px 8px;color:#777">Contada en cierre</td><td style="padding:4px 8px;text-align:right;font-family:monospace">${fmtMoney(data.sesion.existenciaFinal ?? '0')}</td></tr>
-  </table>
-
-  ${
-    data.movimientos.length > 0
-      ? `<h2 style="font-size:14px;color:#1B3A2B;margin:18px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px;">Movimientos del turno (${data.movimientos.length})</h2>
-  <table style="width:100%;border-collapse:collapse;font-size:12px;">
-    <thead><tr style="background:#1B3A2B;color:#fff;"><th style="padding:6px 8px;text-align:left;">Hora</th><th style="padding:6px 8px;text-align:left;">Tipo</th><th style="padding:6px 8px;text-align:left;">Categoría</th><th style="padding:6px 8px;text-align:left;">Cuenta</th><th style="padding:6px 8px;text-align:right;">Monto</th></tr></thead>
-    <tbody>${filasMov}</tbody>
-  </table>${data.movimientos.length > 20 ? `<div style="font-size:11px;color:#777;margin-top:6px;">+ ${data.movimientos.length - 20} más en el Excel adjunto</div>` : ''}`
-      : ''
-  }
 
   <div style="margin-top:24px;padding:12px;background:#F8F2E2;border-radius:6px;font-size:12px;color:#555;">
     📎 Excel adjunto con detalle de cada venta, pagos por método/cuenta y movimientos del turno.
