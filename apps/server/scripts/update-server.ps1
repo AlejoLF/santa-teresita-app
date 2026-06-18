@@ -35,6 +35,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Apagar la barra de progreso: Invoke-WebRequest en PS 5.1 con el progreso
+# activado (default) es 10-50x mas lento — convertia la descarga de ~28 MB del
+# asset de segundos a 20+ minutos. Se hereda por todo el script (ver download).
+$ProgressPreference = 'SilentlyContinue'
 
 # -- Config --
 $Repo            = 'AlejoLF/santa-teresita-app'
@@ -225,7 +229,16 @@ try {
   New-Item -ItemType Directory -Force -Path $work | Out-Null
   $zip = Join-Path $work 'dist.zip'
   Log "Descargando $($asset.name) ..."
-  Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -Headers $headers -TimeoutSec 600
+  # curl.exe (incluido en Windows 10+) es rapido y robusto a conexiones flojas.
+  # browser_download_url es el CDN publico de GitHub → no necesita auth (mandar
+  # el header Authorization rompe el redirect a S3). Fallback a iwr si no esta.
+  $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+  if (Test-Path $curl) {
+    & $curl -L --fail --silent --show-error --connect-timeout 30 --max-time 600 --retry 3 -o $zip $asset.browser_download_url
+    if ($LASTEXITCODE -ne 0) { throw "curl fallo al bajar el asset (exit $LASTEXITCODE)" }
+  } else {
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -TimeoutSec 600
+  }
   Expand-Archive -Path $zip -DestinationPath $work -Force
 
   # Ubicar la raiz del dist dentro del extraido (api/server.mjs presente)
