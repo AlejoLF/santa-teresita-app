@@ -1,0 +1,65 @@
+{
+  "$comment": "Schema de extracción de facturas de proveedor para LlamaExtract (LlamaCloud). Se manda inline en configuration.data_schema del POST /api/v2/extract, o se pega en el Web UI de LlamaCloud para probar. Los nombres de campo mapean 1:1 al body del endpoint POST /api/v1/ingest/facturas del programa (ver el Code 'Mapear al contrato' del workflow n8n). Pensado para facturas argentinas (A/B/C, CUIT, IVA).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "proveedor_nombre": {
+      "type": "string",
+      "description": "Razón social o nombre del PROVEEDOR (el emisor de la factura, NO Santa Teresita). Tomar el nombre comercial o la razón social del encabezado."
+    },
+    "proveedor_cuit": {
+      "type": "string",
+      "description": "CUIT del emisor/proveedor, formato 30-12345678-9. Vacío si no figura."
+    },
+    "tipo_comprobante": {
+      "type": "string",
+      "enum": ["FACTURA_A", "FACTURA_B", "FACTURA_C", "FACTURA_X", "NOTA_CREDITO", "NOTA_DEBITO", "TICKET", "REMITO", "OTRO"],
+      "description": "Tipo de comprobante. 'FACTURA A/B/C' según la letra grande del comprobante. Si es ticket no fiscal → TICKET. Si no se distingue → OTRO."
+    },
+    "punto_venta": {
+      "type": "string",
+      "description": "Punto de venta: los primeros 4-5 dígitos del número de comprobante (ej. en 0001-00012345 el punto de venta es 0001). Vacío si no aplica."
+    },
+    "numero": {
+      "type": "string",
+      "description": "Número del comprobante SIN el punto de venta (ej. en 0001-00012345 → 00012345). Si no hay separación, el número completo."
+    },
+    "fecha_emision": {
+      "type": "string",
+      "description": "Fecha de emisión en formato YYYY-MM-DD."
+    },
+    "fecha_vencimiento": {
+      "type": "string",
+      "description": "Fecha de vencimiento del pago si figura, en formato YYYY-MM-DD. Vacío si no hay."
+    },
+    "neto_gravado": {
+      "type": "number",
+      "description": "Importe neto gravado (subtotal antes de IVA). Número sin símbolos ni separador de miles, punto decimal. 0 si no figura."
+    },
+    "iva_total": {
+      "type": "number",
+      "description": "Suma total del IVA discriminado. 0 si no figura o no está discriminado."
+    },
+    "total": {
+      "type": "number",
+      "description": "IMPORTE TOTAL FINAL a pagar de la factura. Número sin símbolos, punto decimal."
+    },
+    "items": {
+      "type": "array",
+      "description": "Renglones/líneas de la factura. Una entrada por producto comprado.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "descripcion": { "type": "string", "description": "Descripción del producto/insumo del renglón." },
+          "cantidad": { "type": "number", "description": "Cantidad. 1 si no figura." },
+          "unidad": { "type": "string", "description": "Unidad de medida: u, kg, lt, caja, bolsa, docena, etc. 'u' si no figura." },
+          "precio_unitario": { "type": "number", "description": "Precio unitario sin IVA. 0 si no figura." },
+          "subtotal": { "type": "number", "description": "Importe del renglón (cantidad x precio_unitario)." }
+        },
+        "required": ["descripcion", "subtotal"]
+      }
+    }
+  },
+  "required": ["proveedor_nombre", "numero", "fecha_emision", "total"]
+}
