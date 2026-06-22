@@ -39,7 +39,12 @@ export default async function configuracionRoutes(fastify: FastifyInstance) {
     '/configuracion/publico',
     { preHandler: fastify.requireAuth() },
     async () => {
-      const keys = ['envio_simple_monto', 'envio_doble_monto'];
+      const keys = [
+        'envio_simple_monto',
+        'envio_doble_monto',
+        'descuento_efectivo_pct', // descuento automático por defecto (10%)
+        'descuento_manual_max_vendedor_pct', // tope que el cajero puede aplicar (30%)
+      ];
       const rows = await prisma.configuracionSistema.findMany({
         where: { clave: { in: keys } },
         select: { clave: true, valor: true },

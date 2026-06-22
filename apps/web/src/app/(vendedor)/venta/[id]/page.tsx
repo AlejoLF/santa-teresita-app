@@ -70,9 +70,12 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
   const [efectivoRecibido, setEfectivoRecibido] = useState('');
   const [mostrarSplit, setMostrarSplit] = useState(false);
   const [metodoSeleccionado, setMetodoSeleccionado] = useState<PagoLinea['metodo'] | null>(null);
-  // % de descuento al efectivo en cobro simple (default 10)
+  // % de descuento al efectivo en cobro simple (default 10, configurable)
   const [descuentoPctSimple, setDescuentoPctSimple] = useState<number>(10);
   const [descuentoPctSimpleInput, setDescuentoPctSimpleInput] = useState('');
+  // Tope que el cajero puede aplicar (config descuento_manual_max_vendedor_pct).
+  // Debe coincidir con el cap del server, sino el cobro tira "total insuficiente".
+  const [maxDescuento, setMaxDescuento] = useState<number>(30);
   const [cuentas, setCuentas] = useState<CuentaShort[]>([]);
   const [usuario, setUsuario] = useState<{ rol: string } | null>(null);
   const [promosDetectadas, setPromosDetectadas] = useState<
@@ -93,6 +96,23 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
         setUsuario(me.usuario);
       } catch {
         /* silencioso */
+      }
+    })();
+  }, []);
+
+  // Config de descuentos: el default automático y el TOPE que el cajero puede
+  // aplicar. Mantener el tope alineado con el server evita el bug de "total
+  // pagado insuficiente" al elegir un % distinto del default.
+  useEffect(() => {
+    (async () => {
+      try {
+        const cfg = await api.getCached<Record<string, string>>('/configuracion/publico', 5 * 60_000);
+        const max = Number(cfg['descuento_manual_max_vendedor_pct']);
+        if (Number.isFinite(max) && max > 0) setMaxDescuento(Math.min(100, max));
+        const def = Number(cfg['descuento_efectivo_pct']);
+        if (Number.isFinite(def) && def >= 0) setDescuentoPctSimple(def);
+      } catch {
+        /* silencioso — quedan los defaults (10 / 30) */
       }
     })();
   }, []);
@@ -591,7 +611,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
                     >
                       Sin desc.
                     </button>
-                    {[10, 15, 20, 25, 30].map((pct) => (
+                    {[10, 15, 20, 25, 30].filter((p) => p <= maxDescuento).map((pct) => (
                       <button
                         key={pct}
                         type="button"
@@ -617,19 +637,21 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
                       <input
                         type="number"
                         min="0"
-                        max="50"
+                        max={maxDescuento}
                         step="1"
-                        placeholder="otro %"
+                        placeholder={`otro % (máx ${maxDescuento})`}
                         value={descuentoPctSimpleInput}
                         onChange={(e) => {
                           const val = e.target.value;
                           setDescuentoPctSimpleInput(val);
                           const n = Number(val);
-                          if (val !== '' && Number.isFinite(n) && n >= 0 && n <= 50) {
+                          // Clamp al tope configurado para no mandar un % que el
+                          // server va a capear (y descuadrar el total cobrado).
+                          if (val !== '' && Number.isFinite(n) && n >= 0 && n <= maxDescuento) {
                             setDescuentoPctSimple(n);
                           }
                         }}
-                        className="input text-xs py-1 px-2 w-20 font-mono"
+                        className="input text-xs py-1 px-2 w-28 font-mono"
                       />
                       <span className="text-2xs text-basil-600">%</span>
                     </div>
