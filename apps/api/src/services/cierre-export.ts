@@ -176,8 +176,8 @@ export interface CierreData {
     contada: number;
     diferencia: number;
   };
-  /** Top productos vendidos en ESTA sesión (por facturación), como analytics. */
-  topProductos: Array<{ nombre: string; cantidad: number; monto: number; ocurrencias: number }>;
+  /** TODOS los productos vendidos en ESTA sesión, del más al menos vendido (por facturación). */
+  productosVendidos: Array<{ nombre: string; cantidad: number; monto: number; ocurrencias: number }>;
   resumen: {
     ventasFinalizadas: number;
     ventasAnuladas: number;
@@ -380,7 +380,7 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
   const contadaCaja = sesion.existenciaFinal != null ? Number(sesion.existenciaFinal) : 0;
   const diferenciaCaja = contadaCaja - esperadaCaja;
 
-  // ── Top productos de ESTA sesión (por facturación, como analytics) ──
+  // ── Productos vendidos de ESTA sesión: TODOS, del más al menos vendido ──
   const prodAgg = new Map<string, { nombre: string; cantidad: number; monto: number; ocurrencias: number }>();
   for (const v of ventasFinalizadas) {
     const vistos = new Set<string>();
@@ -393,9 +393,8 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
       prodAgg.set(key, cur);
     }
   }
-  const topProductos = [...prodAgg.values()]
-    .sort((a, b) => b.monto - a.monto)
-    .slice(0, 12);
+  // Sin recorte: el email/Excel listan todos los productos de la sesión.
+  const productosVendidos = [...prodAgg.values()].sort((a, b) => b.monto - a.monto);
 
   return {
     sesion: {
@@ -428,7 +427,7 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
       contada: contadaCaja,
       diferencia: diferenciaCaja,
     },
-    topProductos,
+    productosVendidos,
     resumen: {
       ventasFinalizadas: ventasFinalizadas.length,
       ventasAnuladas: ventasAnuladas.length,
@@ -706,8 +705,8 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
     else if (m.tipo === 'INGRESO') row.font = { color: { argb: '2C8C5A' } };
   }
 
-  // ── Sheet: Top productos (de esta sesión, por facturación) ──
-  const wsTop = wb.addWorksheet('Top productos');
+  // ── Sheet: Productos vendidos (TODOS, del más al menos vendido) ──
+  const wsTop = wb.addWorksheet('Productos vendidos');
   wsTop.columns = [
     { header: '#', key: 'pos', width: 6 },
     { header: 'Producto', key: 'nombre', width: 40 },
@@ -716,7 +715,7 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
     { header: 'Facturado', key: 'monto', width: 16 },
   ];
   estiloHeader(wsTop.getRow(1));
-  data.topProductos.forEach((p, i) => {
+  data.productosVendidos.forEach((p, i) => {
     wsTop.addRow({
       pos: i + 1,
       nombre: p.nombre,
@@ -907,15 +906,15 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
     </tbody>
   </table>
 
-  <h2 style="font-size:14px;color:#1B3A2B;margin:18px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px;">Top productos vendidos</h2>
-  <p style="font-size:11px;color:#777;margin:0 0 6px;">Más vendidos de esta sesión (${turnoStr}), por facturación.</p>
+  <h2 style="font-size:14px;color:#1B3A2B;margin:18px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px;">Productos vendidos</h2>
+  <p style="font-size:11px;color:#777;margin:0 0 6px;">Todos los productos vendidos en esta sesión (${turnoStr}), del más al menos vendido (por facturación).</p>
   <table style="width:100%;border-collapse:collapse;font-size:13px;">
     <thead><tr style="background:#1B3A2B;color:#fff;"><th style="padding:6px 8px;text-align:left;">#</th><th style="padding:6px 8px;text-align:left;">Producto</th><th style="padding:6px 8px;text-align:right;">Unid.</th><th style="padding:6px 8px;text-align:right;">Facturado</th></tr></thead>
     <tbody>
       ${
-        data.topProductos.length === 0
+        data.productosVendidos.length === 0
           ? `<tr><td colspan="4" style="padding:8px;color:#999;font-style:italic;">Sin ventas en esta sesión.</td></tr>`
-          : data.topProductos
+          : data.productosVendidos
               .map(
                 (p, i) => `<tr style="border-bottom:1px solid #eee">
                   <td style="padding:4px 8px;color:#777">${i + 1}</td>
