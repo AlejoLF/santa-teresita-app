@@ -141,7 +141,7 @@ export default function ConfigCuentasPage() {
         </header>
 
         <div className="card overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm hidden md:table">
             <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-300">
               <tr>
                 <th className="text-left px-4 py-2">Cuenta</th>
@@ -221,6 +221,63 @@ export default function ConfigCuentasPage() {
               ))}
             </tbody>
           </table>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200">
+            {cuentas.map((c) => (
+              <div key={c.id} className={cn('p-3', !c.activa && 'opacity-50')}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium text-ink-900 truncate">
+                      {c.tipo === 'EFECTIVO' ? '💵' : c.tipo === 'BANCO' ? '🏦' : '📱'} {c.nombre}
+                    </div>
+                    <div className="text-2xs font-mono text-ink-500 truncate">
+                      {c.tipo.toLowerCase()}
+                      {(c.cbuCvu || c.alias) && ` · ${c.cbuCvu || c.alias}`}
+                    </div>
+                    {c.banco && <div className="text-2xs text-ink-500 truncate">{c.banco}</div>}
+                    {c.excluidaDeCierreCaja && (
+                      <div className="text-2xs text-saffron-600 font-medium">
+                        ⓘ fuera del cierre de caja
+                      </div>
+                    )}
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <MoneyAmount value={c.saldoActual} />
+                    <div className="text-2xs uppercase tracking-wider">
+                      {c.activa ? (
+                        <span className="text-basil-600">activa</span>
+                      ) : (
+                        <span className="text-ink-500">inactiva</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                  <button
+                    onClick={() => setEditingCuenta(c)}
+                    className="text-teresita-700 hover:underline text-xs"
+                  >
+                    Editar
+                  </button>
+                  <button
+                    onClick={() => ajustarSaldo(c)}
+                    className="text-saffron-600 hover:underline text-xs"
+                  >
+                    Ajustar saldo
+                  </button>
+                  {c.activa && (
+                    <button
+                      onClick={() => eliminarCuenta(c)}
+                      className="text-pomodoro-600 hover:underline text-xs"
+                    >
+                      Eliminar
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -237,7 +294,7 @@ export default function ConfigCuentasPage() {
         </header>
 
         <div className="card overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm hidden md:table">
             <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-300">
               <tr>
                 <th className="text-left px-4 py-2">Posnet</th>
@@ -305,6 +362,65 @@ export default function ConfigCuentasPage() {
               ))}
             </tbody>
           </table>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200">
+            {posnetsData?.posnets.length === 0 && (
+              <div className="p-6 text-center text-ink-500">
+                Sin posnets configurados todavía.
+              </div>
+            )}
+            {posnetsData?.posnets.map((p) => (
+              <div key={p.id} className={cn('p-3', !p.activo && 'opacity-50')}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium text-ink-900 truncate">{p.nombre}</div>
+                    <div className="text-2xs font-mono text-ink-500 truncate">
+                      {p.marca}
+                      {p.modelo && ` · ${p.modelo}`}
+                    </div>
+                    <div className="text-2xs text-ink-500 truncate">
+                      {p.adquirente ?? '—'}
+                      {p.ubicacion && ` · ${p.ubicacion}`}
+                      {p.cuentaDestino?.nombre && ` · → ${p.cuentaDestino.nombre}`}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right text-2xs">
+                    <div>
+                      {p.soportaIntegracion ? (
+                        <span className="text-basil-600">✓ integrado</span>
+                      ) : (
+                        <span className="text-ink-500">manual</span>
+                      )}
+                    </div>
+                    <div className="uppercase tracking-wider">
+                      {p.activo ? (
+                        <span className="text-basil-600">activo</span>
+                      ) : (
+                        <span className="text-ink-500">inactivo</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                  <button
+                    onClick={() => setEditingPosnet(p)}
+                    className="text-teresita-700 hover:underline text-xs"
+                  >
+                    Editar
+                  </button>
+                  {p.activo && (
+                    <button
+                      onClick={() => eliminarPosnet(p)}
+                      className="text-pomodoro-600 hover:underline text-xs"
+                    >
+                      Eliminar
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 

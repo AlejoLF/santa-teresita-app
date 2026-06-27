@@ -126,53 +126,111 @@ function EmpresasSection() {
       {loading ? (
         <p className="text-ink-500 text-sm">Cargando…</p>
       ) : (
-        <table className="w-full text-sm mt-2">
-          <thead className="text-2xs uppercase text-ink-500 border-b border-cream-300">
-            <tr>
-              <th className="text-left py-1">Empresa</th>
-              <th className="text-right py-1">Comisión</th>
-              <th className="text-center py-1">Tipo</th>
-              <th className="text-right py-1">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
+        <>
+          <table className="w-full text-sm mt-2 hidden md:table">
+            <thead className="text-2xs uppercase text-ink-500 border-b border-cream-300">
+              <tr>
+                <th className="text-left py-1">Empresa</th>
+                <th className="text-right py-1">Comisión</th>
+                <th className="text-center py-1">Tipo</th>
+                <th className="text-right py-1">Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {empresas
+                .filter((e) => e.activo)
+                .map((e) =>
+                  editId === e.id ? (
+                    <tr key={e.id} className="border-b border-cream-200">
+                      <td colSpan={4} className="py-2">
+                        <EmpresaForm
+                          empresa={e}
+                          onCancel={() => setEditId(null)}
+                          onSaved={() => {
+                            setEditId(null);
+                            void fetchData();
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={e.id} className="border-b border-cream-200">
+                      <td className="py-1.5 font-medium text-ink-900">{e.nombre}</td>
+                      <td className="py-1.5 text-right font-mono">
+                        {Number(e.comisionPct).toFixed(2)}%
+                      </td>
+                      <td className="py-1.5 text-center">
+                        {e.esInterno ? (
+                          <span className="text-2xs bg-basil-100 text-basil-600 px-2 py-0.5 rounded">
+                            propio
+                          </span>
+                        ) : (
+                          <span className="text-2xs bg-cream-200 text-ink-700 px-2 py-0.5 rounded">
+                            externo
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-1.5 text-right">
+                        <button
+                          onClick={() => setEditId(e.id)}
+                          className="text-2xs text-teresita-700 hover:underline mr-3"
+                        >
+                          editar
+                        </button>
+                        <button
+                          onClick={() => eliminar(e.id, e.nombre)}
+                          className="text-2xs text-pomodoro-600 hover:underline"
+                        >
+                          quitar
+                        </button>
+                      </td>
+                    </tr>
+                  ),
+                )}
+            </tbody>
+          </table>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200 mt-2">
             {empresas
               .filter((e) => e.activo)
               .map((e) =>
                 editId === e.id ? (
-                  <tr key={e.id} className="border-b border-cream-200">
-                    <td colSpan={4} className="py-2">
-                      <EmpresaForm
-                        empresa={e}
-                        onCancel={() => setEditId(null)}
-                        onSaved={() => {
-                          setEditId(null);
-                          void fetchData();
-                        }}
-                      />
-                    </td>
-                  </tr>
+                  <div key={e.id} className="py-2">
+                    <EmpresaForm
+                      empresa={e}
+                      onCancel={() => setEditId(null)}
+                      onSaved={() => {
+                        setEditId(null);
+                        void fetchData();
+                      }}
+                    />
+                  </div>
                 ) : (
-                  <tr key={e.id} className="border-b border-cream-200">
-                    <td className="py-1.5 font-medium text-ink-900">{e.nombre}</td>
-                    <td className="py-1.5 text-right font-mono">
-                      {Number(e.comisionPct).toFixed(2)}%
-                    </td>
-                    <td className="py-1.5 text-center">
-                      {e.esInterno ? (
-                        <span className="text-2xs bg-basil-100 text-basil-600 px-2 py-0.5 rounded">
-                          propio
-                        </span>
-                      ) : (
-                        <span className="text-2xs bg-cream-200 text-ink-700 px-2 py-0.5 rounded">
-                          externo
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-1.5 text-right">
+                  <div key={e.id} className="py-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-medium text-ink-900 truncate">{e.nombre}</div>
+                        <div className="flex items-center gap-1.5 mt-1">
+                          {e.esInterno ? (
+                            <span className="text-2xs bg-basil-100 text-basil-600 px-2 py-0.5 rounded">
+                              propio
+                            </span>
+                          ) : (
+                            <span className="text-2xs bg-cream-200 text-ink-700 px-2 py-0.5 rounded">
+                              externo
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right font-mono text-ink-900">
+                        {Number(e.comisionPct).toFixed(2)}%
+                      </div>
+                    </div>
+                    <div className="flex gap-3 mt-2">
                       <button
                         onClick={() => setEditId(e.id)}
-                        className="text-2xs text-teresita-700 hover:underline mr-3"
+                        className="text-2xs text-teresita-700 hover:underline"
                       >
                         editar
                       </button>
@@ -182,12 +240,12 @@ function EmpresasSection() {
                       >
                         quitar
                       </button>
-                    </td>
-                  </tr>
+                    </div>
+                  </div>
                 ),
               )}
-          </tbody>
-        </table>
+          </div>
+        </>
       )}
     </section>
   );
@@ -356,48 +414,107 @@ function EnviosSection() {
       {loading ? (
         <p className="text-ink-500 text-sm">Cargando…</p>
       ) : (
-        <table className="w-full text-sm mt-2">
-          <thead className="text-2xs uppercase text-ink-500 border-b border-cream-300">
-            <tr>
-              <th className="text-left py-1">Tipo de envío</th>
-              <th className="text-right py-1">Precio</th>
-              <th className="text-right py-1">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
+        <>
+          <table className="w-full text-sm mt-2 hidden md:table">
+            <thead className="text-2xs uppercase text-ink-500 border-b border-cream-300">
+              <tr>
+                <th className="text-left py-1">Tipo de envío</th>
+                <th className="text-right py-1">Precio</th>
+                <th className="text-right py-1">Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {envios
+                .filter((e) => e.activo)
+                .map((e) =>
+                  editId === e.id ? (
+                    <tr key={e.id} className="border-b border-cream-200">
+                      <td colSpan={3} className="py-2">
+                        <EnvioForm
+                          envio={e}
+                          onCancel={() => setEditId(null)}
+                          onSaved={() => {
+                            setEditId(null);
+                            void fetchData();
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={e.id} className="border-b border-cream-200">
+                      <td className="py-1.5 font-medium text-ink-900">
+                        {e.nombre}
+                        <div className="text-2xs font-normal text-ink-500">
+                          {e.canales.length > 0
+                            ? `Aparece en: ${e.canales.map(labelCanal).join(', ')}`
+                            : 'No aparece en ningún canal'}
+                        </div>
+                      </td>
+                      <td className="py-1.5 text-right font-mono">
+                        ${Number(e.monto).toLocaleString('es-AR')}
+                      </td>
+                      <td className="py-1.5 text-right">
+                        <button
+                          onClick={() => setEditId(e.id)}
+                          className="text-2xs text-teresita-700 hover:underline mr-3"
+                        >
+                          editar
+                        </button>
+                        <button
+                          onClick={() => eliminar(e.id, e.nombre)}
+                          className="text-2xs text-pomodoro-600 hover:underline"
+                        >
+                          quitar
+                        </button>
+                      </td>
+                    </tr>
+                  ),
+                )}
+              {envios.filter((e) => e.activo).length === 0 && (
+                <tr>
+                  <td colSpan={3} className="py-3 text-center text-ink-500 text-sm italic">
+                    No hay tipos de envío. Agregá al menos uno.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200 mt-2">
             {envios
               .filter((e) => e.activo)
               .map((e) =>
                 editId === e.id ? (
-                  <tr key={e.id} className="border-b border-cream-200">
-                    <td colSpan={3} className="py-2">
-                      <EnvioForm
-                        envio={e}
-                        onCancel={() => setEditId(null)}
-                        onSaved={() => {
-                          setEditId(null);
-                          void fetchData();
-                        }}
-                      />
-                    </td>
-                  </tr>
+                  <div key={e.id} className="py-2">
+                    <EnvioForm
+                      envio={e}
+                      onCancel={() => setEditId(null)}
+                      onSaved={() => {
+                        setEditId(null);
+                        void fetchData();
+                      }}
+                    />
+                  </div>
                 ) : (
-                  <tr key={e.id} className="border-b border-cream-200">
-                    <td className="py-1.5 font-medium text-ink-900">
-                      {e.nombre}
-                      <div className="text-2xs font-normal text-ink-500">
-                        {e.canales.length > 0
-                          ? `Aparece en: ${e.canales.map(labelCanal).join(', ')}`
-                          : 'No aparece en ningún canal'}
+                  <div key={e.id} className="py-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-medium text-ink-900 truncate">{e.nombre}</div>
+                        <div className="text-2xs font-normal text-ink-500">
+                          {e.canales.length > 0
+                            ? `Aparece en: ${e.canales.map(labelCanal).join(', ')}`
+                            : 'No aparece en ningún canal'}
+                        </div>
                       </div>
-                    </td>
-                    <td className="py-1.5 text-right font-mono">
-                      ${Number(e.monto).toLocaleString('es-AR')}
-                    </td>
-                    <td className="py-1.5 text-right">
+                      <div className="shrink-0 text-right font-mono text-ink-900">
+                        ${Number(e.monto).toLocaleString('es-AR')}
+                      </div>
+                    </div>
+                    <div className="flex gap-3 mt-2">
                       <button
                         onClick={() => setEditId(e.id)}
-                        className="text-2xs text-teresita-700 hover:underline mr-3"
+                        className="text-2xs text-teresita-700 hover:underline"
                       >
                         editar
                       </button>
@@ -407,19 +524,17 @@ function EnviosSection() {
                       >
                         quitar
                       </button>
-                    </td>
-                  </tr>
+                    </div>
+                  </div>
                 ),
               )}
             {envios.filter((e) => e.activo).length === 0 && (
-              <tr>
-                <td colSpan={3} className="py-3 text-center text-ink-500 text-sm italic">
-                  No hay tipos de envío. Agregá al menos uno.
-                </td>
-              </tr>
+              <div className="py-3 text-center text-ink-500 text-sm italic">
+                No hay tipos de envío. Agregá al menos uno.
+              </div>
             )}
-          </tbody>
-        </table>
+          </div>
+        </>
       )}
     </section>
   );

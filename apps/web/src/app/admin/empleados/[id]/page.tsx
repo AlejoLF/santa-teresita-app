@@ -189,7 +189,8 @@ export default function EmpleadoDetallePage({
             Sin movimientos registrados aún. Cargá el primer pago con el botón de arriba.
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <>
+          <table className="w-full text-sm hidden md:table">
             <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
               <tr>
                 <th className="text-left px-4 py-2">Fecha</th>
@@ -250,6 +251,62 @@ export default function EmpleadoDetallePage({
               })}
             </tbody>
           </table>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200">
+            {data.movimientos.map((m) => {
+              const conceptoColor =
+                m.categoria.nombre === 'Sueldos'
+                  ? 'text-basil-600'
+                  : m.categoria.nombre === 'Adelanto a empleado'
+                    ? 'text-saffron-600'
+                    : m.categoria.nombre === 'Comisiones'
+                      ? 'text-ocean-600'
+                      : 'text-ink-700';
+              return (
+                <div
+                  key={m.id}
+                  className={cn('p-3', m.estado === 'ANULADO' && 'opacity-50 line-through')}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className={cn('font-medium truncate', conceptoColor)}>
+                        {m.categoria.nombre}
+                      </div>
+                      <div className="text-2xs font-mono text-ink-500 truncate mt-0.5">
+                        {new Date(m.fechaComputo).toLocaleDateString('es-AR', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: '2-digit',
+                        })}{' '}
+                        · {m.cuentaOrigen?.nombre ?? '—'}
+                      </div>
+                      {m.observacion && (
+                        <div className="text-2xs text-ink-500 italic truncate mt-0.5">
+                          {m.observacion}
+                        </div>
+                      )}
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <MoneyAmount value={m.monto} className="text-pomodoro-600" />
+                      <div className="text-2xs uppercase tracking-wider mt-0.5">
+                        {m.estado === 'CONFIRMADO' && (
+                          <span className="text-basil-600">confirmado</span>
+                        )}
+                        {m.estado === 'ANULADO' && (
+                          <span className="text-pomodoro-600">anulado</span>
+                        )}
+                        {m.estado === 'PENDIENTE' && (
+                          <span className="text-saffron-600">pendiente</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          </>
         )}
       </section>
 

@@ -252,7 +252,8 @@ export default function MayoristaDetallePage({
             Sin remitos todavía. Cargá el primero con "+ Nuevo remito".
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <>
+          <table className="w-full text-sm hidden md:table">
             <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
               <tr>
                 <th className="text-left px-4 py-2">Remito</th>
@@ -301,6 +302,48 @@ export default function MayoristaDetallePage({
               ))}
             </tbody>
           </table>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200">
+            {data.remitos.map((r) => (
+              <div key={r.id} className={cn('p-3', r.estado === 'ANULADO' && 'opacity-50')}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium text-ink-900 truncate">
+                      <span className="font-mono text-ink-700">#{r.numero}</span> ·{' '}
+                      {new Date(r.fecha).toLocaleDateString('es-AR')}
+                    </div>
+                    <div className="text-2xs font-mono text-ink-500 truncate">
+                      {r.itemsCount} ítems
+                      {r.observaciones && ` · ${r.observaciones}`}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <MoneyAmount
+                      value={r.total}
+                      className={cn(r.estado === 'ANULADO' && 'line-through')}
+                    />
+                    <div className="text-2xs uppercase tracking-wider">
+                      {r.estado === 'ANULADO' ? (
+                        <span className="text-pomodoro-600">anulado</span>
+                      ) : (
+                        <span className="text-basil-600">pendiente</span>
+                      )}
+                    </div>
+                    {r.estado !== 'ANULADO' && (
+                      <button
+                        onClick={() => anularRemito(r.id, r.numero)}
+                        className="text-pomodoro-600 hover:underline text-xs mt-0.5"
+                      >
+                        Anular
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          </>
         )}
       </section>
 
@@ -314,7 +357,8 @@ export default function MayoristaDetallePage({
             Sin cobros registrados. Cuando el cliente pague, usá "Registrar cobro".
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <>
+          <table className="w-full text-sm hidden md:table">
             <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
               <tr>
                 <th className="text-left px-4 py-2">Fecha</th>
@@ -338,6 +382,27 @@ export default function MayoristaDetallePage({
               ))}
             </tbody>
           </table>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200">
+            {data.cobros.map((m) => (
+              <div key={m.id} className="p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium text-ink-900 truncate">{m.cuenta}</div>
+                    <div className="text-2xs font-mono text-ink-500 truncate">
+                      {new Date(m.fecha).toLocaleDateString('es-AR')}
+                      {m.observacion && ` · ${m.observacion}`}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <MoneyAmount value={m.monto} className="text-basil-600" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          </>
         )}
       </section>
 

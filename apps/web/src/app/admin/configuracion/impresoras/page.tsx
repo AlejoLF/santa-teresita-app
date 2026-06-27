@@ -399,61 +399,120 @@ export default function ImpresorasConfigPage() {
             (o se imprima un test), aparece acá.
           </div>
         ) : (
-          <table className="w-full text-xs">
-            <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
-              <tr>
-                <th className="text-left px-4 py-2">Hora</th>
-                <th className="text-left px-4 py-2">Tipo</th>
-                <th className="text-left px-4 py-2">Destino</th>
-                <th className="text-center px-4 py-2">Estado</th>
-                <th className="text-center px-4 py-2">Intentos</th>
-                <th className="text-left px-4 py-2">Error</th>
-                <th className="px-4 py-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-cream-200">
+          <>
+            <table className="w-full text-xs hidden md:table">
+              <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
+                <tr>
+                  <th className="text-left px-4 py-2">Hora</th>
+                  <th className="text-left px-4 py-2">Tipo</th>
+                  <th className="text-left px-4 py-2">Destino</th>
+                  <th className="text-center px-4 py-2">Estado</th>
+                  <th className="text-center px-4 py-2">Intentos</th>
+                  <th className="text-left px-4 py-2">Error</th>
+                  <th className="px-4 py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-cream-200">
+                {jobs?.jobs.map((j) => {
+                  const fecha = new Date(j.encoladoAt);
+                  return (
+                    <tr key={j.id} className="hover:bg-cream-100">
+                      <td className="px-4 py-2 font-mono text-ink-500">
+                        {fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </td>
+                      <td className="px-4 py-2 text-ink-700">{j.tipo.replace(/_/g, ' ').toLowerCase()}</td>
+                      <td className="px-4 py-2 text-ink-700">{j.destino}</td>
+                      <td className="px-4 py-2 text-center">
+                        <span
+                          className={cn(
+                            'px-2 py-0.5 rounded font-medium uppercase tracking-wider text-2xs',
+                            j.estado === 'IMPRESO' && 'bg-basil-100 text-basil-600',
+                            j.estado === 'PENDIENTE' && 'bg-saffron-100 text-saffron-600',
+                            j.estado === 'EN_PROCESO' && 'bg-ocean-100 text-ocean-600',
+                            j.estado === 'ERROR' && 'bg-pomodoro-100 text-pomodoro-600',
+                            j.estado === 'CANCELADO' && 'bg-cream-200 text-ink-500',
+                          )}
+                        >
+                          {j.estado}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-center font-mono text-ink-500">{j.intentos}</td>
+                      <td className="px-4 py-2 text-ink-700 truncate max-w-[200px]" title={j.ultimoError ?? ''}>
+                        {j.ultimoError ?? '—'}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        {j.estado === 'ERROR' && (
+                          <button
+                            onClick={() => void reintentar(j.id)}
+                            className="text-2xs text-teresita-700 hover:underline"
+                          >
+                            reintentar
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            {/* Tarjetas (mobile) */}
+            <div className="md:hidden divide-y divide-cream-200">
               {jobs?.jobs.map((j) => {
                 const fecha = new Date(j.encoladoAt);
                 return (
-                  <tr key={j.id} className="hover:bg-cream-100">
-                    <td className="px-4 py-2 font-mono text-ink-500">
-                      {fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </td>
-                    <td className="px-4 py-2 text-ink-700">{j.tipo.replace(/_/g, ' ').toLowerCase()}</td>
-                    <td className="px-4 py-2 text-ink-700">{j.destino}</td>
-                    <td className="px-4 py-2 text-center">
-                      <span
-                        className={cn(
-                          'px-2 py-0.5 rounded font-medium uppercase tracking-wider text-2xs',
-                          j.estado === 'IMPRESO' && 'bg-basil-100 text-basil-600',
-                          j.estado === 'PENDIENTE' && 'bg-saffron-100 text-saffron-600',
-                          j.estado === 'EN_PROCESO' && 'bg-ocean-100 text-ocean-600',
-                          j.estado === 'ERROR' && 'bg-pomodoro-100 text-pomodoro-600',
-                          j.estado === 'CANCELADO' && 'bg-cream-200 text-ink-500',
+                  <div key={j.id} className="p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-medium text-ink-900 truncate">
+                          {j.tipo.replace(/_/g, ' ').toLowerCase()}
+                        </div>
+                        <div className="text-2xs font-mono text-ink-500 truncate">
+                          {j.destino} ·{' '}
+                          {fecha.toLocaleTimeString('es-AR', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                          })}{' '}
+                          · {j.intentos} int.
+                        </div>
+                        {j.ultimoError && (
+                          <div
+                            className="text-2xs text-pomodoro-600 truncate mt-0.5"
+                            title={j.ultimoError}
+                          >
+                            {j.ultimoError}
+                          </div>
                         )}
-                      >
-                        {j.estado}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2 text-center font-mono text-ink-500">{j.intentos}</td>
-                    <td className="px-4 py-2 text-ink-700 truncate max-w-[200px]" title={j.ultimoError ?? ''}>
-                      {j.ultimoError ?? '—'}
-                    </td>
-                    <td className="px-4 py-2 text-right">
-                      {j.estado === 'ERROR' && (
-                        <button
-                          onClick={() => void reintentar(j.id)}
-                          className="text-2xs text-teresita-700 hover:underline"
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <span
+                          className={cn(
+                            'px-2 py-0.5 rounded font-medium uppercase tracking-wider text-2xs',
+                            j.estado === 'IMPRESO' && 'bg-basil-100 text-basil-600',
+                            j.estado === 'PENDIENTE' && 'bg-saffron-100 text-saffron-600',
+                            j.estado === 'EN_PROCESO' && 'bg-ocean-100 text-ocean-600',
+                            j.estado === 'ERROR' && 'bg-pomodoro-100 text-pomodoro-600',
+                            j.estado === 'CANCELADO' && 'bg-cream-200 text-ink-500',
+                          )}
                         >
-                          reintentar
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                          {j.estado}
+                        </span>
+                        {j.estado === 'ERROR' && (
+                          <button
+                            onClick={() => void reintentar(j.id)}
+                            className="block ml-auto mt-1 text-2xs text-teresita-700 hover:underline"
+                          >
+                            reintentar
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 );
               })}
-            </tbody>
-          </table>
+            </div>
+          </>
         )}
       </section>
     </div>

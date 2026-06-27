@@ -122,7 +122,7 @@ export function ListasPreciosManager() {
       )}
 
       <div className="card overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm hidden md:table">
           <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-300">
             <tr>
               <th className="text-left px-4 py-2">Lista</th>
@@ -165,6 +165,58 @@ export function ListasPreciosManager() {
             ))}
           </tbody>
         </table>
+
+        {/* Tarjetas (mobile) */}
+        <div className="md:hidden divide-y divide-cream-200">
+          {listas.map((l) => (
+            <div
+              key={l.id}
+              onClick={() => setVerListaId(l.id)}
+              className={cn('p-3 active:bg-cream-100', !l.activa && 'opacity-50')}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="font-medium text-ink-900 truncate">{l.nombre}</div>
+                  <div className="mt-1">
+                    <span
+                      className={cn('text-2xs font-medium px-2 py-0.5 rounded', TIPO_COLOR[l.tipo])}
+                    >
+                      {TIPO_LABEL[l.tipo]}
+                    </span>
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="text-sm font-mono text-ink-700">
+                    {l.tipo === 'PUBLICA' ? '—' : `${Number(l.ajustePctDefault).toFixed(0)}%`}
+                  </div>
+                  <div className="text-2xs text-ink-500">{l.productos} prod.</div>
+                </div>
+              </div>
+              <div className="mt-2 flex gap-4 justify-end border-t border-cream-200 pt-2">
+                {l.tipo === 'CUSTOM' && l.activa && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      eliminarLista(l);
+                    }}
+                    className="text-pomodoro-600 text-xs"
+                  >
+                    Eliminar
+                  </button>
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setVerListaId(l.id);
+                  }}
+                  className="text-teresita-700 text-xs"
+                >
+                  Ver / editar →
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {showNueva && (

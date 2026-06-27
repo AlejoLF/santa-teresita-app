@@ -361,7 +361,7 @@ export default function PagarFacturasPage({ params }: { params: Promise<{ id: st
               </div>
             </div>
           ) : (
-            <table className="w-full text-sm">
+            <table className="w-full text-sm hidden md:table">
               <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
                 <tr>
                   <th className="text-left px-4 py-2 w-10">✓</th>
@@ -430,6 +430,70 @@ export default function PagarFacturasPage({ params }: { params: Promise<{ id: st
                 })}
               </tbody>
             </table>
+          )}
+
+          {/* Tarjetas (mobile) — selección de facturas */}
+          {modo === 'facturas' && facturasPendientes.length > 0 && (
+            <div className="md:hidden divide-y divide-cream-200">
+              {facturasPendientes.map((f) => {
+                const sel = seleccion.find((s) => s.facturaId === f.id);
+                const venc = f.fechaVencimiento ? new Date(f.fechaVencimiento) : null;
+                const vencido = venc && venc.getTime() < Date.now();
+                return (
+                  <div key={f.id} className={cn('p-3', sel && 'bg-teresita-50')}>
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={!!sel}
+                        onChange={() => toggleFactura(f)}
+                        className="mt-1 shrink-0"
+                      />
+                      <div className="flex-1 min-w-0 flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-2xs text-ink-500">
+                            {f.tipoComprobante.replace('_', ' ')}
+                          </div>
+                          <div className="font-mono text-ink-700 truncate">
+                            {f.puntoVenta ? `${f.puntoVenta}-` : ''}
+                            {f.numero}
+                          </div>
+                          {venc && (
+                            <div
+                              className={cn(
+                                'text-2xs font-mono',
+                                vencido ? 'text-pomodoro-600 font-semibold' : 'text-ink-500',
+                              )}
+                            >
+                              {vencido && '⚠ '}
+                              vence {venc.toLocaleDateString('es-AR')}
+                            </div>
+                          )}
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <MoneyAmount value={f.saldo} className="text-md text-pomodoro-600" />
+                          <div className="text-2xs font-mono text-ink-500">
+                            de <MoneyAmount value={f.total} />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    {sel && (
+                      <div className="mt-2 pl-7 flex items-center gap-2">
+                        <label className="text-2xs text-ink-500">A aplicar:</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={sel.montoAplicar}
+                          max={f.saldo}
+                          onChange={(e) => setMontoAplicar(f.id, e.target.value)}
+                          className="input w-32 text-right font-mono py-1"
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
           <footer className="px-4 py-3 border-t border-cream-300 bg-surface-sunken flex justify-between items-center">
             <div className="text-sm">

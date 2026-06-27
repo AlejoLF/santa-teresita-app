@@ -145,7 +145,7 @@ export default function ComprasProveedorPage({
             Sin compras a este proveedor en el período seleccionado.
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <table className="w-full text-sm hidden md:table">
             <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
               <tr>
                 <th className="text-left px-4 py-2">Producto</th>
@@ -272,6 +272,107 @@ export default function ComprasProveedorPage({
               })}
             </tbody>
           </table>
+        )}
+
+        {/* Tarjetas (mobile) */}
+        {data.compras.length > 0 && (
+          <div className="md:hidden divide-y divide-cream-200">
+            {data.compras.map((c) => {
+              const key = c.insumoId ?? c.nombre;
+              const isExpanded = expandida === key;
+              const aumentoColor =
+                c.aumentoPct > 30
+                  ? 'text-pomodoro-600 font-semibold'
+                  : c.aumentoPct > 10
+                    ? 'text-saffron-600'
+                    : c.aumentoPct < -5
+                      ? 'text-basil-600'
+                      : 'text-ink-500';
+              return (
+                <div key={key}>
+                  <div
+                    onClick={() => setExpandida(isExpanded ? null : key)}
+                    className={cn(
+                      'p-3 active:bg-cream-100',
+                      isExpanded && 'bg-teresita-50',
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-medium text-ink-900 truncate">{c.nombre}</div>
+                        <div className="text-2xs font-mono text-ink-500 truncate">
+                          {c.categoria ?? 'sin categoría'} · {c.unidad} ·{' '}
+                          {Number(c.totalCantidad).toFixed(c.unidad === 'KG' ? 2 : 0)}{' '}
+                          {c.unidad.toLowerCase()} · {c.ocurrencias}×
+                          {!c.insumoId && (
+                            <span className="ml-1 text-saffron-600">⚠ no vinculado</span>
+                          )}
+                        </div>
+                        <div className="text-2xs font-mono text-ink-500 mt-0.5">
+                          min <MoneyAmount value={c.precioMin.toFixed(2)} /> · actual{' '}
+                          <MoneyAmount
+                            value={c.precioActual.toFixed(2)}
+                            className="text-teresita-700"
+                          />
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <MoneyAmount value={c.totalGastado} className="text-md" />
+                        <div className={cn('text-2xs font-mono', aumentoColor)}>
+                          {c.aumentoPct > 0 ? '↑' : c.aumentoPct < 0 ? '↓' : '→'}{' '}
+                          {Math.abs(c.aumentoPct).toFixed(1)}%
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div className="bg-teresita-50 px-3 pb-3">
+                      <h4 className="text-xs font-medium text-ink-700 mb-2">
+                        Histórico de compras
+                      </h4>
+                      <ul className="space-y-1 text-2xs font-mono">
+                        {c.historico.map((h, i) => {
+                          const ant = c.historico[i - 1];
+                          const delta =
+                            ant && Number(ant.precio) > 0
+                              ? ((Number(h.precio) - Number(ant.precio)) /
+                                  Number(ant.precio)) *
+                                100
+                              : 0;
+                          return (
+                            <li
+                              key={i}
+                              className="flex justify-between gap-2 py-1 border-b border-cream-200 last:border-0"
+                            >
+                              <span className="text-ink-500">
+                                {new Date(h.fecha).toLocaleDateString('es-AR')}
+                              </span>
+                              <span className="text-right">
+                                <MoneyAmount value={h.precio} />
+                                {i > 0 && (
+                                  <span
+                                    className={cn(
+                                      'ml-1',
+                                      delta > 0 && 'text-pomodoro-600',
+                                      delta < 0 && 'text-basil-600',
+                                      delta === 0 && 'text-ink-300',
+                                    )}
+                                  >
+                                    {delta > 0 ? '+' : ''}
+                                    {delta.toFixed(1)}%
+                                  </span>
+                                )}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
       </section>
     </div>

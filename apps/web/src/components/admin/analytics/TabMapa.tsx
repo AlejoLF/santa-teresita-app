@@ -218,7 +218,7 @@ export function TabMapa(props: TabProps) {
 
       {modo === 'operativo' && (
         <Card titulo={`Lista de pedidos de hoy (${fmtNum(data.pinesHoy.length)})`}>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto hidden md:block">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-cream-300 text-ink-500 text-xs uppercase tracking-wide">
@@ -259,6 +259,41 @@ export function TabMapa(props: TabProps) {
                 Aún no hay deliveries cargados hoy.
               </p>
             )}
+          </div>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200">
+            {data.pinesHoy.length === 0 && (
+              <p className="text-sm text-ink-500 italic text-center py-6">
+                Aún no hay deliveries cargados hoy.
+              </p>
+            )}
+            {data.pinesHoy.map((p) => (
+              <div key={p.venta_id} className="py-3 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="font-medium text-ink-900 truncate">
+                    #{p.numero} · {p.cliente}
+                  </div>
+                  <div className="text-2xs font-mono text-ink-500 truncate">{p.direccion}</div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="text-sm">{fmtPesos(p.total)}</div>
+                  <div className="mt-1">
+                    <span
+                      className="px-2 py-0.5 rounded text-2xs font-medium text-white"
+                      style={{
+                        backgroundColor: COLOR_PIN[p.estado_delivery ?? p.estado] ?? '#5c5c58',
+                      }}
+                    >
+                      {p.estado_delivery ?? p.estado}
+                    </span>
+                  </div>
+                  {p.demora_min != null && (
+                    <div className="text-2xs text-ink-500 mt-0.5">{p.demora_min}min</div>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         </Card>
       )}

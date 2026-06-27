@@ -196,7 +196,7 @@ function ProveedoresTab() {
       )}
 
       <section className="card overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm hidden md:table">
           <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-300">
             <tr>
               <th className="text-left px-4 py-2">Proveedor</th>
@@ -297,6 +297,86 @@ function ProveedoresTab() {
             })}
           </tbody>
         </table>
+
+        {/* Tarjetas (mobile) */}
+        <div className="md:hidden divide-y divide-cream-200">
+          {loading && <div className="p-6 text-center text-ink-500">Cargando...</div>}
+          {!loading && proveedores.length === 0 && (
+            <div className="p-6 text-center text-ink-500">Sin proveedores</div>
+          )}
+          {proveedores.map((p) => {
+            const saldo = Number(p.saldoAdeudado);
+            const venc = p.proximoVencimiento ? new Date(p.proximoVencimiento) : null;
+            const venceProximo = venc && venc.getTime() < Date.now() + 7 * 86400 * 1000;
+            const vencido = venc && venc.getTime() < Date.now();
+            return (
+              <div key={p.id} className="p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <Link
+                      href={`/admin/insumos/${p.id}`}
+                      className="font-medium text-ink-900 hover:text-teresita-700 truncate block"
+                    >
+                      {p.nombre}
+                    </Link>
+                    <div className="text-2xs font-mono text-ink-500 truncate">
+                      {p.categoriaPrincipal ?? '—'}
+                      {p.cuit && ` · ${p.cuit}`}
+                      {' · '}
+                      {p.facturasPendientes} fact. pend.
+                    </div>
+                    {venc && (
+                      <div
+                        className={cn(
+                          'text-2xs font-mono mt-0.5',
+                          vencido && 'text-pomodoro-600 font-semibold',
+                          !vencido && venceProximo && 'text-saffron-600',
+                          !vencido && !venceProximo && 'text-ink-500',
+                        )}
+                      >
+                        {vencido && '⚠ '}
+                        vence{' '}
+                        {venc.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' })}
+                      </div>
+                    )}
+                  </div>
+                  <div className="shrink-0 text-right flex flex-col items-end gap-1">
+                    {saldo > 0 ? (
+                      <MoneyAmount
+                        value={p.saldoAdeudado}
+                        className="text-md text-pomodoro-600 font-medium"
+                      />
+                    ) : (
+                      <span className="text-ink-300">—</span>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setModalEdit(p.id)}
+                        className="text-xs text-teresita-700"
+                        title="Editar datos del proveedor"
+                      >
+                        ✎
+                      </button>
+                      <button
+                        onClick={() => eliminarProveedor(p.id, p.nombre)}
+                        className="text-xs text-pomodoro-600"
+                        title="Eliminar proveedor"
+                      >
+                        🗑
+                      </button>
+                      <Link
+                        href={`/admin/insumos/${p.id}`}
+                        className="text-ink-300 hover:text-teresita-700"
+                      >
+                        →
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </section>
 
       {modalEdit && (
@@ -701,7 +781,7 @@ function InsumosTab() {
       )}
 
       <section className="card overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm hidden md:table">
           <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-300">
             <tr>
               <th className="text-left px-4 py-2">Insumo</th>
@@ -745,6 +825,31 @@ function InsumosTab() {
             })}
           </tbody>
         </table>
+
+        {/* Tarjetas (mobile) */}
+        <div className="md:hidden divide-y divide-cream-200">
+          {loading && <div className="p-6 text-center text-ink-500">Cargando...</div>}
+          {!loading && insumos.length === 0 && (
+            <div className="p-6 text-center text-ink-500">
+              No hay insumos en el catálogo todavía. Cargá uno desde la página del proveedor.
+            </div>
+          )}
+          {insumos.map((i) => {
+            const expanded = expandido === i.id;
+            const presentacion =
+              i.presentacion ??
+              `por ${UNIDAD_LABEL[i.unidadCompra] ?? i.unidadCompra.toLowerCase()}`;
+            return (
+              <TarjetaInsumo
+                key={i.id}
+                insumo={i}
+                expanded={expanded}
+                presentacion={presentacion}
+                onToggle={() => setExpandido(expanded ? null : i.id)}
+              />
+            );
+          })}
+        </div>
       </section>
     </div>
   );
@@ -897,5 +1002,138 @@ function FilaInsumo({
         </tr>
       )}
     </>
+  );
+}
+
+function TarjetaInsumo({
+  insumo: i,
+  expanded,
+  presentacion,
+  onToggle,
+}: {
+  insumo: Insumo;
+  expanded: boolean;
+  presentacion: string;
+  onToggle: () => void;
+}) {
+  const tieneVarios = i.proveedores.length > 1;
+  const frescuraTone =
+    i.frescura === 'reciente'
+      ? 'bg-basil-100 text-basil-600'
+      : i.frescura === 'medio'
+        ? 'bg-saffron-100 text-saffron-600'
+        : i.frescura === 'viejo'
+          ? 'bg-pomodoro-100 text-pomodoro-600'
+          : 'bg-cream-200 text-ink-500';
+  const frescuraLabel =
+    i.diasDesdePrecio === null
+      ? 'sin precio'
+      : i.diasDesdePrecio === 0
+        ? 'hoy'
+        : i.diasDesdePrecio === 1
+          ? 'ayer'
+          : `hace ${i.diasDesdePrecio} días`;
+
+  return (
+    <div className="p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="font-medium text-ink-900 truncate">{i.nombre}</div>
+          <div className="text-2xs font-mono text-ink-500 truncate">
+            {CATEGORIA_LABEL[i.categoria] ?? i.categoria} · {presentacion}
+            {Number(i.stockActual) > 0 && ` · stock ${i.stockActual}`}
+          </div>
+          <div className="text-2xs text-ink-500 truncate mt-0.5">
+            {i.proveedorPrincipal ? (
+              <Link
+                href={`/admin/insumos/${i.proveedorPrincipal.id}`}
+                className="text-teresita-700 hover:underline"
+              >
+                {i.proveedorPrincipal.nombre}
+              </Link>
+            ) : (
+              <span className="text-ink-300">— sin proveedor</span>
+            )}
+            {tieneVarios && (
+              <span className="ml-1 text-ink-500">(+{i.proveedores.length - 1} más)</span>
+            )}
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          {i.precioVigente ? (
+            <MoneyAmount value={i.precioVigente} className="text-md font-mono" />
+          ) : (
+            <span className="text-ink-300">—</span>
+          )}
+          <div className="mt-1">
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs',
+                frescuraTone,
+              )}
+            >
+              {i.frescura === 'reciente' && '↑'}
+              {i.frescura === 'medio' && '⏰'}
+              {i.frescura === 'viejo' && '⚠'}
+              {frescuraLabel}
+            </span>
+          </div>
+        </div>
+      </div>
+      {tieneVarios && (
+        <button
+          onClick={onToggle}
+          className="mt-2 text-xs text-teresita-700 hover:underline"
+        >
+          {expanded ? '− cerrar' : '+ comparar proveedores'}
+        </button>
+      )}
+      {expanded && tieneVarios && (
+        <div className="mt-2 bg-cream-100 rounded-md p-2 space-y-1">
+          <div className="text-2xs uppercase tracking-wider text-ink-500">
+            Proveedores que venden este insumo
+          </div>
+          {i.proveedores.map((p) => {
+            const fecha = p.fechaUltimoPrecio ? new Date(p.fechaUltimoPrecio) : null;
+            return (
+              <div
+                key={p.id}
+                className="flex items-center justify-between gap-2 py-1 border-b border-cream-200 last:border-0 text-xs"
+              >
+                <div className="min-w-0">
+                  <Link
+                    href={`/admin/insumos/${p.id}`}
+                    className="text-ink-900 hover:text-teresita-700"
+                  >
+                    {p.nombre}
+                  </Link>
+                  {p.esPrincipal && (
+                    <span className="ml-1 text-2xs bg-teresita-50 text-teresita-700 px-1.5 py-0.5 rounded">
+                      principal
+                    </span>
+                  )}
+                  <div className="text-2xs text-ink-500">
+                    {fecha
+                      ? fecha.toLocaleDateString('es-AR', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: 'numeric',
+                        })
+                      : '—'}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right font-mono">
+                  {p.precioUltimo ? (
+                    <MoneyAmount value={p.precioUltimo} />
+                  ) : (
+                    <span className="text-ink-300">—</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

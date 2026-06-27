@@ -130,7 +130,7 @@ export default function EmpleadosListPage() {
       )}
 
       <section className="card overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm hidden md:table">
           <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-300">
             <tr>
               <th className="text-left px-4 py-2">Empleado</th>
@@ -244,6 +244,82 @@ export default function EmpleadosListPage() {
             })}
           </tbody>
         </table>
+
+        {/* Tarjetas (mobile) */}
+        <div className="md:hidden divide-y divide-cream-200">
+          {loading && <div className="p-6 text-center text-ink-500">Cargando...</div>}
+          {!loading && empleados.length === 0 && (
+            <div className="p-6 text-center text-ink-500">Sin empleados</div>
+          )}
+          {empleados.map((e) => {
+            const pagado =
+              Number(e.sueldosPagadosMes) + Number(e.adelantosMes) + Number(e.comisionesMes);
+            return (
+              <div key={e.id} className={cn('p-3', !e.activo && 'opacity-50')}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <Link
+                      href={`/admin/empleados/${e.id}`}
+                      className="font-medium text-ink-900 hover:text-teresita-700 truncate block"
+                    >
+                      {e.nombre}
+                      {e.apellido && ` ${e.apellido}`}
+                    </Link>
+                    <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                      <span className="text-2xs font-medium px-2 py-0.5 rounded bg-cream-200 text-ink-700">
+                        {PUESTO_LABEL[e.puesto]}
+                      </span>
+                      {e.formaPago && (
+                        <span className="text-2xs text-ink-500">{e.formaPago}</span>
+                      )}
+                    </div>
+                    <div className="text-2xs font-mono text-ink-500 truncate mt-1">
+                      {e.telefono && <span>{e.telefono} · </span>}
+                      pagado mes:{' '}
+                      {pagado > 0
+                        ? `$${pagado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`
+                        : '—'}
+                      {Number(e.adelantosMes) > 0 &&
+                        ` · adel. $${Number(e.adelantosMes).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    {Number(e.saldoSueldoMes) > 0 ? (
+                      <MoneyAmount
+                        value={e.saldoSueldoMes}
+                        className="text-pomodoro-600 font-medium"
+                      />
+                    ) : (
+                      <span className="text-ink-300">—</span>
+                    )}
+                    <div className="text-2xs text-ink-500">saldo a pagar</div>
+                    <div className="mt-1 flex items-center justify-end gap-2 text-2xs">
+                      <button
+                        onClick={() => setPagarSueldo({ empleadoId: e.id })}
+                        className="text-teresita-700 hover:underline"
+                        title="Pagar a este empleado"
+                      >
+                        💵 pagar
+                      </button>
+                      <Link
+                        href={`/admin/empleados/${e.id}`}
+                        className="text-ink-500 hover:text-teresita-700"
+                      >
+                        ver →
+                      </Link>
+                      <button
+                        onClick={() => eliminarEmpleado(e.id, e.nombre)}
+                        className="text-pomodoro-600 hover:underline"
+                      >
+                        eliminar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </section>
 
       {showForm && (

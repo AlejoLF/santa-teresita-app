@@ -86,7 +86,7 @@ export default function ConfigUsuariosPage() {
       )}
 
       <section className="card overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm hidden md:table">
           <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-300">
             <tr>
               <th className="text-left px-4 py-2">Usuario</th>
@@ -169,6 +169,76 @@ export default function ConfigUsuariosPage() {
             })}
           </tbody>
         </table>
+
+        {/* Tarjetas (mobile) */}
+        <div className="md:hidden divide-y divide-cream-200">
+          {usuarios.map((u) => {
+            const esYo = u.id === meId;
+            const bloqueado = u.bloqueadoHasta && new Date(u.bloqueadoHasta) > new Date();
+            return (
+              <div
+                key={u.id}
+                className={cn('p-3', !u.activo && 'opacity-50', esYo && 'bg-teresita-50')}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium text-ink-900 truncate">
+                      {u.nombre}
+                      {esYo && (
+                        <span className="ml-2 text-2xs text-teresita-700 font-mono">(vos)</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                      <span
+                        className={cn(
+                          'text-2xs font-medium px-2 py-0.5 rounded uppercase',
+                          u.rol === 'ADMIN'
+                            ? 'bg-teresita-50 text-teresita-700'
+                            : 'bg-cream-200 text-ink-700',
+                        )}
+                      >
+                        {u.rol.toLowerCase()}
+                      </span>
+                      <span className="text-2xs font-mono text-ink-500">
+                        PIN: {new Date(u.pinUltimoCambioAt).toLocaleDateString('es-AR')}
+                      </span>
+                      {u.intentosFallidos > 0 && (
+                        <span className="text-2xs font-mono text-saffron-600">
+                          {u.intentosFallidos} fallidos
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right text-2xs uppercase">
+                    {bloqueado ? (
+                      <span className="text-pomodoro-600">bloqueado</span>
+                    ) : u.activo ? (
+                      <span className="text-basil-600">activo</span>
+                    ) : (
+                      <span className="text-ink-500">inactivo</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex gap-3 mt-2">
+                  <button
+                    onClick={() => setResetearPara(u)}
+                    className="text-teresita-700 hover:underline text-xs"
+                  >
+                    Resetear PIN
+                  </button>
+                  {!esYo && (
+                    <button
+                      onClick={() => toggleActivo(u)}
+                      className="text-pomodoro-600 hover:underline text-xs"
+                    >
+                      {u.activo ? 'Desactivar' : 'Activar'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </section>
 
       <SmtpSection />

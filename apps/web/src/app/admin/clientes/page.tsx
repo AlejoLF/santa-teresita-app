@@ -140,7 +140,7 @@ export default function ClientesListPage() {
 
       {/* Tabla */}
       <section className="card overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm hidden md:table">
           <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-300">
             <tr>
               <th className="text-left px-4 py-2">Cliente</th>
@@ -168,7 +168,10 @@ export default function ClientesListPage() {
               </tr>
             )}
             {clientes.map((c) => {
-              const tipoStyle = TIPO_LABEL[c.tipo];
+              const tipoStyle = TIPO_LABEL[c.tipo] ?? {
+                cls: 'bg-cream-200 text-ink-500',
+                label: String(c.tipo),
+              };
               return (
                 <tr key={c.id} className={cn(!c.activo && 'opacity-50', 'hover:bg-cream-100')}>
                   <td className="px-4 py-3">
@@ -230,6 +233,80 @@ export default function ClientesListPage() {
             })}
           </tbody>
         </table>
+
+        {/* Tarjetas (mobile) */}
+        <div className="md:hidden divide-y divide-cream-200">
+          {loading && <div className="p-6 text-center text-ink-500">Cargando...</div>}
+          {!loading && clientes.length === 0 && (
+            <div className="p-6 text-center text-ink-500">
+              Sin clientes que coincidan con los filtros
+            </div>
+          )}
+          {clientes.map((c) => {
+            const tipoStyle = TIPO_LABEL[c.tipo];
+            return (
+              <div key={c.id} className={cn('p-3', !c.activo && 'opacity-50')}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <Link
+                      href={`/admin/clientes/${c.id}`}
+                      className="font-medium text-ink-900 hover:text-teresita-700 truncate block"
+                    >
+                      {c.nombre}
+                      {c.apellido && ` ${c.apellido}`}
+                    </Link>
+                    <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                      <span
+                        className={cn(
+                          'text-2xs font-medium px-2 py-0.5 rounded uppercase',
+                          tipoStyle.cls,
+                        )}
+                      >
+                        {tipoStyle.label}
+                      </span>
+                      {c.cuitCuil && (
+                        <span className="text-2xs font-mono text-ink-500 truncate">
+                          CUIT {c.cuitCuil}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-2xs font-mono text-ink-500 truncate mt-1">
+                      {c.telefono && <span>📞 {c.telefono} </span>}
+                      {c.email && <span>· {c.email} </span>}
+                      · {c._count.direcciones} dir · {c.ventasFinalizadas} ventas
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    {Number(c.totalComprado) > 0 ? (
+                      <MoneyAmount value={c.totalComprado} className="text-teresita-700" />
+                    ) : (
+                      <span className="text-ink-300">—</span>
+                    )}
+                    <div className="mt-1 flex items-center justify-end gap-2 text-2xs">
+                      <Link
+                        href={`/admin/clientes/${c.id}`}
+                        className="text-ink-300 hover:text-teresita-700"
+                      >
+                        →
+                      </Link>
+                      <button
+                        onClick={() =>
+                          eliminarCliente(
+                            c.id,
+                            `${c.nombre}${c.apellido ? ' ' + c.apellido : ''}`,
+                          )
+                        }
+                        className="text-pomodoro-600 hover:underline"
+                      >
+                        eliminar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </section>
 
       {totalPages > 1 && (

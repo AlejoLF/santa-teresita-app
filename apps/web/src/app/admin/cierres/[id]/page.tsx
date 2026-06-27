@@ -381,30 +381,51 @@ export default function CierreDetallePage() {
         {data.ventas.finalizadas.length === 0 ? (
           <p className="text-xs text-ink-500 italic">Sin ventas finalizadas</p>
         ) : (
-          <table className="w-full text-xs">
-            <thead className="text-2xs uppercase text-ink-500 border-b border-cream-300">
-              <tr>
-                <th className="text-left py-1">#</th>
-                <th className="text-left py-1">Hora</th>
-                <th className="text-left py-1">Canal</th>
-                <th className="text-left py-1">Modalidad</th>
-                <th className="text-right py-1">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.ventas.finalizadas.map((v) => (
-                <tr key={v.id} className="border-b border-cream-200">
-                  <td className="py-1">#{v.numeroOrdenTurno}</td>
-                  <td className="py-1 text-ink-500">{fmtTime(v.fechaFinalizacion)}</td>
-                  <td className="py-1">{v.canal}</td>
-                  <td className="py-1 text-ink-500">{v.modalidad}</td>
-                  <td className="py-1 text-right">
-                    <MoneyAmount value={v.total} />
-                  </td>
+          <>
+            <table className="w-full text-xs hidden md:table">
+              <thead className="text-2xs uppercase text-ink-500 border-b border-cream-300">
+                <tr>
+                  <th className="text-left py-1">#</th>
+                  <th className="text-left py-1">Hora</th>
+                  <th className="text-left py-1">Canal</th>
+                  <th className="text-left py-1">Modalidad</th>
+                  <th className="text-right py-1">Total</th>
                 </tr>
+              </thead>
+              <tbody>
+                {data.ventas.finalizadas.map((v) => (
+                  <tr key={v.id} className="border-b border-cream-200">
+                    <td className="py-1">#{v.numeroOrdenTurno}</td>
+                    <td className="py-1 text-ink-500">{fmtTime(v.fechaFinalizacion)}</td>
+                    <td className="py-1">{v.canal}</td>
+                    <td className="py-1 text-ink-500">{v.modalidad}</td>
+                    <td className="py-1 text-right">
+                      <MoneyAmount value={v.total} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* Tarjetas (mobile) */}
+            <div className="md:hidden divide-y divide-cream-200">
+              {data.ventas.finalizadas.map((v) => (
+                <div key={v.id} className="py-2 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium text-ink-900 truncate">
+                      #{v.numeroOrdenTurno} · {v.canal}
+                    </div>
+                    <div className="text-2xs font-mono text-ink-500 truncate">
+                      {fmtTime(v.fechaFinalizacion)} · {v.modalidad}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <MoneyAmount value={v.total} />
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </>
         )}
         {data.ventas.anuladas.length > 0 && (
           <details className="mt-3">
@@ -469,42 +490,76 @@ function DesgloseRow({
 
 function MovList({ items, kind }: { items: MovItem[]; kind: 'ingreso' | 'egreso' | 'neutral' }) {
   return (
-    <table className="w-full text-xs">
-      <thead className="text-2xs uppercase text-ink-500 border-b border-cream-300">
-        <tr>
-          <th className="text-left py-1">Hora</th>
-          <th className="text-left py-1">Categoría</th>
-          <th className="text-left py-1">Cuenta</th>
-          <th className="text-left py-1">Observación</th>
-          <th className="text-right py-1">Monto</th>
-        </tr>
-      </thead>
-      <tbody>
+    <>
+      <table className="w-full text-xs hidden md:table">
+        <thead className="text-2xs uppercase text-ink-500 border-b border-cream-300">
+          <tr>
+            <th className="text-left py-1">Hora</th>
+            <th className="text-left py-1">Categoría</th>
+            <th className="text-left py-1">Cuenta</th>
+            <th className="text-left py-1">Observación</th>
+            <th className="text-right py-1">Monto</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((m) => (
+            <tr key={m.id} className="border-b border-cream-200">
+              <td className="py-1 text-ink-500">{fmtTime(m.fecha)}</td>
+              <td className="py-1">{m.categoria}</td>
+              <td className="py-1 text-ink-500">
+                {m.tipo === 'TRANSFERENCIA_INTERNA'
+                  ? `${m.cuentaOrigen ?? '—'} → ${m.cuentaDestino ?? '—'}`
+                  : m.cuentaOrigen ?? m.cuentaDestino ?? '—'}
+              </td>
+              <td className="py-1 text-ink-500 max-w-xs truncate" title={m.observacion ?? ''}>
+                {m.observacion ?? '—'}
+              </td>
+              <td
+                className={cn(
+                  'py-1 text-right font-mono',
+                  kind === 'ingreso' && 'text-basil-600',
+                  kind === 'egreso' && 'text-pomodoro-600',
+                )}
+              >
+                {kind === 'egreso' && '−'}
+                <MoneyAmount value={m.monto} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* Tarjetas (mobile) */}
+      <div className="md:hidden divide-y divide-cream-200">
         {items.map((m) => (
-          <tr key={m.id} className="border-b border-cream-200">
-            <td className="py-1 text-ink-500">{fmtTime(m.fecha)}</td>
-            <td className="py-1">{m.categoria}</td>
-            <td className="py-1 text-ink-500">
-              {m.tipo === 'TRANSFERENCIA_INTERNA'
-                ? `${m.cuentaOrigen ?? '—'} → ${m.cuentaDestino ?? '—'}`
-                : m.cuentaOrigen ?? m.cuentaDestino ?? '—'}
-            </td>
-            <td className="py-1 text-ink-500 max-w-xs truncate" title={m.observacion ?? ''}>
-              {m.observacion ?? '—'}
-            </td>
-            <td
+          <div key={m.id} className="py-2 flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="font-medium text-ink-900 truncate">{m.categoria}</div>
+              <div className="text-2xs font-mono text-ink-500 truncate">
+                {fmtTime(m.fecha)} ·{' '}
+                {m.tipo === 'TRANSFERENCIA_INTERNA'
+                  ? `${m.cuentaOrigen ?? '—'} → ${m.cuentaDestino ?? '—'}`
+                  : m.cuentaOrigen ?? m.cuentaDestino ?? '—'}
+              </div>
+              {m.observacion && (
+                <div className="text-2xs text-ink-500 truncate" title={m.observacion}>
+                  {m.observacion}
+                </div>
+              )}
+            </div>
+            <div
               className={cn(
-                'py-1 text-right font-mono',
+                'shrink-0 text-right font-mono',
                 kind === 'ingreso' && 'text-basil-600',
                 kind === 'egreso' && 'text-pomodoro-600',
               )}
             >
               {kind === 'egreso' && '−'}
               <MoneyAmount value={m.monto} />
-            </td>
-          </tr>
+            </div>
+          </div>
         ))}
-      </tbody>
-    </table>
+      </div>
+    </>
   );
 }

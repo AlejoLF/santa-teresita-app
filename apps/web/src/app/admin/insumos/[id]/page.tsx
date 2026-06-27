@@ -155,7 +155,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
             Sin facturas pendientes con este proveedor.
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <table className="w-full text-sm hidden md:table">
             <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
               <tr>
                 <th className="text-left px-4 py-2 w-10">
@@ -273,40 +273,135 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
             </tbody>
           </table>
         )}
+
+        {/* Tarjetas (mobile) — facturas pendientes + pagos a cuenta */}
+        {facturasPendientes.length > 0 && (
+          <div className="md:hidden divide-y divide-cream-200">
+            {facturasPendientes.map((f) => {
+              const venc = f.fechaVencimiento ? new Date(f.fechaVencimiento) : null;
+              const vencido = venc && venc.getTime() < Date.now();
+              const checked = seleccion.has(f.id);
+              return (
+                <div
+                  key={f.id}
+                  className={cn('p-3 flex items-start gap-3', checked && 'bg-teresita-50')}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleSeleccion(f.id)}
+                    className="mt-1 shrink-0"
+                  />
+                  <div className="flex-1 min-w-0 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-2xs text-ink-500">
+                        {f.tipoComprobante.replace('_', ' ')}
+                      </div>
+                      <Link
+                        href={`/admin/facturas/${f.id}`}
+                        className="font-mono text-ink-700 hover:text-teresita-700 hover:underline truncate block"
+                      >
+                        {f.puntoVenta ? `${f.puntoVenta}-` : ''}
+                        {f.numero}
+                      </Link>
+                      <div className="text-2xs font-mono text-ink-500 truncate">
+                        {new Date(f.fechaEmision).toLocaleDateString('es-AR')}
+                        {venc && (
+                          <span className={cn('ml-1', vencido && 'text-pomodoro-600 font-semibold')}>
+                            · {vencido && '⚠ '}vence {venc.toLocaleDateString('es-AR')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <MoneyAmount value={f.saldo} className="text-md text-pomodoro-600 font-medium" />
+                      <div className="text-2xs font-mono text-ink-500">
+                        de <MoneyAmount value={f.total} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {data.pagosACuenta?.map((p) => (
+              <div key={p.id} className="p-3 bg-saffron-100/40 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-2xs uppercase tracking-wider text-saffron-600 font-semibold">
+                    Pago a cuenta
+                  </div>
+                  <div className="font-mono text-xs text-ink-700 truncate">
+                    {p.numeroReferencia ?? '(sin ref)'}
+                  </div>
+                  <div className="text-2xs font-mono text-ink-500 truncate">
+                    {new Date(p.fecha).toLocaleDateString('es-AR')} ·{' '}
+                    {p.metodo.replace('_', ' ').toLowerCase()}
+                    {p.cuentaNombre && ` · ${p.cuentaNombre}`}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <MoneyAmount value={p.monto} className="text-md text-basil-600 font-medium" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         {/* Si no hay facturas pendientes pero sí pagos a cuenta, los
             mostramos en una tabla mínima propia. */}
         {facturasPendientes.length === 0 && (data.pagosACuenta?.length ?? 0) > 0 && (
-          <table className="w-full text-sm">
-            <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
-              <tr>
-                <th className="text-left px-4 py-2">Pago a cuenta</th>
-                <th className="text-left px-4 py-2">Fecha</th>
-                <th className="text-left px-4 py-2">Método</th>
-                <th className="text-right px-4 py-2">Monto</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-cream-200">
-              {data.pagosACuenta.map((p) => (
-                <tr key={p.id} className="bg-saffron-100/40 hover:bg-saffron-100/70">
-                  <td className="px-4 py-3 font-mono text-xs text-ink-700">
-                    {p.numeroReferencia ?? '(sin ref)'}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-ink-700">
-                    {new Date(p.fecha).toLocaleDateString('es-AR')}
-                  </td>
-                  <td className="px-4 py-3 text-2xs text-ink-500">
-                    {p.metodo.replace('_', ' ').toLowerCase()}
-                    {p.cuentaNombre && (
-                      <span className="text-ink-300"> · {p.cuentaNombre}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <MoneyAmount value={p.monto} className="text-basil-600 font-medium" />
-                  </td>
+          <>
+            <table className="w-full text-sm hidden md:table">
+              <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
+                <tr>
+                  <th className="text-left px-4 py-2">Pago a cuenta</th>
+                  <th className="text-left px-4 py-2">Fecha</th>
+                  <th className="text-left px-4 py-2">Método</th>
+                  <th className="text-right px-4 py-2">Monto</th>
                 </tr>
+              </thead>
+              <tbody className="divide-y divide-cream-200">
+                {data.pagosACuenta.map((p) => (
+                  <tr key={p.id} className="bg-saffron-100/40 hover:bg-saffron-100/70">
+                    <td className="px-4 py-3 font-mono text-xs text-ink-700">
+                      {p.numeroReferencia ?? '(sin ref)'}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-ink-700">
+                      {new Date(p.fecha).toLocaleDateString('es-AR')}
+                    </td>
+                    <td className="px-4 py-3 text-2xs text-ink-500">
+                      {p.metodo.replace('_', ' ').toLowerCase()}
+                      {p.cuentaNombre && (
+                        <span className="text-ink-300"> · {p.cuentaNombre}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <MoneyAmount value={p.monto} className="text-basil-600 font-medium" />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* Tarjetas (mobile) */}
+            <div className="md:hidden divide-y divide-cream-200">
+              {data.pagosACuenta.map((p) => (
+                <div key={p.id} className="p-3 bg-saffron-100/40 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-mono text-xs text-ink-700 truncate">
+                      {p.numeroReferencia ?? '(sin ref)'}
+                    </div>
+                    <div className="text-2xs font-mono text-ink-500 truncate">
+                      {new Date(p.fecha).toLocaleDateString('es-AR')} ·{' '}
+                      {p.metodo.replace('_', ' ').toLowerCase()}
+                      {p.cuentaNombre && ` · ${p.cuentaNombre}`}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <MoneyAmount value={p.monto} className="text-md text-basil-600 font-medium" />
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </>
         )}
       </section>
 
@@ -318,7 +413,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
               Pagadas ({facturasPagadas.length})
             </h2>
           </header>
-          <table className="w-full text-sm">
+          <table className="w-full text-sm hidden md:table">
             <tbody className="divide-y divide-cream-200">
               {facturasPagadas.slice(0, 10).map((f) => (
                 <tr key={f.id} className="opacity-70 hover:opacity-100">
@@ -342,6 +437,30 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
               ))}
             </tbody>
           </table>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200">
+            {facturasPagadas.slice(0, 10).map((f) => (
+              <div key={f.id} className="p-3 opacity-80 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <Link
+                    href={`/admin/facturas/${f.id}`}
+                    className="font-mono text-ink-700 hover:text-teresita-700 hover:underline truncate block"
+                  >
+                    {f.puntoVenta ? `${f.puntoVenta}-` : ''}
+                    {f.numero}
+                  </Link>
+                  <div className="text-2xs font-mono text-ink-500 truncate">
+                    {new Date(f.fechaEmision).toLocaleDateString('es-AR')}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <MoneyAmount value={f.total} className="text-md text-basil-600" />
+                  <div className="text-2xs text-basil-600">✓ pagada</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
       )}
 

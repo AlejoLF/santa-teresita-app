@@ -383,35 +383,61 @@ export default function AdminDashboard() {
             plataformas, los depósitos esperados aparecen acá.
           </p>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="text-2xs uppercase text-ink-500 border-b border-cream-200">
-              <tr>
-                <th className="text-left py-2">Fecha</th>
-                <th className="text-left py-2">Fuente</th>
-                <th className="text-left py-2">Va a</th>
-                <th className="text-right py-2">Operaciones</th>
-                <th className="text-right py-2">Monto</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-cream-200">
-              {data.proximosDepositos.slice(0, 10).map((d, i) => (
-                <tr key={i}>
-                  <td className="py-2 font-mono text-ink-700">
-                    {new Date(d.fecha).toLocaleDateString('es-AR', {
-                      day: '2-digit',
-                      month: '2-digit',
-                    })}
-                  </td>
-                  <td className="py-2">{d.fuente}</td>
-                  <td className="py-2 text-ink-500">{d.cuentaDestino ?? '—'}</td>
-                  <td className="py-2 text-right text-ink-500">{d.operaciones}</td>
-                  <td className="py-2 text-right">
-                    <MoneyAmount value={d.monto} />
-                  </td>
+          <>
+            <table className="w-full text-sm hidden md:table">
+              <thead className="text-2xs uppercase text-ink-500 border-b border-cream-200">
+                <tr>
+                  <th className="text-left py-2">Fecha</th>
+                  <th className="text-left py-2">Fuente</th>
+                  <th className="text-left py-2">Va a</th>
+                  <th className="text-right py-2">Operaciones</th>
+                  <th className="text-right py-2">Monto</th>
                 </tr>
+              </thead>
+              <tbody className="divide-y divide-cream-200">
+                {data.proximosDepositos.slice(0, 10).map((d, i) => (
+                  <tr key={i}>
+                    <td className="py-2 font-mono text-ink-700">
+                      {new Date(d.fecha).toLocaleDateString('es-AR', {
+                        day: '2-digit',
+                        month: '2-digit',
+                      })}
+                    </td>
+                    <td className="py-2">{d.fuente}</td>
+                    <td className="py-2 text-ink-500">{d.cuentaDestino ?? '—'}</td>
+                    <td className="py-2 text-right text-ink-500">{d.operaciones}</td>
+                    <td className="py-2 text-right">
+                      <MoneyAmount value={d.monto} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* Tarjetas (mobile) */}
+            <div className="md:hidden divide-y divide-cream-200">
+              {data.proximosDepositos.slice(0, 10).map((d, i) => (
+                <div key={i} className="py-2 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium text-ink-900 truncate">{d.fuente}</div>
+                    <div className="text-2xs font-mono text-ink-500 truncate">
+                      {new Date(d.fecha).toLocaleDateString('es-AR', {
+                        day: '2-digit',
+                        month: '2-digit',
+                      })}
+                      {' · '}
+                      {d.cuentaDestino ?? '—'}
+                      {' · '}
+                      {d.operaciones} op.
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <MoneyAmount value={d.monto} />
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </>
         )}
       </section>
 

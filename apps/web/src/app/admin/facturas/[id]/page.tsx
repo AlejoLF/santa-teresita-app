@@ -340,7 +340,7 @@ function ValidacionForm({
             + Agregar item
           </Button>
         </header>
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto hidden md:block">
           <table className="w-full text-sm">
             <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
               <tr>
@@ -390,6 +390,77 @@ function ValidacionForm({
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Tarjetas editables (mobile) */}
+        <div className="md:hidden divide-y divide-cream-200">
+          {items.length === 0 && (
+            <div className="p-4 text-center text-ink-500 italic text-sm">
+              Sin items. Agregá al menos uno o aceptá sin desglose.
+            </div>
+          )}
+          {items.map((it, idx) => (
+            <div key={idx} className="p-3 space-y-2">
+              <div className="flex items-start gap-2">
+                <input
+                  className={cn(inputSm, 'flex-1')}
+                  value={it.descripcion}
+                  onChange={(e) => setItem(idx, { descripcion: e.target.value })}
+                  placeholder="Descripción"
+                />
+                <button
+                  type="button"
+                  onClick={() => delItem(idx)}
+                  className="text-pomodoro-500 hover:text-pomodoro-700 text-lg leading-none px-1 pt-1.5"
+                  title="Quitar"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                <label className="text-2xs uppercase tracking-wider text-ink-500">
+                  Cant.
+                  <input
+                    className={cn(inputSm, 'text-right font-mono')}
+                    value={it.cantidad}
+                    onChange={(e) => setItem(idx, { cantidad: e.target.value })}
+                  />
+                </label>
+                <label className="text-2xs uppercase tracking-wider text-ink-500">
+                  Un.
+                  <input
+                    className={inputSm}
+                    value={it.unidad}
+                    onChange={(e) => setItem(idx, { unidad: e.target.value })}
+                  />
+                </label>
+                <label className="text-2xs uppercase tracking-wider text-ink-500">
+                  Precio u.
+                  <input
+                    className={cn(inputSm, 'text-right font-mono')}
+                    value={it.precioUnitario}
+                    onChange={(e) => setItem(idx, { precioUnitario: e.target.value })}
+                  />
+                </label>
+                <label className="text-2xs uppercase tracking-wider text-ink-500">
+                  IVA%
+                  <input
+                    className={cn(inputSm, 'text-right font-mono')}
+                    value={it.alicuotaIva}
+                    onChange={(e) => setItem(idx, { alicuotaIva: e.target.value })}
+                  />
+                </label>
+              </div>
+              <label className="block text-2xs uppercase tracking-wider text-ink-500">
+                Subtotal
+                <input
+                  className={cn(inputSm, 'text-right font-mono')}
+                  value={it.subtotal}
+                  onChange={(e) => setItem(idx, { subtotal: e.target.value })}
+                />
+              </label>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -450,7 +521,7 @@ function ReadOnlyView({ factura }: { factura: FacturaDetalle }) {
           <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken">
             <h2 className="font-display text-md text-ink-900">Productos ({factura.items.length})</h2>
           </header>
-          <table className="w-full text-sm">
+          <table className="w-full text-sm hidden md:table">
             <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
               <tr>
                 <th className="text-left px-4 py-2">Producto</th>
@@ -481,6 +552,26 @@ function ReadOnlyView({ factura }: { factura: FacturaDetalle }) {
               ))}
             </tbody>
           </table>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200">
+            {factura.items.map((it) => (
+              <div key={it.id} className="p-3 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-ink-900 truncate">{it.descripcion}</div>
+                  <div className="text-2xs font-mono text-ink-500 truncate">
+                    {Number(it.cantidad).toFixed(2)} {it.unidad.toLowerCase()} ×{' '}
+                    <MoneyAmount value={it.precioUnitario} /> · IVA{' '}
+                    {Number(it.alicuotaIva).toFixed(0)}%
+                    {it.insumo && ` · ↳ ${it.insumo.categoria}`}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <MoneyAmount value={it.subtotal} className="text-md" />
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
       ) : (
         <section className="card p-4 text-sm text-ink-500 italic">Esta factura se cargó sin desglose de items.</section>

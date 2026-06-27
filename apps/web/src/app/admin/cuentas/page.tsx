@@ -97,7 +97,7 @@ export default function AdminCuentasPage() {
             mes en curso
           </span>
         </header>
-        <table className="w-full text-sm">
+        <table className="w-full text-sm hidden md:table">
           <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
             <tr>
               <th className="text-left px-5 py-2">Cuenta</th>
@@ -194,6 +194,81 @@ export default function AdminCuentasPage() {
             </tr>
           </tfoot>
         </table>
+
+        {/* Tarjetas (mobile) */}
+        <div className="md:hidden divide-y divide-cream-200">
+          {data.cuentas.map((c) => {
+            const meta = TIPO_LABEL[c.tipo];
+            const neto = Number(c.netoMes);
+            const fresc = ultimoMovimientoLabel(c.ultimoMovimiento);
+            return (
+              <div key={c.id} className="p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium text-ink-900 truncate">
+                      <span>{meta.icon}</span> {c.nombre}
+                    </div>
+                    <div className="text-2xs text-ink-500 uppercase tracking-wide">
+                      {meta.label}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 flex-wrap text-2xs font-mono">
+                      {Number(c.ingresosMes) > 0 && (
+                        <span className="text-basil-600">
+                          + <MoneyAmount value={c.ingresosMes} />
+                        </span>
+                      )}
+                      {Number(c.egresosMes) > 0 && (
+                        <span className="text-pomodoro-600">
+                          − <MoneyAmount value={c.egresosMes} />
+                        </span>
+                      )}
+                      <span
+                        className={cn(
+                          neto > 0 && 'text-basil-600',
+                          neto < 0 && 'text-pomodoro-600',
+                          neto === 0 && 'text-ink-500',
+                        )}
+                      >
+                        neto <MoneyAmount value={c.netoMes} />
+                      </span>
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <MoneyAmount
+                      value={c.saldoActual}
+                      className="text-md font-semibold text-teresita-900"
+                    />
+                    <div className="mt-1">
+                      <span
+                        className={cn(
+                          'inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs',
+                          fresc.tone === 'fresh' && 'bg-basil-100 text-basil-600',
+                          fresc.tone === 'stale' && 'bg-saffron-100 text-saffron-600',
+                          fresc.tone === 'old' && 'bg-cream-200 text-ink-500',
+                        )}
+                      >
+                        {fresc.label}
+                      </span>
+                    </div>
+                    <Link
+                      href={`/admin/movimientos?cuentaId=${c.id}`}
+                      className="block text-2xs text-teresita-700 hover:underline mt-1"
+                    >
+                      Ver movimientos →
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          <div className="p-3 bg-surface-sunken flex items-baseline justify-between">
+            <span className="font-medium text-ink-700 text-sm">TOTAL DISPONIBLE</span>
+            <MoneyAmount
+              value={data.totalSaldos}
+              className="text-md text-teresita-900 font-bold"
+            />
+          </div>
+        </div>
       </section>
 
       <footer className="text-xs text-ink-500">

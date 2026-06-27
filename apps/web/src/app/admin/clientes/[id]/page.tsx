@@ -241,7 +241,8 @@ export default function ClienteDetallePage({
             Sin ventas registradas todavía.
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <>
+          <table className="w-full text-sm hidden md:table">
             <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
               <tr>
                 <th className="text-left px-4 py-2">Fecha</th>
@@ -295,6 +296,51 @@ export default function ClienteDetallePage({
               ))}
             </tbody>
           </table>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200">
+            {data.ventas.map((v) => (
+              <div
+                key={v.id}
+                className={cn('p-3', v.estado === 'ANULADA' && 'opacity-50')}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <Link
+                      href={`/venta/${v.id}`}
+                      className="font-medium text-teresita-700 hover:underline font-mono"
+                    >
+                      #{String(v.numeroOrdenTurno).padStart(3, '0')}
+                    </Link>
+                    <div className="text-2xs font-mono text-ink-500 truncate mt-0.5">
+                      {new Date(v.fechaApertura).toLocaleDateString('es-AR', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: '2-digit',
+                      })}{' '}
+                      · {v.canal.replace('_', ' ')} ·{' '}
+                      {v.modalidad.replace('_', ' ').toLowerCase()}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <MoneyAmount value={v.total} />
+                    <div className="text-2xs uppercase mt-0.5">
+                      {v.estado === 'PROCESADA' && (
+                        <span className="text-saffron-600">abierto</span>
+                      )}
+                      {v.estado === 'FINALIZADA' && (
+                        <span className="text-basil-600">cerrado</span>
+                      )}
+                      {v.estado === 'ANULADA' && (
+                        <span className="text-pomodoro-600">anulado</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          </>
         )}
       </section>
 
