@@ -1,0 +1,24 @@
+# Build context para el Dockerfile de la API cloud. Excluye lo pesado/irrelevante
+# y, sobre todo, los SECRETOS (.env) — la env de runtime la inyecta Railway.
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+.git
+.github
+.claude
+.vercel
+# Secretos: NUNCA hornearlos en la imagen
+.env
+.env.*
+**/.env
+**/.env.*
+# Artefactos pesados que la API no necesita
+apps/desktop/resources
+apps/desktop/*.exe
+apps/desktop/*.zip
+apps/mobile
+apps/web/public/*.map
+*.xlsx
+FACTURAS*
+*.log
