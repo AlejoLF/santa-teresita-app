@@ -19,6 +19,20 @@
   }
 }
 
+/* Mobile: las tablas anchas del admin (productos, ventas, movimientos, etc.)
+   se DESLIZAN horizontalmente dentro de su tarjeta en vez de cortarse. Una
+   sola regla cubre todas: el :has() selecciona únicamente las tarjetas que
+   contienen una <table>. nowrap evita que las celdas se apilen ilegibles. */
+@media (max-width: 767px) {
+  .card:has(table) {
+    overflow-x: auto;
+  }
+  .card:has(table) th,
+  .card:has(table) td {
+    white-space: nowrap;
+  }
+}
+
 /* ════════════════════════════════════════════════════════════════════
    Santa Teresita — Design tokens (SPEC §7.2)
    "Trattoria refinada" — verde Teresita + cremoso + serif Fraunces.
