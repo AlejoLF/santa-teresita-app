@@ -1,11 +1,36 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { DemoBanner } from '@/components/DemoBanner';
 import { ServiceWorkerRegister } from '@/components/ServiceWorkerRegister';
+import { InstallPrompt } from '@/components/InstallPrompt';
+
+const isDemo = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 
 export const metadata: Metadata = {
-  title: 'Santa Teresita Pastas — Demo',
-  description: 'Sistema POS + cashflow para pastería en La Plata. Versión de demostración.',
+  title: isDemo ? 'Santa Teresita Pastas — Demo' : 'Santa Teresita Pastas',
+  description: 'Gestión integral — Santa Teresita Pastas (La Plata).',
+  applicationName: 'Santa Teresita',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Santa Teresita',
+  },
+  icons: {
+    icon: [
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180' }],
+  },
+  formatDetection: { telephone: false },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#1f4d3c',
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
 };
 
 export const dynamic = 'force-dynamic';
@@ -32,6 +57,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen antialiased">
         <DemoBanner />
         <ServiceWorkerRegister />
+        <InstallPrompt />
         {children}
       </body>
     </html>

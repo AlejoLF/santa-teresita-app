@@ -2,6 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
+/* PWA: respetar los bordes seguros del celular (notch / barra de gestos) y
+   evitar el flash azul de tap en iOS cuando corre instalada como app. */
+@layer utilities {
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+@media (display-mode: standalone) {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
 /* ════════════════════════════════════════════════════════════════════
    Santa Teresita — Design tokens (SPEC §7.2)
    "Trattoria refinada" — verde Teresita + cremoso + serif Fraunces.
