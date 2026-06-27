@@ -847,9 +847,9 @@ export default function CargarPedidoPage() {
   }
 
   return (
-    <div className="grid grid-rows-[56px_1fr_48px] h-screen">
+    <div className="flex flex-col min-h-screen lg:grid lg:grid-rows-[56px_1fr_48px] lg:h-screen">
       {/* Header */}
-      <header className="bg-teresita-700 text-cream-50 px-6 flex items-center justify-between">
+      <header className="bg-teresita-700 text-cream-50 px-3 lg:px-6 py-2 lg:py-0 flex flex-wrap lg:flex-nowrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex items-center gap-4">
           {usuario?.rol === 'ADMIN' && (
             <button
@@ -944,9 +944,9 @@ export default function CargarPedidoPage() {
       </header>
 
       {/* Body */}
-      <main className="grid grid-cols-[1fr_420px] gap-6 px-6 py-4 overflow-hidden">
+      <main className="flex flex-col gap-4 p-4 lg:grid lg:grid-cols-[1fr_420px] lg:gap-6 lg:px-6 lg:py-4 lg:overflow-hidden">
         {/* Catálogo */}
-        <section className="overflow-y-auto pr-2">
+        <section className="lg:overflow-y-auto lg:pr-2">
           <input
             ref={searchInputRef}
             type="search"
@@ -1126,7 +1126,7 @@ export default function CargarPedidoPage() {
             - Hay items en carrito → muestra carrito normal
             - Modo agregar a venta abierta → muestra carrito de "agregando" */}
         {cart.items.length === 0 && !ventaAbiertaId && !forzarCarritoVacio ? (
-          <aside className="card flex flex-col overflow-hidden">
+          <aside className="card flex flex-col lg:overflow-hidden">
             {cart.borradores.length > 0 && (
               <BorradoresPanel
                 borradores={cart.borradores}
@@ -1139,12 +1139,12 @@ export default function CargarPedidoPage() {
                 onEliminar={(id) => cart.eliminarBorrador(id)}
               />
             )}
-            <div className="flex-1 overflow-hidden">
+            <div className="lg:flex-1 lg:overflow-hidden">
               <PedidosAbiertosList />
             </div>
           </aside>
         ) : (
-          <aside className="card flex flex-col overflow-hidden">
+          <aside id="pedido-mobile" className="card flex flex-col lg:overflow-hidden scroll-mt-4">
             <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken flex items-center justify-between">
               <div>
                 <h2 className="font-display text-md text-teresita-700">
@@ -1171,9 +1171,9 @@ export default function CargarPedidoPage() {
               </button>
             </header>
 
-            <div className="flex-1 overflow-y-auto px-3 py-2">
+            <div className="overflow-y-auto px-3 py-2 max-h-[55vh] lg:max-h-none lg:flex-1">
               {cart.items.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-center px-4 py-12">
+                <div className="flex flex-col items-center justify-center lg:h-full text-center px-4 py-12">
                   <div className="text-4xl mb-3">🍝</div>
                   <p className="text-sm font-medium text-ink-700 mb-1">Listo para empezar</p>
                   <p className="text-xs text-ink-500">
@@ -1421,8 +1421,23 @@ export default function CargarPedidoPage() {
         )}
       </main>
 
+      {/* Acceso rápido al pedido en mobile (en desktop el carrito está siempre visible) */}
+      {cart.items.length > 0 && (
+        <button
+          type="button"
+          onClick={() =>
+            document
+              .getElementById('pedido-mobile')
+              ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }
+          className="lg:hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-30 bg-teresita-700 text-cream-50 px-5 py-2.5 rounded-full shadow-lg font-medium text-sm flex items-center gap-2 active:bg-teresita-900"
+        >
+          🛒 Ver pedido ({cart.items.length}) ↓
+        </button>
+      )}
+
       {/* Footer */}
-      <footer className="bg-surface-sunken border-t border-cream-300 px-6 flex items-center justify-between text-xs text-ink-500">
+      <footer className="bg-surface-sunken border-t border-cream-300 px-3 lg:px-6 py-2 lg:py-0 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-ink-500">
         <div className="flex gap-6 items-center">
           <span className={stats.abiertos > 0 ? 'text-saffron-600 font-medium' : ''}>
             📋 Pedidos abiertos: {stats.abiertos}
