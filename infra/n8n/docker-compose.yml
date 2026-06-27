@@ -1,0 +1,46 @@
+# N8N en S1 (mini PC) — workflow de lectura de facturas (Telegram → LlamaExtract
+# → POST /ingest/facturas del sta-server). Corre 24/7 con restart automático.
+#
+# Deploy:  docker compose up -d     (ver docs/n8n/DEPLOY-N8N-S1.md)
+# Editor:  http://localhost:5678
+#
+# Nota clave: n8n corre DENTRO de Docker; para llegar al sta-server que corre en
+# el HOST (Windows) usa host.docker.internal (NO localhost, que sería el contenedor).
+# → en el workflow, STA_API_URL = http://host.docker.internal:3001
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: sta-n8n
+    restart: unless-stopped
+    ports:
+      - '5678:5678'
+    environment:
+      # Zona horaria AR (las fechas/cron del workflow dependen de esto).
+      - GENERIC_TIMEZONE=America/Argentina/Buenos_Aires
+      - TZ=America/Argentina/Buenos_Aires
+      - N8N_PORT=5678
+      # URL pública para que Telegram pueda llamar el webhook del Trigger.
+      # Se setea con la Funnel de Tailscale (ver runbook). Ej:
+      #   N8N_WEBHOOK_URL=https://s1.tu-tailnet.ts.net/
+      - N8N_PROTOCOL=https
+      - N8N_HOST=${N8N_HOST}
+      - WEBHOOK_URL=${N8N_WEBHOOK_URL}
+      - N8N_EDITOR_BASE_URL=${N8N_WEBHOOK_URL}
+      # Editor accesible por http en localhost (cookie no-segura). El acceso real
+      # queda detrás de la cuenta de n8n + la red local; la Funnel solo expone
+      # /webhook para Telegram.
+      - N8N_SECURE_COOKIE=false
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_PERSONALIZATION_ENABLED=false
+      # Permite ejecutar el nodo Code con módulos de Node embebidos (crypto p/ sha256).
+      - NODE_FUNCTION_ALLOW_BUILTIN=crypto
+    volumes:
+      - n8n_data:/home/node/.n8n
+    # Para que el contenedor alcance el sta-server del host (Windows/Mac Docker
+    # Desktop ya resuelve host.docker.internal; en Linux lo mapeamos al gateway).
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+volumes:
+  n8n_data:

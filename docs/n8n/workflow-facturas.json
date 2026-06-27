@@ -1,0 +1,275 @@
+{
+  "name": "STA — Facturas (Telegram → LlamaExtract → Programa)",
+  "nodes": [
+    {
+      "parameters": { "updates": ["message"], "additionalFields": {} },
+      "id": "node-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [-820, 280],
+      "credentials": { "telegramApi": { "id": "", "name": "Telegram API" } },
+      "webhookId": "sta-facturas-telegram"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Detecta foto o PDF y chequea remitentes autorizados.\nconst msg = $json.message ?? {};\n// Chat IDs autorizados (encargada, Julio). Vacío = permitir a todos (dev).\nconst PERMITIDOS = []; // ej: [123456789, 987654321]\nconst fromId = msg.from?.id;\nconst autorizado = PERMITIDOS.length === 0 || PERMITIDOS.includes(fromId);\n\nlet fileId = null, fileName = 'factura';\nif (Array.isArray(msg.photo) && msg.photo.length) {\n  fileId = msg.photo[msg.photo.length - 1].file_id; // mayor resolución\n} else if (msg.document && /image\\/|pdf/i.test(msg.document.mime_type || '')) {\n  fileId = msg.document.file_id;\n  fileName = msg.document.file_name || fileName;\n}\nreturn {\n  json: {\n    chatId: msg.chat?.id,\n    fileId,\n    fileName,\n    esFactura: !!fileId && autorizado,\n    motivo: !autorizado ? 'no_autorizado' : !fileId ? 'sin_archivo' : 'ok',\n  },\n};"
+      },
+      "id": "node-elegir",
+      "name": "Elegir archivo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-600, 280]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            {
+              "id": "c-esfactura",
+              "leftValue": "={{ $json.esFactura }}",
+              "rightValue": "",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-factura",
+      "name": "¿Es factura?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-380, 280]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "Mandá una *foto o PDF* de la factura 📄",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "node-pedir-foto",
+      "name": "Pedir foto",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [-160, 460],
+      "credentials": { "telegramApi": { "id": "", "name": "Telegram API" } }
+    },
+    {
+      "parameters": { "resource": "file", "fileId": "={{ $json.fileId }}" },
+      "id": "node-descargar",
+      "name": "Descargar archivo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [-160, 120],
+      "credentials": { "telegramApi": { "id": "", "name": "Telegram API" } }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// SHA256 del archivo → idempotencia (misma foto no duplica).\nconst crypto = require('crypto');\nconst buf = Buffer.from($input.item.binary.data.data, 'base64');\n$input.item.json.adjuntoHash = crypto.createHash('sha256').update(buf).digest('hex');\nreturn $input.item;"
+      },
+      "id": "node-hash",
+      "name": "Hash SHA256",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [60, 120]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cloud.llamaindex.ai/api/v1/beta/files",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            { "parameterType": "formBinaryData", "name": "file", "inputDataFieldName": "data" },
+            { "name": "purpose", "value": "extract" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-subir",
+      "name": "Subir a LlamaCloud",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 120],
+      "credentials": { "httpHeaderAuth": { "id": "", "name": "LlamaCloud" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.cloud.llamaindex.ai/api/v2/extract?project_id={{ $vars.LLAMA_PROJECT_ID }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"file_input\": \"{{ $json.id }}\",\n  \"configuration\": {\n    \"tier\": \"agentic\",\n    \"extraction_target\": \"per_doc\",\n    \"confidence_scores\": true,\n    \"data_schema\": {\n      \"type\": \"object\",\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"proveedor_nombre\": { \"type\": \"string\", \"description\": \"Razón social o nombre del PROVEEDOR (emisor de la factura, NO Santa Teresita).\" },\n        \"proveedor_cuit\": { \"type\": \"string\", \"description\": \"CUIT del emisor, formato 30-12345678-9. Vacío si no figura.\" },\n        \"tipo_comprobante\": { \"type\": \"string\", \"enum\": [\"FACTURA_A\",\"FACTURA_B\",\"FACTURA_C\",\"FACTURA_X\",\"NOTA_CREDITO\",\"NOTA_DEBITO\",\"TICKET\",\"REMITO\",\"OTRO\"], \"description\": \"Tipo según la letra grande. Ticket no fiscal → TICKET. Si no se distingue → OTRO.\" },\n        \"punto_venta\": { \"type\": \"string\", \"description\": \"Primeros 4-5 dígitos del número (ej 0001-00012345 → 0001).\" },\n        \"numero\": { \"type\": \"string\", \"description\": \"Número SIN el punto de venta (ej 0001-00012345 → 00012345).\" },\n        \"fecha_emision\": { \"type\": \"string\", \"description\": \"Fecha de emisión YYYY-MM-DD.\" },\n        \"fecha_vencimiento\": { \"type\": \"string\", \"description\": \"Vencimiento del pago YYYY-MM-DD si figura.\" },\n        \"neto_gravado\": { \"type\": \"number\", \"description\": \"Neto gravado (subtotal antes de IVA). 0 si no figura.\" },\n        \"iva_total\": { \"type\": \"number\", \"description\": \"Suma total del IVA. 0 si no discriminado.\" },\n        \"total\": { \"type\": \"number\", \"description\": \"IMPORTE TOTAL FINAL a pagar.\" },\n        \"items\": { \"type\": \"array\", \"description\": \"Renglones de la factura.\", \"items\": { \"type\": \"object\", \"additionalProperties\": false, \"properties\": { \"descripcion\": { \"type\": \"string\" }, \"cantidad\": { \"type\": \"number\" }, \"unidad\": { \"type\": \"string\" }, \"precio_unitario\": { \"type\": \"number\" }, \"subtotal\": { \"type\": \"number\" } }, \"required\": [\"descripcion\",\"subtotal\"] } }\n      },\n      \"required\": [\"proveedor_nombre\",\"numero\",\"fecha_emision\",\"total\"]\n    }\n  }\n}",
+        "options": {}
+      },
+      "id": "node-extraer",
+      "name": "Lanzar extracción",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 120],
+      "credentials": { "httpHeaderAuth": { "id": "", "name": "LlamaCloud" } }
+    },
+    {
+      "parameters": { "amount": 6, "unit": "seconds" },
+      "id": "node-esperar",
+      "name": "Esperar",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [720, 120],
+      "webhookId": "sta-facturas-wait"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.cloud.llamaindex.ai/api/v2/extract/{{ $('Lanzar extracción').item.json.id }}?project_id={{ $vars.LLAMA_PROJECT_ID }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "node-estado",
+      "name": "Estado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 120],
+      "credentials": { "httpHeaderAuth": { "id": "", "name": "LlamaCloud" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            { "id": "c-ok-1", "leftValue": "={{ $json.status }}", "rightValue": "SUCCESS", "operator": { "type": "string", "operation": "equals" } },
+            { "id": "c-ok-2", "leftValue": "={{ $json.status }}", "rightValue": "COMPLETED", "operator": { "type": "string", "operation": "equals" } }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "node-if-listo",
+      "name": "¿Listo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1160, 120]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            { "id": "c-err-1", "leftValue": "={{ $json.status }}", "rightValue": "ERROR", "operator": { "type": "string", "operation": "equals" } },
+            { "id": "c-err-2", "leftValue": "={{ $json.status }}", "rightValue": "FAILED", "operator": { "type": "string", "operation": "equals" } },
+            { "id": "c-err-3", "leftValue": "={{ $json.status }}", "rightValue": "CANCELLED", "operator": { "type": "string", "operation": "equals" } }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "node-if-error",
+      "name": "¿Error?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1380, 320]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Mapea el resultado de LlamaExtract al body del endpoint /ingest/facturas.\nconst r = $json.extract_result ?? $json.data ?? {};\nconst conf = $json.extraction_metadata?.confidence ?? null; // 0..1 si confidence_scores=true\nconst num = (v) => (v == null || v === '' ? undefined : Number(v));\nconst body = {\n  adjunto: { hash: $('Hash SHA256').item.json.adjuntoHash },\n  proveedor: { nombre: r.proveedor_nombre, cuit: r.proveedor_cuit || undefined },\n  comprobante: {\n    tipo: r.tipo_comprobante || 'OTRO',\n    puntoVenta: r.punto_venta || undefined,\n    numero: String(r.numero ?? ''),\n    fechaEmision: r.fecha_emision,\n    fechaVencimiento: r.fecha_vencimiento || undefined,\n  },\n  montos: { neto: num(r.neto_gravado), ivaTotal: num(r.iva_total), total: num(r.total) },\n  items: (r.items ?? []).map((it) => ({\n    descripcion: it.descripcion,\n    cantidad: num(it.cantidad) ?? 1,\n    unidad: it.unidad || 'u',\n    precioUnitario: num(it.precio_unitario) ?? 0,\n    subtotal: num(it.subtotal) ?? 0,\n  })),\n  ocr: { confianza: conf, payload: r },\n};\nreturn { json: { chatId: $('Elegir archivo').item.json.chatId, body } };"
+      },
+      "id": "node-mapear",
+      "name": "Mapear al contrato",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1380, 60]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.STA_API_URL }}/api/v1/ingest/facturas",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": { "response": { "response": { "neverError": true } } }
+      },
+      "id": "node-post",
+      "name": "POST ingesta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1600, 60],
+      "credentials": { "httpHeaderAuth": { "id": "", "name": "STA Ingesta" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Mapear al contrato').item.json.chatId }}",
+        "text": "={{ ($json.duplicate ? 'ℹ️ Esa factura ya estaba cargada.' : ($json.ok ? ('✅ Factura de *' + ($('Mapear al contrato').item.json.body.proveedor.nombre || '—') + '* por $' + ($('Mapear al contrato').item.json.body.montos.total ?? '—') + ' cargada. Revisala y aceptala en el sistema.') : '⚠️ No pude cargar la factura. Reintentá o cargala a mano.')) }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "node-responder",
+      "name": "Responder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1820, 60],
+      "credentials": { "telegramApi": { "id": "", "name": "Telegram API" } }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Elegir archivo').item.json.chatId }}",
+        "text": "No pude leer la factura ⚠️. Probá con una foto más nítida y derecha, o cargala a mano.",
+        "additionalFields": {}
+      },
+      "id": "node-error-lectura",
+      "name": "Error lectura",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1600, 420],
+      "credentials": { "telegramApi": { "id": "", "name": "Telegram API" } }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": { "main": [[{ "node": "Elegir archivo", "type": "main", "index": 0 }]] },
+    "Elegir archivo": { "main": [[{ "node": "¿Es factura?", "type": "main", "index": 0 }]] },
+    "¿Es factura?": {
+      "main": [
+        [{ "node": "Descargar archivo", "type": "main", "index": 0 }],
+        [{ "node": "Pedir foto", "type": "main", "index": 0 }]
+      ]
+    },
+    "Descargar archivo": { "main": [[{ "node": "Hash SHA256", "type": "main", "index": 0 }]] },
+    "Hash SHA256": { "main": [[{ "node": "Subir a LlamaCloud", "type": "main", "index": 0 }]] },
+    "Subir a LlamaCloud": { "main": [[{ "node": "Lanzar extracción", "type": "main", "index": 0 }]] },
+    "Lanzar extracción": { "main": [[{ "node": "Esperar", "type": "main", "index": 0 }]] },
+    "Esperar": { "main": [[{ "node": "Estado", "type": "main", "index": 0 }]] },
+    "Estado": { "main": [[{ "node": "¿Listo?", "type": "main", "index": 0 }]] },
+    "¿Listo?": {
+      "main": [
+        [{ "node": "Mapear al contrato", "type": "main", "index": 0 }],
+        [{ "node": "¿Error?", "type": "main", "index": 0 }]
+      ]
+    },
+    "¿Error?": {
+      "main": [
+        [{ "node": "Error lectura", "type": "main", "index": 0 }],
+        [{ "node": "Esperar", "type": "main", "index": 0 }]
+      ]
+    },
+    "Mapear al contrato": { "main": [[{ "node": "POST ingesta", "type": "main", "index": 0 }]] },
+    "POST ingesta": { "main": [[{ "node": "Responder", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false
+}
