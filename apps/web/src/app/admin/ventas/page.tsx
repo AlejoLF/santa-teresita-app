@@ -584,7 +584,8 @@ export default function VentasPage() {
             Sin ventas en el período seleccionado.
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <>
+          <table className="w-full text-sm hidden md:table">
             <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
               <tr>
                 <th className="text-left px-4 py-2">#</th>
@@ -680,6 +681,62 @@ export default function VentasPage() {
               </tfoot>
             )}
           </table>
+
+          {/* Tarjetas (mobile) */}
+          <div className="md:hidden divide-y divide-cream-200">
+            {data.ventas.map((v) => {
+              const fecha = v.fecha ? new Date(v.fecha) : null;
+              return (
+                <div key={v.id} className="p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm text-ink-900">
+                        <span className="font-mono text-ink-500">#{v.numero}</span>{' '}
+                        · {CANAL_LABEL[v.canal] ?? v.canal}
+                      </div>
+                      <div className="text-2xs font-mono text-ink-500">
+                        {fecha
+                          ? `${fecha.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' })} ${fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}`
+                          : '—'}
+                        {' · '}
+                        {v.modalidad.replace(/_/g, ' ').toLowerCase()}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <MoneyAmount
+                        value={v.total}
+                        className="font-mono text-md text-teresita-900"
+                      />
+                      {Number(v.descuento) > 0 && (
+                        <div className="text-2xs text-saffron-600 font-mono">
+                          -<MoneyAmount value={v.descuento} className="text-saffron-600" /> desc.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between gap-2">
+                    <div className="text-xs text-ink-700 flex gap-1">
+                      {v.metodos.map((m, i) => (
+                        <span key={i}>{METODO_LABEL[m]?.split(' ')[0] ?? m.charAt(0)}</span>
+                      ))}
+                    </div>
+                    <div className="flex gap-3 text-2xs">
+                      <Link href={`/venta/${v.id}`} className="text-teresita-700">
+                        ver
+                      </Link>
+                      <button onClick={() => setReimprimirId(v.id)} className="text-ocean-600">
+                        🖨 reimprimir
+                      </button>
+                      <button onClick={() => setAnularTarget(v)} className="text-pomodoro-600">
+                        anular
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          </>
         )}
       </section>
     </div>

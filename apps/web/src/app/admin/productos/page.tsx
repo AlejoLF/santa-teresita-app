@@ -356,8 +356,8 @@ function ProductosTab() {
         <div className="bg-pomodoro-100 text-pomodoro-600 px-4 py-2 rounded text-sm">{error}</div>
       )}
 
-      {/* Tabla */}
-      <section className="card overflow-hidden">
+      {/* Tabla (desktop) */}
+      <section className="card overflow-hidden hidden md:block">
         <table className="w-full text-sm">
           <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-300">
             <tr>
@@ -462,6 +462,81 @@ function ProductosTab() {
             ))}
           </tbody>
         </table>
+      </section>
+
+      {/* Tarjetas (mobile) */}
+      <section className="md:hidden space-y-2">
+        {loading && (
+          <div className="card p-6 text-center text-ink-500">Cargando...</div>
+        )}
+        {!loading && productos.length === 0 && (
+          <div className="card p-6 text-center text-ink-500">
+            Sin productos con esos filtros
+          </div>
+        )}
+        {productos.map((p) => (
+          <div
+            key={p.id}
+            onClick={() => setEditing(p)}
+            className={cn(
+              'card p-3 active:bg-cream-100 transition-colors',
+              !p.activo && 'opacity-50',
+            )}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-medium text-ink-900 truncate">{p.nombre}</div>
+                <div className="text-2xs font-mono text-ink-500 truncate">
+                  {p.codigo}
+                  {p.marca && ` · ${p.marca}`}
+                  {p.presentacion && ` · ${p.presentacion}`}
+                </div>
+              </div>
+              <div className="shrink-0 text-right">
+                <MoneyAmount value={p.precioBase} className="text-md text-teresita-700" />
+                <div className="text-2xs text-ink-500 font-mono">
+                  {unidadShort(p.formaVenta, p.unidadPrecio)}
+                </div>
+              </div>
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+              <span className="text-ink-600 truncate">
+                {p.tipoProducto.categoria.icono} {p.tipoProducto.nombre}
+                {p.tipoProducto.cocinaInterviene ? ' · 🍳' : ''}
+              </span>
+              <span
+                className={cn(
+                  'text-2xs font-medium px-2 py-0.5 rounded uppercase tracking-wider shrink-0',
+                  p.activo ? 'bg-basil-100 text-basil-600' : 'bg-cream-200 text-ink-500',
+                )}
+              >
+                {p.activo ? 'activo' : 'inactivo'}
+              </span>
+            </div>
+            <div className="mt-2 flex gap-4 justify-end border-t border-cream-200 pt-2">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditing(p);
+                }}
+                className="text-ink-600 hover:text-teresita-700 text-xs"
+              >
+                ✏️ Editar
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void eliminarProducto(p);
+                }}
+                className="text-pomodoro-600 text-xs"
+              >
+                🗑 Eliminar
+              </button>
+            </div>
+          </div>
+        ))}
       </section>
 
       {/* Paginación */}

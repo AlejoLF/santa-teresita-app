@@ -311,7 +311,7 @@ export default function AdminMovimientosPage() {
 
       {/* Tabla */}
       <section className="card overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm hidden md:table">
           <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-300">
             <tr>
               <th className="text-left px-4 py-2">Fecha</th>
@@ -449,6 +449,91 @@ export default function AdminMovimientosPage() {
             })}
           </tbody>
         </table>
+
+        {/* Tarjetas (mobile) */}
+        <div className="md:hidden divide-y divide-cream-200">
+          {loading && <div className="p-6 text-center text-ink-500">Cargando...</div>}
+          {!loading && data?.movimientos.length === 0 && (
+            <div className="p-6 text-center text-ink-500">Sin movimientos</div>
+          )}
+          {data?.movimientos.map((m) => {
+            const esIngreso = m.tipo === 'INGRESO' || m.tipo === 'LIQUIDACION';
+            const esEgreso = m.tipo === 'EGRESO';
+            const cuenta =
+              m.tipo === 'TRANSFERENCIA_INTERNA'
+                ? `${m.cuentaOrigen?.nombre ?? '—'} → ${m.cuentaDestino?.nombre ?? '—'}`
+                : m.cuentaOrigen?.nombre ?? m.cuentaDestino?.nombre ?? '—';
+            return (
+              <div
+                key={m.id}
+                onClick={() => setDetalleId(m.id)}
+                className={cn('p-3 active:bg-cream-100', m.estado === 'ANULADO' && 'opacity-50')}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span
+                        className={cn(
+                          'text-2xs font-medium px-2 py-0.5 rounded uppercase',
+                          esIngreso && 'bg-basil-100 text-basil-600',
+                          esEgreso && 'bg-pomodoro-100 text-pomodoro-600',
+                          m.tipo === 'TRANSFERENCIA_INTERNA' && 'bg-ocean-100 text-ocean-600',
+                          m.tipo === 'AJUSTE' && 'bg-saffron-100 text-saffron-600',
+                        )}
+                      >
+                        {m.tipo.toLowerCase().replace('_', ' ')}
+                      </span>
+                      {m.modificado && (
+                        <span className="text-2xs px-1.5 py-0.5 bg-saffron-100 text-saffron-600 rounded">
+                          ✎ MOD
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-sm text-ink-900 mt-1 truncate">
+                      {m.categoria.nombre}
+                      {m.entidadNombre && (
+                        <span className="text-ink-500"> ({m.entidadNombre})</span>
+                      )}
+                    </div>
+                    <div className="text-2xs font-mono text-ink-500 truncate">
+                      {cuenta} ·{' '}
+                      {new Date(m.fechaComputo).toLocaleDateString('es-AR', {
+                        day: '2-digit',
+                        month: '2-digit',
+                      })}{' '}
+                      {new Date(m.fechaComputo).toLocaleTimeString('es-AR', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}{' '}
+                      · {m.usuario.nombre}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <MoneyAmount
+                      value={m.monto}
+                      className={cn(
+                        'text-md',
+                        esIngreso && 'text-basil-600',
+                        esEgreso && 'text-pomodoro-600',
+                        m.estado === 'ANULADO' && 'line-through',
+                      )}
+                    />
+                    <div
+                      className={cn(
+                        'text-2xs uppercase tracking-wider',
+                        m.estado === 'CONFIRMADO' && 'text-basil-600',
+                        m.estado === 'ANULADO' && 'text-pomodoro-600',
+                        m.estado === 'PENDIENTE' && 'text-saffron-600',
+                      )}
+                    >
+                      {m.estado.toLowerCase()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </section>
 
       {detalleId && (
