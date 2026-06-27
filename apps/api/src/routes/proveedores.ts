@@ -1276,33 +1276,35 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
 
       // Transacción: crear movimiento, pagos, pagosFactura, actualizar facturas y saldos
       const result = await prisma.$transaction(async (tx) => {
-        // 1. Movimiento (un solo egreso por la suma total)
-        const cuentaUnica =
-          new Set(body.pagos.map((p) => p.cuentaId)).size === 1
-            ? body.pagos[0]?.cuentaId
-            : null;
-
-        const movimiento = await tx.movimiento.create({
-          data: {
-            tipo: 'EGRESO',
-            monto: totalPagos.toFixed(2),
-            categoriaId: categoria.id,
-            entidadId: body.proveedorId,
-            cuentaOrigenId: cuentaUnica ?? null,
-            fechaComputo: fecha,
-            observacion: body.observaciones ?? null,
-            estado: EstadoMovimiento.CONFIRMADO,
-            usuarioId: req.usuario!.id,
-            sesionCajaId: sesion.id,
-          },
-        });
-
-        // 2. Pagos (uno por cuenta)
-        const pagosCreados = [];
+        // 1+2. UN EGRESO por cada cuenta/pago, cada uno con su cuentaOrigenId Y
+        //   sesionCajaId. Antes era UN movimiento con cuentaOrigenId=null cuando
+        //   el pago era multicuenta → la reconciliación de caja (que filtra por
+        //   movimiento+cuenta) NO veía el efectivo y el cierre cerraba mal.
+        //   Ahora cada flujo de plata es su propio movimiento: el efectivo desde
+        //   "Caja física" cuenta, y la transferencia/banco no toca la caja.
+        const lineasMov: Array<{
+          mov: { id: string };
+          pago: { id: string };
+          idx: number;
+        }> = [];
         for (const [idx, p] of body.pagos.entries()) {
-          const created = await tx.pago.create({
+          const mov = await tx.movimiento.create({
             data: {
-              movimientoId: movimiento.id,
+              tipo: 'EGRESO',
+              monto: p.monto,
+              categoriaId: categoria.id,
+              entidadId: body.proveedorId,
+              cuentaOrigenId: p.cuentaId,
+              fechaComputo: fecha,
+              observacion: body.observaciones ?? null,
+              estado: EstadoMovimiento.CONFIRMADO,
+              usuarioId: req.usuario!.id,
+              sesionCajaId: sesion.id,
+            },
+          });
+          const pago = await tx.pago.create({
+            data: {
+              movimientoId: mov.id,
               metodo: p.metodo,
               cuentaId: p.cuentaId,
               monto: p.monto,
@@ -1311,24 +1313,22 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
               fecha,
             },
           });
-          pagosCreados.push({ ...created, idx });
-
-          // Actualizar saldo de cuenta (decrement)
           await tx.cuenta.update({
             where: { id: p.cuentaId },
             data: { saldoActual: { decrement: Number(p.monto) } },
           });
+          lineasMov.push({ mov, pago, idx });
         }
 
-        // 3. PagoFactura (relación N×M)
+        // 3. PagoFactura (N×M): cada pago liga a su(s) factura(s) según la distribución.
         for (const d of distribucion) {
-          const pago = pagosCreados.find((pc) => pc.idx === d.pagoIdx);
-          if (!pago) continue;
+          const lm = lineasMov.find((x) => x.idx === d.pagoIdx);
+          if (!lm) continue;
           await tx.pagoFactura.create({
             data: {
-              pagoId: pago.id,
+              pagoId: lm.pago.id,
               facturaId: d.facturaId,
-              movimientoId: movimiento.id,
+              movimientoId: lm.mov.id,
               montoAplicado: d.montoAplicado.toFixed(2),
             },
           });
@@ -1354,10 +1354,16 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // 5. Vincular movimiento ↔ facturas (tabla intermedia)
-        for (const f of body.facturas) {
+        // 5. MovimientoFactura: un vínculo por cada par (movimiento, factura) pagado.
+        const pares = new Set<string>();
+        for (const d of distribucion) {
+          const lm = lineasMov.find((x) => x.idx === d.pagoIdx);
+          if (!lm) continue;
+          const key = `${lm.mov.id}|${d.facturaId}`;
+          if (pares.has(key)) continue;
+          pares.add(key);
           await tx.movimientoFactura.create({
-            data: { movimientoId: movimiento.id, facturaId: f.facturaId },
+            data: { movimientoId: lm.mov.id, facturaId: d.facturaId },
           });
         }
 
@@ -1367,25 +1373,27 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           data: { ultimoMovimientoAt: fecha },
         });
 
-        return { movimiento, pagos: pagosCreados };
+        return { movs: lineasMov.map((x) => x.mov), pagos: lineasMov.map((x) => x.pago) };
       });
 
-      await recordAudit({
-        tabla: 'movimientos',
-        registroId: result.movimiento.id,
-        accion: 'INSERT',
-        usuarioId: req.usuario!.id,
-        valorNuevo: {
-          tipo: 'EGRESO',
-          monto: totalPagos.toFixed(2),
-          proveedorId: body.proveedorId,
-          facturasCount: body.facturas.length,
-          pagosCount: body.pagos.length,
-        },
-      });
+      for (const mov of result.movs) {
+        await recordAudit({
+          tabla: 'movimientos',
+          registroId: mov.id,
+          accion: 'INSERT',
+          usuarioId: req.usuario!.id,
+          valorNuevo: {
+            tipo: 'EGRESO',
+            proveedorId: body.proveedorId,
+            facturasCount: body.facturas.length,
+            pagosCount: body.pagos.length,
+          },
+        });
+      }
 
       return reply.code(201).send({
-        movimientoId: result.movimiento.id,
+        movimientoId: result.movs[0]?.id, // compat con clientes que esperaban 1
+        movimientoIds: result.movs.map((m) => m.id),
         pagosIds: result.pagos.map((p) => p.id),
         total: totalPagos.toFixed(2),
       });
@@ -1482,31 +1490,28 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       }
 
       const result = await prisma.$transaction(async (tx) => {
-        const cuentaUnica =
-          new Set(body.pagos.map((p) => p.cuentaId)).size === 1
-            ? body.pagos[0]?.cuentaId
-            : null;
-
-        const movimiento = await tx.movimiento.create({
-          data: {
-            tipo: 'EGRESO',
-            monto: totalPagos.toFixed(2),
-            categoriaId: categoria.id,
-            entidadId: body.proveedorId,
-            cuentaOrigenId: cuentaUnica ?? null,
-            fechaComputo: fecha,
-            observacion: observacionFinal,
-            estado: EstadoMovimiento.CONFIRMADO,
-            usuarioId: req.usuario!.id,
-            sesionCajaId: sesion.id,
-          },
-        });
-
-        const pagosCreados = [];
+        // Un EGRESO por cada cuenta/pago (cuentaOrigenId + sesionCajaId) para que
+        // el efectivo desde Caja física cuente en el cierre. Antes: un movimiento
+        // con cuentaOrigenId=null en multicuenta → la caja no lo veía.
+        const lineasMov: Array<{ mov: { id: string }; pago: { id: string } }> = [];
         for (const p of body.pagos) {
-          const created = await tx.pago.create({
+          const mov = await tx.movimiento.create({
             data: {
-              movimientoId: movimiento.id,
+              tipo: 'EGRESO',
+              monto: p.monto,
+              categoriaId: categoria.id,
+              entidadId: body.proveedorId,
+              cuentaOrigenId: p.cuentaId,
+              fechaComputo: fecha,
+              observacion: observacionFinal,
+              estado: EstadoMovimiento.CONFIRMADO,
+              usuarioId: req.usuario!.id,
+              sesionCajaId: sesion.id,
+            },
+          });
+          const pago = await tx.pago.create({
+            data: {
+              movimientoId: mov.id,
               metodo: p.metodo,
               cuentaId: p.cuentaId,
               monto: p.monto,
@@ -1515,11 +1520,11 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
               fecha,
             },
           });
-          pagosCreados.push(created);
           await tx.cuenta.update({
             where: { id: p.cuentaId },
             data: { saldoActual: { decrement: Number(p.monto) } },
           });
+          lineasMov.push({ mov, pago });
         }
 
         await tx.proveedor.update({
@@ -1527,24 +1532,26 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           data: { ultimoMovimientoAt: fecha },
         });
 
-        return { movimiento, pagos: pagosCreados };
+        return { movs: lineasMov.map((x) => x.mov), pagos: lineasMov.map((x) => x.pago) };
       });
 
-      await recordAudit({
-        tabla: 'movimientos',
-        registroId: result.movimiento.id,
-        accion: 'INSERT',
-        usuarioId: req.usuario!.id,
-        valorNuevo: {
-          tipo: 'EGRESO',
-          subtipo: 'pago_a_cuenta',
-          monto: totalPagos.toFixed(2),
-          proveedorId: body.proveedorId,
-        },
-      });
+      for (const mov of result.movs) {
+        await recordAudit({
+          tabla: 'movimientos',
+          registroId: mov.id,
+          accion: 'INSERT',
+          usuarioId: req.usuario!.id,
+          valorNuevo: {
+            tipo: 'EGRESO',
+            subtipo: 'pago_a_cuenta',
+            proveedorId: body.proveedorId,
+          },
+        });
+      }
 
       return reply.code(201).send({
-        movimientoId: result.movimiento.id,
+        movimientoId: result.movs[0]?.id,
+        movimientoIds: result.movs.map((m) => m.id),
         pagosIds: result.pagos.map((p) => p.id),
         total: totalPagos.toFixed(2),
         observacion: observacionFinal,

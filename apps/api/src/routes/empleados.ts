@@ -4,6 +4,7 @@ import { prisma } from '@sta/db/client';
 import { RolUsuario, EstadoMovimiento } from '@sta/db';
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
+import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
 
 /**
  * CRUD de empleados + carga de movimientos de personal (sueldos, adelantos, comisiones).
@@ -489,6 +490,24 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
           ? `${etiqueta}${body.observacion ? ' · ' + body.observacion : ''}`
           : body.observacion;
 
+      // Sesión del turno: el pago a empleado es un movimiento de caja y DEBE
+      // contar en el cierre. Sin sesionCajaId el movimiento queda huérfano del
+      // turno y el efectivo NO se descuenta de la caja (bug reportado). Ver
+      // invariante en CLAUDE.md (mismo incidente que alpha.19).
+      let sesion;
+      try {
+        sesion = await getOrCreateSesionActual(req.usuario!.id);
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error: 'Fuera del horario de atención — no hay sesión de caja abierta',
+            codigo: 'FUERA_DE_HORARIO',
+            resolucion: e.resolucion,
+          });
+        }
+        throw e;
+      }
+
       // Multicuenta: creamos N movimientos enlazados (un EGRESO por cuenta),
       // cada uno con su pago y su decremento de saldo. Mismo patrón que el form
       // de Aportes/Egresos. Con 1 sola cuenta es 1 movimiento, como antes.
@@ -509,6 +528,7 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
               categoriaId: categoria.id,
               cuentaOrigenId: linea.cuentaId,
               entidadId: empleado.id,
+              sesionCajaId: sesion.id,
               fechaComputo: fecha,
               observacion,
               estado: EstadoMovimiento.CONFIRMADO,
