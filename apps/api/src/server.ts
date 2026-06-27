@@ -50,11 +50,11 @@ export async function buildServer() {
             options: { colorize: true, translateTime: 'HH:MM:ss', ignore: 'pid,hostname' },
           },
     },
-    // trustProxy=false: la API se expone DIRECTO (loopback en el .exe, LAN en el
-    // server) sin un proxy de confianza. Con true, req.ip salía del header
-    // X-Forwarded-For (que el cliente falsifica) → se esquivaban los rate-limits
-    // y el lockout por-origen. Si algún día va detrás de Caddy, poner la CIDR del proxy.
-    trustProxy: false,
+    // trustProxy: por env (API_TRUST_PROXY). Default 0 = DIRECTO (loopback en el
+    // .exe, LAN en el server) — req.ip = socket, sin confiar en X-Forwarded-For
+    // (que el cliente falsifica para esquivar rate-limit/lockout). En la nube
+    // detrás de Railway/Caddy se setea en 1 (confía solo 1 hop = el proxy real).
+    trustProxy: config.API_TRUST_PROXY > 0 ? config.API_TRUST_PROXY : false,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);

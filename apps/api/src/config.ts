@@ -5,6 +5,12 @@ const ConfigSchema = z.object({
   API_HOST: z.string().default('0.0.0.0'),
   API_PORT: z.coerce.number().default(3001),
   API_CORS_ORIGINS: z.string().default('http://localhost:3000'),
+  // API_TRUST_PROXY: nº de hops de proxy de confianza. 0 = la API se expone
+  //   DIRECTO (loopback en el .exe, LAN en el server) — req.ip = IP del socket.
+  //   >0 cuando va detrás de un proxy (Railway/Caddy en la nube): req.ip sale
+  //   del X-Forwarded-For pero confiando SOLO en N hops, así el cliente no
+  //   puede falsificar su IP real y esquivar rate-limit/lockout. Railway = 1.
+  API_TRUST_PROXY: z.coerce.number().int().min(0).default(0),
   LOG_LEVEL: z.string().default('info'),
   DATABASE_URL: z.string().min(1),
   AUTH_SECRET: z.string().min(32, 'AUTH_SECRET debe tener al menos 32 chars'),
