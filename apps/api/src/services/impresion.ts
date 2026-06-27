@@ -93,6 +93,13 @@ async function resolverRepartidor(args: {
   deliveryInfo: { empresaExterna?: string | null; direccionSnapshot?: unknown } | null;
   client?: DbClient;
 }): Promise<string | undefined> {
+  // DELIVERATE es una MODALIDAD (sobre un canal interno como TELEFONO): el
+  // reparto SIEMPRE lo hace la empresa DELIVERATE — nunca un empleado interno
+  // ni el default "Damián". Va PRIMERO, antes de mirar el snapshot: la comanda
+  // se encola "al enviar", cuando el snapshot puede tener todavía el empleado
+  // default y aún no el _empresaExterna. (Incidente: venta 1151 salió "Damián".)
+  if (args.modalidad === 'DELIVERY_DELIVERATE') return 'DELIVERATE';
+
   const snap = (args.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
   const empleado = typeof snap._empleadoNombre === 'string' ? snap._empleadoNombre : undefined;
   const empresaExplicita =
@@ -409,7 +416,13 @@ async function buildTicketDeliveryPayload(
   const empresaInferida = empresaExplicita ?? repartidorPorCanal(venta.canal);
   let empleadoNombre: string | undefined = empleadoExplicito;
   let empresaExterna: string | undefined = empresaInferida;
-  if (!empleadoNombre && !empresaExterna && venta.modalidad === 'DELIVERY_PROPIO') {
+  if (venta.modalidad === 'DELIVERY_DELIVERATE') {
+    // DELIVERATE siempre lo reparte la empresa DELIVERATE (modalidad), nunca un
+    // empleado interno ni el default. No depende del snapshot (que al encolar
+    // puede tener todavía el empleado default). Ver resolverRepartidor.
+    empleadoNombre = undefined;
+    empresaExterna = 'DELIVERATE';
+  } else if (!empleadoNombre && !empresaExterna && venta.modalidad === 'DELIVERY_PROPIO') {
     // Default global a empleado interno (típicamente "Damián").
     const def = await getDeliveryRepartidorDefault(client);
     if (def) empleadoNombre = def;
