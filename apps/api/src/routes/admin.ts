@@ -1856,6 +1856,39 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // GET /admin/caja/sesiones-del-dia?fecha=YYYY-MM-DD — sesiones de un día
+  // puntual. Sirve para que el dashboard de ventas deje elegir CUÁL sesión de
+  // ese día mostrar (cuando hubo mañana + tarde, o varias por cierres).
+  fastify.get(
+    '/admin/caja/sesiones-del-dia',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { querystring: z.object({ fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }) },
+    },
+    async (req) => {
+      const { fecha } = req.query as { fecha: string };
+      // `fecha` de SesionCaja es @db.Date (sin hora) → matchea por igualdad con
+      // la medianoche UTC de ese día.
+      const dia = new Date(`${fecha}T00:00:00.000Z`);
+      const sesiones = await prisma.sesionCaja.findMany({
+        where: { fecha: dia },
+        orderBy: { horarioApertura: 'asc' },
+        include: { usuarioApertura: { select: { nombre: true } } },
+      });
+      return {
+        sesiones: sesiones.map((s) => ({
+          id: s.id,
+          fecha: s.fecha,
+          turno: s.turno,
+          horarioApertura: s.horarioApertura,
+          horarioCierre: s.horarioCierre,
+          estado: s.estado,
+          abiertaPor: s.usuarioApertura?.nombre ?? null,
+        })),
+      };
+    },
+  );
+
   // POST /admin/caja/sesion-actual/cerrar — cierra la sesión con conteo físico.
   //
   // El flag `anticipado` (opcional) lo marca como CIERRE ANTICIPADO: el
@@ -2538,31 +2571,109 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       schema: {
         querystring: z.object({
           periodo: z
-            .enum(['hoy', 'ayer', 'semana', 'mes', 'trimestre', 'anio', 'custom'])
+            .enum([
+              'hoy',
+              'ayer',
+              'semana',
+              'mes',
+              'trimestre',
+              'anio',
+              'custom',
+              'sesion_actual',
+              'sesion_anterior',
+            ])
             .default('hoy'),
           desde: z.string().optional(),
           hasta: z.string().optional(),
           metodo: z.string().optional(),
           canal: z.string().optional(),
+          // Filtro explícito por una sesión de caja puntual (selector del día custom).
+          sesionId: z.string().uuid().optional(),
         }),
       },
     },
     async (req, reply) => {
       const q = req.query as {
-        periodo: 'hoy' | 'ayer' | 'semana' | 'mes' | 'trimestre' | 'anio' | 'custom';
+        periodo:
+          | 'hoy'
+          | 'ayer'
+          | 'semana'
+          | 'mes'
+          | 'trimestre'
+          | 'anio'
+          | 'custom'
+          | 'sesion_actual'
+          | 'sesion_anterior';
         desde?: string;
         hasta?: string;
         metodo?: string;
         canal?: string;
+        sesionId?: string;
       };
 
       // Resolver rango de fechas
-      let desde: Date;
-      let hasta: Date;
       const ahora = new Date();
       const inicioHoy = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate());
+      let desde: Date = inicioHoy;
+      let hasta: Date = ahora;
 
-      if (q.periodo === 'custom') {
+      // ── Filtro por SESIÓN de caja ───────────────────────────────────────
+      // Cuando se pide una sesión puntual ('sesion_actual'/'sesion_anterior'
+      // o un sesionId del selector del día custom), el dashboard muestra
+      // EXACTAMENTE esa sesión: filtramos ventas/anuladas/movimientos por
+      // `sesionCajaId` (fuente de verdad del turno) y ajustamos desde/hasta a
+      // la ventana [apertura, cierre] para los gráficos por hora.
+      const usaSesion =
+        !!q.sesionId || q.periodo === 'sesion_actual' || q.periodo === 'sesion_anterior';
+      let sesionFiltroId: string | null = null;
+      let sesionFiltroMeta: {
+        id: string;
+        fecha: Date;
+        turno: string;
+        horarioApertura: Date;
+        horarioCierre: Date | null;
+        estado: string;
+      } | null = null;
+
+      if (usaSesion) {
+        let sesion: Awaited<ReturnType<typeof prisma.sesionCaja.findUnique>> = null;
+        if (q.sesionId) {
+          sesion = await prisma.sesionCaja.findUnique({ where: { id: q.sesionId } });
+        } else if (q.periodo === 'sesion_actual') {
+          const r = await getSesionActualReadOnly();
+          sesion =
+            r.sesion ??
+            (await prisma.sesionCaja.findFirst({ orderBy: { horarioApertura: 'desc' } }));
+        } else {
+          // sesion_anterior: la sesión inmediatamente previa a la "actual".
+          const r = await getSesionActualReadOnly();
+          const ref =
+            r.sesion ??
+            (await prisma.sesionCaja.findFirst({ orderBy: { horarioApertura: 'desc' } }));
+          if (ref) {
+            sesion = await prisma.sesionCaja.findFirst({
+              where: { horarioApertura: { lt: ref.horarioApertura } },
+              orderBy: { horarioApertura: 'desc' },
+            });
+          }
+        }
+        if (!sesion) {
+          return reply
+            .code(404)
+            .send({ error: 'No se encontró la sesión solicitada', codigo: 'SESION_NO_ENCONTRADA' });
+        }
+        sesionFiltroId = sesion.id;
+        sesionFiltroMeta = {
+          id: sesion.id,
+          fecha: sesion.fecha,
+          turno: sesion.turno,
+          horarioApertura: sesion.horarioApertura,
+          horarioCierre: sesion.horarioCierre,
+          estado: sesion.estado,
+        };
+        desde = sesion.horarioApertura;
+        hasta = sesion.horarioCierre ?? new Date();
+      } else if (q.periodo === 'custom') {
         if (!q.desde || !q.hasta) {
           return reply.code(400).send({ error: 'desde y hasta requeridos para custom' });
         }
@@ -2612,7 +2723,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const ventas = await prisma.venta.findMany({
         where: {
           estado: EstadoVenta.FINALIZADA,
-          fechaFinalizacion: { gte: desde, lte: hasta },
+          ...(sesionFiltroId
+            ? { sesionCajaId: sesionFiltroId }
+            : { fechaFinalizacion: { gte: desde, lte: hasta } }),
           ...(q.canal && { canal: q.canal as never }),
         },
         select: {
@@ -2634,7 +2747,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const anuladasCount = await prisma.venta.count({
         where: {
           estado: 'ANULADA',
-          fechaAnulacion: { gte: desde, lte: hasta },
+          ...(sesionFiltroId
+            ? { sesionCajaId: sesionFiltroId }
+            : { fechaAnulacion: { gte: desde, lte: hasta } }),
           ...(q.canal && { canal: q.canal as never }),
         },
       });
@@ -2780,7 +2895,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         const movs = await prisma.movimiento.findMany({
           where: {
             estado: 'CONFIRMADO',
-            fechaComputo: { gte: desde, lte: hasta },
+            ...(sesionFiltroId
+              ? { sesionCajaId: sesionFiltroId }
+              : { fechaComputo: { gte: desde, lte: hasta } }),
             OR: [
               { cuentaOrigenId: cajaFisica.id },
               { cuentaDestinoId: cajaFisica.id },
@@ -2899,6 +3016,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
 
       return {
         rango: { desde, hasta },
+        sesion: sesionFiltroMeta,
         kpis: {
           totalCobrado: totalCobrado.toFixed(2),
           cantidadVentas,

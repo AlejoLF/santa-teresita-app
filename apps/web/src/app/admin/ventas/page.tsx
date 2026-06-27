@@ -8,15 +8,38 @@ import { KpiCard } from '@/components/admin/KpiCard';
 import { ReimprimirModal } from '@/components/admin/ReimprimirModal';
 import { cn } from '@/lib/cn';
 
-type Periodo = 'hoy' | 'ayer' | 'semana' | 'mes' | 'trimestre' | 'anio' | 'custom';
+type Periodo =
+  | 'hoy'
+  | 'ayer'
+  | 'semana'
+  | 'mes'
+  | 'trimestre'
+  | 'anio'
+  | 'custom'
+  | 'sesion_actual'
+  | 'sesion_anterior';
 
 interface DesgloseEntry {
   monto: string;
   cantidad: number;
 }
 
+interface SesionMeta {
+  id: string;
+  fecha: string;
+  turno: string;
+  horarioApertura: string;
+  horarioCierre: string | null;
+  estado: string;
+}
+
+interface SesionDia extends SesionMeta {
+  abiertaPor: string | null;
+}
+
 interface AnalisisVentas {
   rango: { desde: string; hasta: string };
+  sesion: SesionMeta | null;
   kpis: {
     totalCobrado: string;
     cantidadVentas: number;
@@ -115,6 +138,24 @@ function isoHoy(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function turnoLabel(t: string): string {
+  if (t === 'MANANA') return 'Mañana';
+  if (t === 'TARDE') return 'Tarde';
+  return t.charAt(0) + t.slice(1).toLowerCase();
+}
+
+function horaCorta(iso: string | null): string {
+  if (!iso) return 'abierta';
+  return new Date(iso).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Etiqueta para el selector de sesión del día: "Tarde · 13:00–21:00 (cerrada)". */
+function labelSesion(s: SesionMeta): string {
+  const estado =
+    s.estado === 'ABIERTA' ? 'abierta' : s.estado === 'APROBADA' ? 'aprobada' : 'cerrada';
+  return `${turnoLabel(s.turno)} · ${horaCorta(s.horarioApertura)}–${horaCorta(s.horarioCierre)} (${estado})`;
+}
+
 export default function VentasPage() {
   const [periodo, setPeriodo] = useState<Periodo>('hoy');
   const [customDesde, setCustomDesde] = useState<string>(() => {
@@ -125,6 +166,9 @@ export default function VentasPage() {
   const [customHasta, setCustomHasta] = useState<string>(isoHoy);
   const [metodo, setMetodo] = useState('');
   const [canal, setCanal] = useState('');
+  // Sesión puntual elegida en el selector del día custom (null = todo el rango).
+  const [sesionId, setSesionId] = useState<string | null>(null);
+  const [sesionesDelDia, setSesionesDelDia] = useState<SesionDia[]>([]);
   const [data, setData] = useState<AnalisisVentas | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -137,8 +181,14 @@ export default function VentasPage() {
     try {
       const params = new URLSearchParams({ periodo });
       if (periodo === 'custom') {
-        params.set('desde', customDesde);
-        params.set('hasta', customHasta);
+        // Si se eligió una sesión puntual del día, el backend filtra por ella
+        // (ignora el rango). Sino, va el rango desde–hasta.
+        if (sesionId) {
+          params.set('sesionId', sesionId);
+        } else {
+          params.set('desde', customDesde);
+          params.set('hasta', customHasta);
+        }
       }
       if (metodo) params.set('metodo', metodo);
       if (canal) params.set('canal', canal);
@@ -152,11 +202,33 @@ export default function VentasPage() {
     } finally {
       setLoading(false);
     }
-  }, [periodo, customDesde, customHasta, metodo, canal]);
+  }, [periodo, customDesde, customHasta, metodo, canal, sesionId]);
 
   useEffect(() => {
     void fetchData();
   }, [fetchData]);
+
+  // Sesiones del día seleccionado (para el selector del modo custom). Se
+  // recarga al cambiar el día "desde"; resetea la sesión elegida.
+  useEffect(() => {
+    if (periodo !== 'custom') {
+      setSesionesDelDia([]);
+      return;
+    }
+    setSesionId(null);
+    let cancel = false;
+    api
+      .get<{ sesiones: SesionDia[] }>(`/admin/caja/sesiones-del-dia?fecha=${customDesde}`)
+      .then((r) => {
+        if (!cancel) setSesionesDelDia(r.sesiones);
+      })
+      .catch(() => {
+        if (!cancel) setSesionesDelDia([]);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [periodo, customDesde]);
 
   if (error) return <div className="text-pomodoro-600 p-6">{error}</div>;
   if (!data) return <div className="text-ink-500 p-6">Cargando ventas...</div>;
@@ -181,6 +253,17 @@ export default function VentasPage() {
           })}
           {loading && <span className="ml-3 text-2xs text-ink-300">recargando...</span>}
         </p>
+        {data.sesion && (
+          <span className="inline-flex items-center gap-1.5 mt-1.5 px-2.5 py-1 rounded-full bg-teresita-50 text-teresita-700 text-2xs font-medium border border-teresita-700/15">
+            📋 Sesión {new Date(data.sesion.fecha).toLocaleDateString('es-AR', {
+              day: '2-digit',
+              month: '2-digit',
+            })}{' '}
+            · {turnoLabel(data.sesion.turno)} · {horaCorta(data.sesion.horarioApertura)}–
+            {horaCorta(data.sesion.horarioCierre)}
+            {data.sesion.estado === 'ABIERTA' && ' · en curso'}
+          </span>
+        )}
       </header>
 
       {/* Filtros */}
@@ -200,6 +283,26 @@ export default function VentasPage() {
               {p.label}
             </button>
           ))}
+          {/* Sesiones de caja (separadas de los rangos por fecha) */}
+          <span className="self-center mx-0.5 h-5 w-px bg-cream-300" aria-hidden />
+          {([
+            { key: 'sesion_actual', label: '🟢 Sesión actual' },
+            { key: 'sesion_anterior', label: '⏮ Sesión anterior' },
+          ] as const).map((p) => (
+            <button
+              key={p.key}
+              onClick={() => setPeriodo(p.key)}
+              className={cn(
+                'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
+                periodo === p.key
+                  ? 'bg-teresita-700 text-cream-50'
+                  : 'bg-cream-200 text-ink-700 hover:bg-cream-300',
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+          <span className="self-center mx-0.5 h-5 w-px bg-cream-300" aria-hidden />
           <button
             onClick={() => setPeriodo('custom')}
             className={cn(
@@ -213,7 +316,7 @@ export default function VentasPage() {
           </button>
         </div>
         {periodo === 'custom' && (
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 flex-wrap">
             <input
               type="date"
               value={customDesde}
@@ -230,6 +333,22 @@ export default function VentasPage() {
               onChange={(e) => setCustomHasta(e.target.value)}
               className="input text-xs py-1 px-2"
             />
+            {/* Elegir una sesión puntual del día "desde" (mañana/tarde). */}
+            {sesionesDelDia.length > 0 && (
+              <select
+                value={sesionId ?? ''}
+                onChange={(e) => setSesionId(e.target.value || null)}
+                className="input text-xs py-1 px-2 w-auto"
+                title="Ver una sesión puntual de ese día"
+              >
+                <option value="">Todo el rango</option>
+                {sesionesDelDia.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {labelSesion(s)}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         )}
         <div className="flex gap-2 ml-auto">
