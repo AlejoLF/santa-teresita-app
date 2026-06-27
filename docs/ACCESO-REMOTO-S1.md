@@ -46,24 +46,42 @@ nunca más dependés de AnyDesk).
 
 ## Paso 2 — OpenSSH Server en S1 (consola)
 
-Abrí **PowerShell como Administrador** en S1 y corré:
+Abrí **PowerShell como Administrador** en S1.
+
+> ⚠️ **OJO en S1**: a esta máquina le **sacaron Windows Update** (la imagen de POS
+> viene "debloated"), así que el método estándar `Add-WindowsCapability -Online -Name
+> OpenSSH.Server...` **falla** con error 0x80070424 ("el servicio no existe", porque
+> `wuauserv` no está). Por eso instalamos OpenSSH **desde los binarios de GitHub**
+> (no usan Windows Update). En una máquina con Windows Update normal, el
+> `Add-WindowsCapability` alcanza.
 
 ```powershell
-# 1) Instalar el servidor OpenSSH (incluido en Windows Home como feature)
-Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+# 1) Descargar e instalar OpenSSH desde GitHub (sin Windows Update)
+$ProgressPreference = 'SilentlyContinue'
+Invoke-WebRequest 'https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip' -OutFile "$env:TEMP\OpenSSH.zip"
+Expand-Archive "$env:TEMP\OpenSSH.zip" -DestinationPath 'C:\Program Files\OpenSSH-Win64' -Force
 
-# 2) Arrancarlo + que arranque solo en el boot
-Set-Service -Name sshd -StartupType Automatic
+# 2) Instalar el servicio + generar host keys (la ExecutionPolicy suele estar Restricted)
+Set-ExecutionPolicy -Scope Process Bypass -Force
+Set-Location 'C:\Program Files\OpenSSH-Win64\OpenSSH-Win64'
+& .\install-sshd.ps1
+& .\ssh-keygen.exe -A
+# Arreglar permisos de las host keys (sino sshd NO arranca):
+& .\FixHostFilePermissions.ps1 -Confirm:$false
+
+# 3) Arrancar + auto-start
+Set-Service sshd -StartupType Automatic
 Start-Service sshd
 
-# 3) Firewall: asegurar la regla de entrada para el puerto 22
+# 4) Firewall: asegurar la regla de entrada para el puerto 22
 if (-not (Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue)) {
   New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' `
     -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
 }
 
-# 4) (Recomendado) Que las sesiones SSH abran PowerShell en vez de cmd.exe.
+# 5) (Recomendado) Que las sesiones SSH abran PowerShell en vez de cmd.exe.
 #    Usa PowerShell 7 si está (el de S1 lo tiene), sino Windows PowerShell.
+if (-not (Test-Path 'HKLM:\SOFTWARE\OpenSSH')) { New-Item 'HKLM:\SOFTWARE\OpenSSH' -Force | Out-Null }
 $pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
 $shell = if ($pwsh) { $pwsh } else { "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" }
 New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value $shell -PropertyType String -Force
