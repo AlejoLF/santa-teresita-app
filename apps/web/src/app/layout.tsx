@@ -10,6 +10,8 @@ export const metadata: Metadata = {
   title: isDemo ? 'Santa Teresita Pastas — Demo' : 'Santa Teresita Pastas',
   description: 'Gestión integral — Santa Teresita Pastas (La Plata).',
   applicationName: 'Santa Teresita',
+  // App de gestión financiera privada — que NO la indexen los buscadores.
+  robots: { index: false, follow: false },
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
