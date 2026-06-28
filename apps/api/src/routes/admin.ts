@@ -3068,8 +3068,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               fechaFinalizacion: true,
               total: true,
               descuentoTotal: true,
-              // Nombre del pedido: el del snapshot de delivery (lo carga la cajera
-              // en pedidos telefónicos/WhatsApp) o, si no, el cliente asociado.
+              // Cliente del pedido: el cliente asociado, o el nombre cargado en el
+              // snapshot de delivery (lo tipea la cajera en pedidos telefónicos/WhatsApp).
               cliente: { select: { nombre: true, apellido: true } },
               deliveryInfo: { select: { direccionSnapshot: true } },
               pagos: {
@@ -3095,7 +3095,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               canal: v.canal,
               modalidad: v.modalidad,
               fecha: v.fechaFinalizacion,
-              nombre: nombreSnap || nombreCliente || null,
+              cliente: nombreSnap || nombreCliente || null,
               total: v.total.toString(),
               descuento: v.descuentoTotal.toString(),
               metodos: v.pagos.map((p) => p.metodo),

@@ -464,9 +464,9 @@ function buildVentasAnalisis(state: DemoState, search: URLSearchParams) {
       canal: v.canal,
       modalidad: v.modalidad,
       fecha: v.fechaFinalizacion ?? v.fechaApertura,
-      // Nombre del pedido (en delivery/teléfono la cajera lo carga). Mostrador
+      // Cliente del pedido (en delivery/teléfono la cajera lo carga). Mostrador
       // no suele tenerlo. Demo-only: sintetizamos uno para los canales no-mostrador.
-      nombre:
+      cliente:
         v.canal === 'MOSTRADOR'
           ? null
           : ['Carla', 'Martín', 'Flia. Gómez', 'Lucía', 'Pedro N.'][i % 5] ?? null,

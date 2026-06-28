@@ -146,12 +146,26 @@ export default function MayoristaDetallePage({
         minimumFractionDigits: 2,
       })}</div>
       <script>window.onload=function(){window.print()}</script></body></html>`;
-    const w = window.open('', '_blank', 'width=800,height=600');
-    if (w) {
-      w.document.open();
-      w.document.write(html);
-      w.document.close();
+    // Abrimos el resumen como un documento navegable (Blob) en una pestaña
+    // nueva. Antes se usaba window.open('', '_blank', 'width=...,height=...'):
+    // ese string de features hace que el navegador lo trate como POPUP y lo
+    // bloquee → "no pasaba nada" al hacer click. Sin features, es una pestaña
+    // normal (no se bloquea). El doc trae un script que abre el diálogo de
+    // impresión; desde ahí se imprime o se "Guarda como PDF". Si aún así el
+    // navegador bloquea la pestaña, caemos a descargar el archivo.
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, '_blank');
+    if (!w) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `resumen-${c.nombre}.html`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     }
+    // Liberamos el Blob después de un rato (ya cargado en la pestaña nueva).
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   return (

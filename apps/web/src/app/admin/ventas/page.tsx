@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { KpiCard } from '@/components/admin/KpiCard';
 import { ReimprimirModal } from '@/components/admin/ReimprimirModal';
+import { VentaDetalleModal } from '@/components/admin/VentaDetalleModal';
 import { cn } from '@/lib/cn';
 
 // Todas las fechas/horas se muestran en horario de Argentina, independiente de
@@ -92,7 +92,7 @@ interface AnalisisVentas {
     canal: string;
     modalidad: string;
     fecha: string | null;
-    nombre: string | null;
+    cliente: string | null;
     total: string;
     descuento: string;
     metodos: string[];
@@ -184,6 +184,8 @@ export default function VentasPage() {
   // Modal de anulación
   const [anularTarget, setAnularTarget] = useState<AnalisisVentas['ventas'][number] | null>(null);
   const [reimprimirId, setReimprimirId] = useState<string | null>(null);
+  // Pedido abierto en la tarjeta flotante de detalle (solo lectura).
+  const [detalleId, setDetalleId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -583,6 +585,10 @@ export default function VentasPage() {
         />
       )}
 
+      {detalleId && (
+        <VentaDetalleModal ventaId={detalleId} onClose={() => setDetalleId(null)} />
+      )}
+
       {/* Listado de ventas */}
       <section className="card overflow-hidden">
         <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken flex items-center justify-between">
@@ -605,7 +611,7 @@ export default function VentasPage() {
                 <th className="text-left px-4 py-2">#</th>
                 <th className="text-left px-4 py-2">Comanda</th>
                 <th className="text-left px-4 py-2">Fecha / hora</th>
-                <th className="text-left px-4 py-2">Nombre</th>
+                <th className="text-left px-4 py-2">Cliente</th>
                 <th className="text-left px-4 py-2">Canal</th>
                 <th className="text-left px-4 py-2">Modalidad</th>
                 <th className="text-left px-4 py-2">Métodos</th>
@@ -629,7 +635,7 @@ export default function VentasPage() {
                         : '—'}
                     </td>
                     <td className="px-4 py-2 text-xs text-ink-700 max-w-[160px] truncate">
-                      {v.nombre ?? <span className="text-ink-300">—</span>}
+                      {v.cliente ?? <span className="text-ink-300">—</span>}
                     </td>
                     <td className="px-4 py-2 text-xs text-ink-700">
                       {CANAL_LABEL[v.canal] ?? v.canal}
@@ -661,12 +667,12 @@ export default function VentasPage() {
                       />
                     </td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
-                      <Link
-                        href={`/venta/${v.id}`}
+                      <button
+                        onClick={() => setDetalleId(v.id)}
                         className="text-2xs text-teresita-700 hover:underline mr-2"
                       >
                         ver
-                      </Link>
+                      </button>
                       <button
                         onClick={() => setReimprimirId(v.id)}
                         className="text-2xs text-ocean-600 hover:underline mr-2"
@@ -718,8 +724,8 @@ export default function VentasPage() {
                         </span>{' '}
                         · {CANAL_LABEL[v.canal] ?? v.canal}
                       </div>
-                      {v.nombre && (
-                        <div className="text-xs text-ink-700 truncate">{v.nombre}</div>
+                      {v.cliente && (
+                        <div className="text-xs text-ink-700 truncate">{v.cliente}</div>
                       )}
                       <div className="text-2xs font-mono text-ink-500">
                         venta {v.numero}
@@ -750,9 +756,9 @@ export default function VentasPage() {
                       ))}
                     </div>
                     <div className="flex gap-3 text-2xs">
-                      <Link href={`/venta/${v.id}`} className="text-teresita-700">
+                      <button onClick={() => setDetalleId(v.id)} className="text-teresita-700">
                         ver
-                      </Link>
+                      </button>
                       <button onClick={() => setReimprimirId(v.id)} className="text-ocean-600">
                         🖨 reimprimir
                       </button>
