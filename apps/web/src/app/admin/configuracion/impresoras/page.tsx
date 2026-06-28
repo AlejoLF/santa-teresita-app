@@ -418,7 +418,7 @@ export default function ImpresorasConfigPage() {
                   return (
                     <tr key={j.id} className="hover:bg-cream-100">
                       <td className="px-4 py-2 font-mono text-ink-500">
-                        {fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        {fecha.toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                       </td>
                       <td className="px-4 py-2 text-ink-700">{j.tipo.replace(/_/g, ' ').toLowerCase()}</td>
                       <td className="px-4 py-2 text-ink-700">{j.destino}</td>
@@ -470,6 +470,7 @@ export default function ImpresorasConfigPage() {
                         <div className="text-2xs font-mono text-ink-500 truncate">
                           {j.destino} ·{' '}
                           {fecha.toLocaleTimeString('es-AR', {
+                            timeZone: 'America/Argentina/Buenos_Aires',
                             hour: '2-digit',
                             minute: '2-digit',
                             second: '2-digit',

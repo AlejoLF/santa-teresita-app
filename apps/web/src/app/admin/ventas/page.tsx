@@ -8,6 +8,10 @@ import { KpiCard } from '@/components/admin/KpiCard';
 import { ReimprimirModal } from '@/components/admin/ReimprimirModal';
 import { cn } from '@/lib/cn';
 
+// Todas las fechas/horas se muestran en horario de Argentina, independiente de
+// la TZ del dispositivo o del server que renderiza (la web vive en la nube).
+const TZ_AR = 'America/Argentina/Buenos_Aires';
+
 type Periodo =
   | 'hoy'
   | 'ayer'
@@ -88,6 +92,7 @@ interface AnalisisVentas {
     canal: string;
     modalidad: string;
     fecha: string | null;
+    nombre: string | null;
     total: string;
     descuento: string;
     metodos: string[];
@@ -146,7 +151,11 @@ function turnoLabel(t: string): string {
 
 function horaCorta(iso: string | null): string {
   if (!iso) return 'abierta';
-  return new Date(iso).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('es-AR', {
+    timeZone: TZ_AR,
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 /** Etiqueta para el selector de sesión del día: "Tarde · 13:00–21:00 (cerrada)". */
@@ -241,12 +250,14 @@ export default function VentasPage() {
         <h1 className="font-display text-xl text-ink-900">Ventas</h1>
         <p className="text-sm text-ink-500">
           {new Date(data.rango.desde).toLocaleDateString('es-AR', {
+            timeZone: TZ_AR,
             day: '2-digit',
             month: '2-digit',
             year: 'numeric',
           })}
           {' — '}
           {new Date(data.rango.hasta).toLocaleDateString('es-AR', {
+            timeZone: TZ_AR,
             day: '2-digit',
             month: '2-digit',
             year: 'numeric',
@@ -255,7 +266,10 @@ export default function VentasPage() {
         </p>
         {data.sesion && (
           <span className="inline-flex items-center gap-1.5 mt-1.5 px-2.5 py-1 rounded-full bg-teresita-50 text-teresita-700 text-2xs font-medium border border-teresita-700/15">
+            {/* `sesion.fecha` es @db.Date (medianoche UTC) → se muestra en UTC
+                para no correr 1 día; las horas sí van en TZ AR (horaCorta). */}
             📋 Sesión {new Date(data.sesion.fecha).toLocaleDateString('es-AR', {
+              timeZone: 'UTC',
               day: '2-digit',
               month: '2-digit',
             })}{' '}
@@ -589,7 +603,9 @@ export default function VentasPage() {
             <thead className="bg-surface-sunken text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
               <tr>
                 <th className="text-left px-4 py-2">#</th>
+                <th className="text-left px-4 py-2">Comanda</th>
                 <th className="text-left px-4 py-2">Fecha / hora</th>
+                <th className="text-left px-4 py-2">Nombre</th>
                 <th className="text-left px-4 py-2">Canal</th>
                 <th className="text-left px-4 py-2">Modalidad</th>
                 <th className="text-left px-4 py-2">Métodos</th>
@@ -604,10 +620,16 @@ export default function VentasPage() {
                 return (
                   <tr key={v.id} className="hover:bg-cream-100 transition-colors">
                     <td className="px-4 py-2 font-mono text-ink-500 text-xs">{v.numero}</td>
+                    <td className="px-4 py-2 font-mono text-sm text-teresita-700 font-semibold">
+                      #{v.numeroOrdenTurno}
+                    </td>
                     <td className="px-4 py-2 font-mono text-xs text-ink-700">
                       {fecha
-                        ? `${fecha.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' })} ${fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}`
+                        ? `${fecha.toLocaleDateString('es-AR', { timeZone: TZ_AR, day: '2-digit', month: '2-digit' })} ${fecha.toLocaleTimeString('es-AR', { timeZone: TZ_AR, hour: '2-digit', minute: '2-digit' })}`
                         : '—'}
+                    </td>
+                    <td className="px-4 py-2 text-xs text-ink-700 max-w-[160px] truncate">
+                      {v.nombre ?? <span className="text-ink-300">—</span>}
                     </td>
                     <td className="px-4 py-2 text-xs text-ink-700">
                       {CANAL_LABEL[v.canal] ?? v.canal}
@@ -667,7 +689,7 @@ export default function VentasPage() {
             {totalCobradoNum > 0 && (
               <tfoot className="border-t-2 border-cream-300 bg-surface-sunken">
                 <tr>
-                  <td colSpan={6} className="px-4 py-3 font-medium text-ink-700">
+                  <td colSpan={8} className="px-4 py-3 font-medium text-ink-700">
                     TOTAL · {data.kpis.cantidadVentas} ventas
                   </td>
                   <td className="px-4 py-3 text-right">
@@ -691,12 +713,19 @@ export default function VentasPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="text-sm text-ink-900">
-                        <span className="font-mono text-ink-500">#{v.numero}</span>{' '}
+                        <span className="font-mono text-teresita-700 font-semibold">
+                          #{v.numeroOrdenTurno}
+                        </span>{' '}
                         · {CANAL_LABEL[v.canal] ?? v.canal}
                       </div>
+                      {v.nombre && (
+                        <div className="text-xs text-ink-700 truncate">{v.nombre}</div>
+                      )}
                       <div className="text-2xs font-mono text-ink-500">
+                        venta {v.numero}
+                        {' · '}
                         {fecha
-                          ? `${fecha.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' })} ${fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}`
+                          ? `${fecha.toLocaleDateString('es-AR', { timeZone: TZ_AR, day: '2-digit', month: '2-digit' })} ${fecha.toLocaleTimeString('es-AR', { timeZone: TZ_AR, hour: '2-digit', minute: '2-digit' })}`
                           : '—'}
                         {' · '}
                         {v.modalidad.replace(/_/g, ' ').toLowerCase()}
@@ -953,7 +982,7 @@ function AnularVentaModal({
               <span className="text-ink-500">Fecha:</span>
               <span className="font-mono text-ink-900">
                 {fecha
-                  ? `${fecha.toLocaleDateString('es-AR')} ${fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}`
+                  ? `${fecha.toLocaleDateString('es-AR', { timeZone: TZ_AR })} ${fecha.toLocaleTimeString('es-AR', { timeZone: TZ_AR, hour: '2-digit', minute: '2-digit' })}`
                   : '—'}
               </span>
             </div>

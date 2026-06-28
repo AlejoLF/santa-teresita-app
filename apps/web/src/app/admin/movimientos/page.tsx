@@ -358,10 +358,12 @@ export default function AdminMovimientosPage() {
                 >
                   <td className="px-4 py-2 font-mono text-ink-700 text-xs">
                     {new Date(m.fechaComputo).toLocaleDateString('es-AR', {
+                      timeZone: 'America/Argentina/Buenos_Aires',
                       day: '2-digit',
                       month: '2-digit',
                     })}{' '}
                     {new Date(m.fechaComputo).toLocaleTimeString('es-AR', {
+                      timeZone: 'America/Argentina/Buenos_Aires',
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
@@ -370,7 +372,7 @@ export default function AdminMovimientosPage() {
                         className="ml-2 text-2xs px-1.5 py-0.5 bg-saffron-100 text-saffron-600 rounded"
                         title={
                           m.modificadoAt
-                            ? `Modificado: ${new Date(m.modificadoAt).toLocaleString('es-AR')}`
+                            ? `Modificado: ${new Date(m.modificadoAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}`
                             : 'Modificado'
                         }
                       >
@@ -498,10 +500,12 @@ export default function AdminMovimientosPage() {
                     <div className="text-2xs font-mono text-ink-500 truncate">
                       {cuenta} ·{' '}
                       {new Date(m.fechaComputo).toLocaleDateString('es-AR', {
+                        timeZone: 'America/Argentina/Buenos_Aires',
                         day: '2-digit',
                         month: '2-digit',
                       })}{' '}
                       {new Date(m.fechaComputo).toLocaleTimeString('es-AR', {
+                        timeZone: 'America/Argentina/Buenos_Aires',
                         hour: '2-digit',
                         minute: '2-digit',
                       })}{' '}

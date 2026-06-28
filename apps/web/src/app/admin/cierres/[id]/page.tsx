@@ -74,7 +74,11 @@ interface MovItem {
 
 function fmtTime(iso: string | null): string {
   if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function fmtFecha(iso: string): string {
@@ -281,7 +285,9 @@ export default function CierreDetallePage() {
         {sesion.emailEnviadoAt && (
           <span className="text-2xs text-basil-600">
             ✉ Enviado a {sesion.emailEnviadoA} ·{' '}
-            {new Date(sesion.emailEnviadoAt).toLocaleString('es-AR')}
+            {new Date(sesion.emailEnviadoAt).toLocaleString('es-AR', {
+              timeZone: 'America/Argentina/Buenos_Aires',
+            })}
           </span>
         )}
         {resultadoEmail && (

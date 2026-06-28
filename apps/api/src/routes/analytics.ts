@@ -118,19 +118,21 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
       const resultadoNeto = ventasNum - egresosNum;
 
       // Sparklines: serie diaria de ventas + egresos
+      // El agrupado por día es en hora de La Plata (AT TIME ZONE) para que una
+      // venta de las 23:00 AR no caiga en el día siguiente (Supabase corre en UTC).
       const sparklineSql = await prisma.$queryRaw<
         Array<{ fecha: string; ventas: string; egresos: string }>
       >(Prisma.sql`
         WITH dias AS (
           SELECT generate_series(
-            ${desde}::timestamptz::date,
-            ${hasta}::timestamptz::date,
+            (${desde}::timestamptz AT TIME ZONE 'America/Argentina/Buenos_Aires')::date,
+            (${hasta}::timestamptz AT TIME ZONE 'America/Argentina/Buenos_Aires')::date,
             '1 day'::interval
           )::date AS fecha
         ),
         v AS (
           SELECT
-            fecha_finalizacion::date AS fecha,
+            (fecha_finalizacion AT TIME ZONE 'America/Argentina/Buenos_Aires')::date AS fecha,
             SUM(total)::text AS total
           FROM ventas
           WHERE estado = 'FINALIZADA'
@@ -140,7 +142,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         ),
         e AS (
           SELECT
-            fecha_computo::date AS fecha,
+            (fecha_computo AT TIME ZONE 'America/Argentina/Buenos_Aires')::date AS fecha,
             SUM(monto)::text AS total
           FROM movimientos
           WHERE tipo = 'EGRESO'
@@ -269,13 +271,14 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
       const q = req.query as z.infer<typeof QuerySchema>;
       const { desde, hasta } = resolverRango(q);
 
-      // Heatmap día (0-6) × hora (0-23)
+      // Heatmap día (0-6) × hora (0-23) — día y hora en horario de La Plata
+      // (AT TIME ZONE) para que las franjas no salgan corridas 3 h (Supabase=UTC).
       const heatmap = await prisma.$queryRaw<
         Array<{ dia: number; hora: number; cantidad: number; total: string }>
       >(Prisma.sql`
         SELECT
-          EXTRACT(DOW FROM fecha_apertura)::int AS dia,
-          EXTRACT(HOUR FROM fecha_apertura)::int AS hora,
+          EXTRACT(DOW FROM (fecha_apertura AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS dia,
+          EXTRACT(HOUR FROM (fecha_apertura AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS hora,
           COUNT(*)::int AS cantidad,
           COALESCE(SUM(total), 0)::text AS total
         FROM ventas
@@ -290,7 +293,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         Array<{ mes: string; total: string }>
       >(Prisma.sql`
         SELECT
-          to_char(fecha_finalizacion, 'YYYY-MM') AS mes,
+          to_char(fecha_finalizacion AT TIME ZONE 'America/Argentina/Buenos_Aires', 'YYYY-MM') AS mes,
           SUM(total)::text AS total
         FROM ventas
         WHERE estado = 'FINALIZADA'
@@ -305,7 +308,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
       >(Prisma.sql`
         WITH diarios AS (
           SELECT
-            fecha_finalizacion::date AS fecha,
+            (fecha_finalizacion AT TIME ZONE 'America/Argentina/Buenos_Aires')::date AS fecha,
             SUM(total)::numeric AS total
           FROM ventas
           WHERE estado = 'FINALIZADA'

@@ -220,11 +220,13 @@ export default function AdminCierresPage() {
                   </span>
                   <div className="text-xs text-ink-500">
                     {new Date(s.horarioApertura).toLocaleTimeString('es-AR', {
+                      timeZone: 'America/Argentina/Buenos_Aires',
                       hour: '2-digit',
                       minute: '2-digit',
                     })}{' '}
                     →{' '}
                     {new Date(s.horarioCierre).toLocaleTimeString('es-AR', {
+                      timeZone: 'America/Argentina/Buenos_Aires',
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
@@ -290,7 +292,9 @@ export default function AdminCierresPage() {
               {s.emailEnviadoAt && (
                 <div className="text-2xs text-basil-600 mt-1">
                   ✉ Enviado a {s.emailEnviadoA} ·{' '}
-                  {new Date(s.emailEnviadoAt).toLocaleString('es-AR')}
+                  {new Date(s.emailEnviadoAt).toLocaleString('es-AR', {
+                    timeZone: 'America/Argentina/Buenos_Aires',
+                  })}
                 </div>
               )}
 

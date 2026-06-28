@@ -260,12 +260,12 @@ export default function SesionActualPage() {
             {s.estado.toLowerCase()}
           </span>
           <span className="text-ink-500">
-            Apertura: {new Date(s.horarioApertura).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })} · {s.usuarioApertura}
+            Apertura: {new Date(s.horarioApertura).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' })} · {s.usuarioApertura}
           </span>
           {s.horarioCierre && (
             <span className="text-ink-500">
               · Cierre:{' '}
-              {new Date(s.horarioCierre).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })} ·{' '}
+              {new Date(s.horarioCierre).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' })} ·{' '}
               {s.usuarioCierre}
             </span>
           )}

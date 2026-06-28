@@ -32,8 +32,11 @@ interface AbiertasResp {
 const POLL_MS = 15000;
 
 function horaCorta(iso: string): string {
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return new Date(iso).toLocaleTimeString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function summaryItems(items: PedidoDetalle['items']): string {

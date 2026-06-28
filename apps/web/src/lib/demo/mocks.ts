@@ -457,13 +457,19 @@ function buildVentasAnalisis(state: DemoState, search: URLSearchParams) {
         cantidad: 30 + Math.round(Math.random() * 20),
       };
     }),
-    ventas: finalizadas.map((v) => ({
+    ventas: finalizadas.map((v, i) => ({
       id: v.id,
       numero: v.numero,
       numeroOrdenTurno: v.numeroOrdenTurno,
       canal: v.canal,
       modalidad: v.modalidad,
       fecha: v.fechaFinalizacion ?? v.fechaApertura,
+      // Nombre del pedido (en delivery/teléfono la cajera lo carga). Mostrador
+      // no suele tenerlo. Demo-only: sintetizamos uno para los canales no-mostrador.
+      nombre:
+        v.canal === 'MOSTRADOR'
+          ? null
+          : ['Carla', 'Martín', 'Flia. Gómez', 'Lucía', 'Pedro N.'][i % 5] ?? null,
       total: v.total,
       descuento: '0',
       metodos: v.pagos.map((p) => p.metodo),

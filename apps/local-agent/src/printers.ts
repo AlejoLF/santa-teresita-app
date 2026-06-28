@@ -491,10 +491,16 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
   printer.newLine();
 
   printer.bold(true);
-  printer.setTextDoubleHeight();
-  printer.println(`Delivery: ${payload.numeroVenta}`);
+  printer.println('DELIVERY');
+  // Número de COMANDA grande (correlativo del turno) — el mismo "# 102" que sale
+  // en la comanda de cocina y en la columna "Comanda" de /admin/ventas. Permite
+  // a la encargada cruzar el ticket físico con el pedido en el programa cuando
+  // no llega a leer el número de venta.
+  printer.setTextSize(3, 3);
+  printer.println(`# ${String(payload.numeroOrden).padStart(3, '0')}`);
   printer.setTextNormal();
   printer.bold(false);
+  printer.println(`Venta ${payload.numeroVenta} en el programa`);
   printer.drawLine();
 
   // ── Datos cliente ──

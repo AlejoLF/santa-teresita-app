@@ -381,6 +381,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
               <span className="text-ink-500">
                 ·{' '}
                 {new Date(venta.fechaApertura).toLocaleTimeString('es-AR', {
+                  timeZone: 'America/Argentina/Buenos_Aires',
                   hour: '2-digit',
                   minute: '2-digit',
                 })}

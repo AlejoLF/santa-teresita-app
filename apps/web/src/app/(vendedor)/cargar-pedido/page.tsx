@@ -1155,6 +1155,7 @@ export default function CargarPedidoPage() {
                 <div className="text-xs text-ink-500 flex justify-between gap-3">
                   <span>
                     {new Date().toLocaleTimeString('es-AR', {
+                      timeZone: 'America/Argentina/Buenos_Aires',
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
@@ -1863,9 +1864,11 @@ function BorradoresPanel({
             }
             return acc + i.cantidad * i.precioUnitario;
           }, 0);
-          const fecha = new Date(b.creadoAt);
-          const hh = String(fecha.getHours()).padStart(2, '0');
-          const mm = String(fecha.getMinutes()).padStart(2, '0');
+          const horaPedido = new Date(b.creadoAt).toLocaleTimeString('es-AR', {
+            timeZone: 'America/Argentina/Buenos_Aires',
+            hour: '2-digit',
+            minute: '2-digit',
+          });
           const summary = b.items
             .slice(0, 2)
             .map((i) => i.productoNombre)
@@ -1876,7 +1879,7 @@ function BorradoresPanel({
               className="px-4 py-2 border-b border-saffron-600/10 last:border-b-0 hover:bg-saffron-100/60"
             >
               <div className="flex items-baseline justify-between">
-                <span className="font-mono text-xs text-ink-500">{hh}:{mm}</span>
+                <span className="font-mono text-xs text-ink-500">{horaPedido}</span>
                 <MoneyAmount value={totalEstimado.toFixed(2)} className="text-md text-ink-900" />
               </div>
               <div className="text-xs text-ink-700 line-clamp-1 mt-0.5">{summary}</div>
@@ -2192,7 +2195,8 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
                 '__manteca': { nombre: 'Manteca' },
               }
             : {
-                '__mixta': { nombre: 'Mixta / Rosa' },
+                '__mixta': { nombre: 'Mixta' },
+                '__rosa': { nombre: 'Rosa' },
               };
           const extra = extrasMap[salsaPorcionId];
           if (extra) {
@@ -2335,7 +2339,8 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
       items.push({ id: '__aceite_oliva', nombre: 'Aceite de oliva', codigo: null });
       items.push({ id: '__manteca', nombre: 'Manteca', codigo: null });
     } else if (producto.incluyeSalsa === 'ESPECIAL') {
-      items.push({ id: '__mixta', nombre: 'Mixta / Rosa', codigo: null });
+      items.push({ id: '__mixta', nombre: 'Mixta', codigo: null });
+      items.push({ id: '__rosa', nombre: 'Rosa', codigo: null });
     }
     return items;
   }, [producto.incluyeSalsa, salsasData]);
@@ -2852,7 +2857,7 @@ function SalsaModal({ tipo, porcionesIncluidas, nombrePasta, onClose, onConfirm 
 
   // Opciones extra que solo aparecen en este modal (post-pasta), NO en venta directa de salsa.
   //   - SIMPLE: Aceite, Aceite de oliva, Manteca (sin cargo, son acompañamientos)
-  //   - ESPECIAL: Mixta / rosa (cuenta como salsa, va al precio especial si excede porciones)
+  //   - ESPECIAL: Mixta y Rosa (cada una cuenta como salsa, va al precio especial si excede porciones)
   const extras = tipo === 'SIMPLE'
     ? [
         { id: '__aceite', nombre: 'Aceite', codigo: null, esExtraSinCargo: true },
@@ -2860,8 +2865,9 @@ function SalsaModal({ tipo, porcionesIncluidas, nombrePasta, onClose, onConfirm 
         { id: '__manteca', nombre: 'Manteca', codigo: null, esExtraSinCargo: true },
       ]
     : [
-        // Salsa mixta / rosa: cuenta como salsa, paga si excede porciones incluidas.
-        { id: '__mixta', nombre: 'Mixta / Rosa', codigo: null, esExtraSinCargo: false },
+        // Salsa mixta y rosa: cada una cuenta como salsa, paga si excede porciones incluidas.
+        { id: '__mixta', nombre: 'Mixta', codigo: null, esExtraSinCargo: false },
+        { id: '__rosa', nombre: 'Rosa', codigo: null, esExtraSinCargo: false },
       ];
 
   useEffect(() => {

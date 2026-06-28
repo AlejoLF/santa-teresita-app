@@ -3049,7 +3049,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           const ventasListado = await prisma.venta.findMany({
             where: {
               estado: EstadoVenta.FINALIZADA,
-              fechaFinalizacion: { gte: desde, lte: hasta },
+              // Mismo criterio que los agregados: si se filtra por sesión de caja
+              // usamos `sesionCajaId`; si no, el rango por fecha.
+              ...(sesionFiltroId
+                ? { sesionCajaId: sesionFiltroId }
+                : { fechaFinalizacion: { gte: desde, lte: hasta } }),
               ...(q.canal && { canal: q.canal as never }),
               ...(q.metodo && {
                 pagos: { some: { metodo: q.metodo as never, estado: 'CONFIRMADO' } },
@@ -3064,6 +3068,10 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               fechaFinalizacion: true,
               total: true,
               descuentoTotal: true,
+              // Nombre del pedido: el del snapshot de delivery (lo carga la cajera
+              // en pedidos telefónicos/WhatsApp) o, si no, el cliente asociado.
+              cliente: { select: { nombre: true, apellido: true } },
+              deliveryInfo: { select: { direccionSnapshot: true } },
               pagos: {
                 where: { estado: 'CONFIRMADO' },
                 select: { metodo: true },
@@ -3072,17 +3080,27 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             orderBy: { fechaFinalizacion: 'desc' },
             take: 200,
           });
-          return ventasListado.map((v) => ({
-            id: v.id,
-            numero: v.numero,
-            numeroOrdenTurno: v.numeroOrdenTurno,
-            canal: v.canal,
-            modalidad: v.modalidad,
-            fecha: v.fechaFinalizacion,
-            total: v.total.toString(),
-            descuento: v.descuentoTotal.toString(),
-            metodos: v.pagos.map((p) => p.metodo),
-          }));
+          return ventasListado.map((v) => {
+            const snap =
+              (v.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
+            const nombreSnap =
+              typeof snap.clienteNombre === 'string' ? snap.clienteNombre.trim() : '';
+            const nombreCliente = v.cliente
+              ? `${v.cliente.nombre}${v.cliente.apellido ? ' ' + v.cliente.apellido : ''}`.trim()
+              : '';
+            return {
+              id: v.id,
+              numero: v.numero,
+              numeroOrdenTurno: v.numeroOrdenTurno,
+              canal: v.canal,
+              modalidad: v.modalidad,
+              fecha: v.fechaFinalizacion,
+              nombre: nombreSnap || nombreCliente || null,
+              total: v.total.toString(),
+              descuento: v.descuentoTotal.toString(),
+              metodos: v.pagos.map((p) => p.metodo),
+            };
+          });
         })(),
       };
     },

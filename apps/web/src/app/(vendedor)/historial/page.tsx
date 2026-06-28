@@ -94,6 +94,7 @@ function Section({
                   </span>
                   <span className="text-xs text-ink-500 ml-3">
                     {new Date(v.fechaApertura).toLocaleTimeString('es-AR', {
+                      timeZone: 'America/Argentina/Buenos_Aires',
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
