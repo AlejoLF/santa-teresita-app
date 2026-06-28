@@ -32,7 +32,9 @@ export default function MayoristasPage() {
     setLoading(true);
     try {
       const res = await api.get<{ clientes: ClienteMayoristaRow[] }>('/admin/mayoristas');
-      setClientes(res.clientes);
+      // `?? []` defensivo: si la API devolviera un cuerpo sin `clientes`, el
+      // render hace `clientes.reduce(...)` y crashearía. Mejor lista vacía.
+      setClientes(res.clientes ?? []);
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError) || e.status !== 401) {

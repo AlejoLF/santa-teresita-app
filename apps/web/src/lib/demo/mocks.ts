@@ -909,6 +909,88 @@ function notFound(message = 'No encontrado'): MockResponse {
   return { status: 404, body: { error: message } };
 }
 
+// ─── Mayoristas / cuenta corriente (datos demo) ────────────────────────
+// Clientes que compran a precio especial y pagan por cuenta corriente.
+const MAYORISTAS_DEMO = [
+  {
+    id: 'may-1',
+    nombre: 'Restaurante La Nonna',
+    cuit: '30-71234567-9',
+    contacto: 'Marta Gómez',
+    telefono: '221-555-1010',
+    email: 'lanonna@example.com',
+    direccion: 'Calle 50 nº 1234, La Plata',
+    observaciones: 'Entrega martes y viernes',
+    activo: true,
+    lista: { id: 'lm-a', nombre: 'Mayorista A' },
+    remitos: [
+      { id: 'rem-1', numero: 101, fecha: addDays(-20), total: '85000', estado: 'PENDIENTE', itemsCount: 6, observaciones: null },
+      { id: 'rem-2', numero: 102, fecha: addDays(-10), total: '64000', estado: 'PENDIENTE', itemsCount: 4, observaciones: 'Sin TACC' },
+      { id: 'rem-3', numero: 103, fecha: addDays(-3), total: '120000', estado: 'PENDIENTE', itemsCount: 9, observaciones: null },
+    ],
+    cobros: [
+      { id: 'cob-1', fecha: addDays(-8), monto: '100000', cuenta: 'Santander', usuario: 'Julio (Dueño)', observacion: 'Transferencia' },
+    ],
+  },
+  {
+    id: 'may-2',
+    nombre: 'Rotisería El Buen Sabor',
+    cuit: '27-30222111-4',
+    contacto: 'Carlos',
+    telefono: '221-555-2020',
+    email: null,
+    direccion: 'Av. 7 nº 880',
+    observaciones: null,
+    activo: true,
+    lista: { id: 'lm-b', nombre: 'Mayorista B' },
+    remitos: [
+      { id: 'rem-4', numero: 104, fecha: addDays(-15), total: '48000', estado: 'PENDIENTE', itemsCount: 3, observaciones: null },
+      { id: 'rem-5', numero: 105, fecha: addDays(-5), total: '52000', estado: 'PENDIENTE', itemsCount: 5, observaciones: null },
+    ],
+    cobros: [
+      { id: 'cob-2', fecha: addDays(-12), monto: '48000', cuenta: 'Efectivo', usuario: 'María (Encargada)', observacion: null },
+      { id: 'cob-3', fecha: addDays(-2), monto: '52000', cuenta: 'Cuenta DNI', usuario: 'Julio (Dueño)', observacion: 'Saldó el mes' },
+    ],
+  },
+  {
+    id: 'may-3',
+    nombre: 'Kiosco Don José',
+    cuit: null,
+    contacto: 'José',
+    telefono: '221-555-3030',
+    email: null,
+    direccion: 'Calle 12 esq. 60',
+    observaciones: 'Suele pagar al contado',
+    activo: true,
+    lista: { id: 'lm-a', nombre: 'Mayorista A' },
+    remitos: [
+      { id: 'rem-6', numero: 106, fecha: addDays(-1), total: '23000', estado: 'PENDIENTE', itemsCount: 2, observaciones: null },
+    ],
+    cobros: [],
+  },
+];
+
+function mayoristaTotales(m: (typeof MAYORISTAS_DEMO)[number]) {
+  const remitado = m.remitos
+    .filter((r) => r.estado !== 'ANULADO')
+    .reduce((a, r) => a + Number(r.total), 0);
+  const cobrado = m.cobros.reduce((a, c) => a + Number(c.monto), 0);
+  return { remitado, cobrado, saldo: remitado - cobrado };
+}
+
+function mayoristaCatalogo(m: (typeof MAYORISTAS_DEMO)[number] | undefined) {
+  return {
+    lista: m?.lista ?? { id: 'lm-a', nombre: 'Mayorista A' },
+    productos: [
+      { id: 'p-0011', nombre: 'Ravioles tradicionales', marca: 'Santa Teresita', unidadPrecio: 'POR_UNIDAD', unidadPrecioLabel: 'doc', precioUnitario: '1500' },
+      { id: 'p-0012', nombre: 'Sorrentinos caseros', marca: 'Santa Teresita', unidadPrecio: 'POR_UNIDAD', unidadPrecioLabel: 'doc', precioUnitario: '1800' },
+      { id: 'p-0031', nombre: 'Salsa bolognesa', marca: 'Santa Teresita', unidadPrecio: 'POR_UNIDAD', unidadPrecioLabel: 'u', precioUnitario: '900' },
+      { id: 'p-0061', nombre: 'Tapa de empanadas x12', marca: 'La Salteña', unidadPrecio: 'POR_UNIDAD', unidadPrecioLabel: 'paq', precioUnitario: '1200' },
+      { id: 'p-0070', nombre: 'Ñoquis de papa', marca: 'Santa Teresita', unidadPrecio: 'POR_KILO', unidadPrecioLabel: 'kg', precioUnitario: '2200' },
+    ],
+  };
+}
+
 export function handleMock(method: Method, path: string, body?: unknown): MockResponse {
   const state = loadState();
   const url = new URL(path, 'http://demo.local');
@@ -1300,6 +1382,70 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
     ] });
   }
   m = p.match(/^\/admin\/configuracion\/parametros\/([^/]+)$/);
+  if (m && method === 'PATCH') return ok({});
+
+  // ─── Admin: mayoristas / cuenta corriente ──────────────────────────
+  if (p === '/admin/mayoristas' && method === 'GET') {
+    return ok({
+      clientes: MAYORISTAS_DEMO.map((m2) => {
+        const { saldo } = mayoristaTotales(m2);
+        return {
+          id: m2.id,
+          nombre: m2.nombre,
+          cuit: m2.cuit,
+          telefono: m2.telefono,
+          activo: m2.activo,
+          lista: m2.lista,
+          saldo: saldo.toFixed(2),
+        };
+      }),
+    });
+  }
+  if (p === '/admin/mayoristas' && method === 'POST') return ok({ id: 'may-new' });
+  if (p === '/admin/mayoristas/listas' && method === 'GET') {
+    return ok({
+      listas: [
+        { id: 'lm-a', nombre: 'Mayorista A' },
+        { id: 'lm-b', nombre: 'Mayorista B' },
+      ],
+    });
+  }
+  // Anular remito: /admin/mayoristas/remitos/:remitoId/anular (va antes del :id genérico).
+  m = p.match(/^\/admin\/mayoristas\/remitos\/([^/]+)\/anular$/);
+  if (m && method === 'POST') return ok({});
+  m = p.match(/^\/admin\/mayoristas\/([^/]+)\/catalogo$/);
+  if (m && method === 'GET') {
+    return ok(mayoristaCatalogo(MAYORISTAS_DEMO.find((x) => x.id === m![1])));
+  }
+  m = p.match(/^\/admin\/mayoristas\/([^/]+)\/remitos$/);
+  if (m && method === 'POST') return ok({ id: 'rem-new' });
+  m = p.match(/^\/admin\/mayoristas\/([^/]+)\/cobros$/);
+  if (m && method === 'POST') return ok({});
+  m = p.match(/^\/admin\/mayoristas\/([^/]+)$/);
+  if (m && method === 'GET') {
+    const may = MAYORISTAS_DEMO.find((x) => x.id === m![1]);
+    if (!may) return notFound('Cliente no encontrado');
+    const { remitado, cobrado, saldo } = mayoristaTotales(may);
+    return ok({
+      cliente: {
+        id: may.id,
+        nombre: may.nombre,
+        cuit: may.cuit,
+        contacto: may.contacto,
+        telefono: may.telefono,
+        email: may.email,
+        direccion: may.direccion,
+        observaciones: may.observaciones,
+        activo: may.activo,
+        lista: may.lista,
+      },
+      saldo: saldo.toFixed(2),
+      totales: { remitado: remitado.toFixed(2), cobrado: cobrado.toFixed(2) },
+      remitos: may.remitos,
+      cobros: may.cobros,
+    });
+  }
+  m = p.match(/^\/admin\/mayoristas\/([^/]+)$/);
   if (m && method === 'PATCH') return ok({});
 
   // ─── Fallback ──────────────────────────────────────────────────────
