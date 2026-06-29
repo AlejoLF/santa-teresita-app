@@ -32,6 +32,10 @@ type BeforeInstallPromptEvent = Event & {
 
 function detectStandalone(): boolean {
   if (typeof window === 'undefined') return false;
+  // En el .exe de escritorio (Electron) la app YA está instalada → nunca tiene
+  // sentido el cartel "Usar como app". Lo tratamos como standalone para ocultarlo.
+  // (En navegadores reales —celular del dueño, etc.— sí se sigue ofreciendo.)
+  if (/electron/i.test(window.navigator.userAgent)) return true;
   const mm = window.matchMedia?.('(display-mode: standalone)')?.matches === true;
   const iosStandalone = (window.navigator as unknown as { standalone?: boolean }).standalone === true;
   return mm || iosStandalone;
