@@ -24,6 +24,7 @@ import {
   encolarComandasCanceladas,
   encolarTicketClienteParaVenta,
   encolarTicketDeliveryParaVenta,
+  encolarComandaEncargo,
 } from '../services/impresion.js';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta, EstadoPago } from '@sta/db';
@@ -37,9 +38,13 @@ import { EstadoVenta, EstadoPago } from '@sta/db';
  */
 async function ventaEnScope(
   req: { usuario?: { rol: string } | null },
-  venta: { sesionCajaId: string | null },
+  venta: { sesionCajaId: string | null; esEncargo?: boolean },
 ): Promise<boolean> {
   if (req.usuario?.rol === 'ADMIN') return true;
+  // Los encargos son una cola COMPARTIDA: se cargan un día y se cobran otro
+  // (posiblemente en otra sesión y por otro cajero). Por eso cualquier cajero
+  // los puede ver/cobrar, no solo el de la sesión donde se cargaron.
+  if (venta.esEncargo) return true;
   const { sesion } = await getSesionActualReadOnly();
   return !!sesion && venta.sesionCajaId === sesion.id;
 }
@@ -103,7 +108,9 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
         throw e;
       }
       const ventas = await prisma.venta.findMany({
-        where: { sesionCajaId: sesion.id, estado: EstadoVenta.PROCESADA },
+        // `esEncargo: false`: los encargos viven en su propia pestaña; no deben
+        // aparecer como "pedidos abiertos" del cajero normal.
+        where: { sesionCajaId: sesion.id, estado: EstadoVenta.PROCESADA, esEncargo: false },
         orderBy: { fechaApertura: 'desc' },
         select: {
           id: true,
@@ -648,6 +655,27 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
         });
       }
 
+      // Encargo: el cobro (sea inmediato o diferido días después) se registra en
+      // la sesión de caja ACTUAL del momento del cobro — NUNCA retroactivo a la
+      // sesión donde se cargó. Reasignamos sesion_caja_id a la sesión vigente.
+      // Fuera de horario no hay sesión → 423 (igual que cualquier cobro).
+      let sesionEncargoId: string | null = null;
+      if (venta.esEncargo) {
+        try {
+          const sesionActual = await getOrCreateSesionActual(req.usuario!.id);
+          sesionEncargoId = sesionActual.id;
+        } catch (e) {
+          if (e instanceof FueraDeHorarioError) {
+            return reply.code(423).send({
+              error: 'Fuera del horario de atención configurado',
+              codigo: 'FUERA_DE_HORARIO',
+              resolucion: e.resolucion,
+            });
+          }
+          throw e;
+        }
+      }
+
       const finalizada = await prisma.$transaction(async (tx) => {
         // Crear pagos en batch — un solo INSERT con múltiples VALUES rows.
         // Antes era 1 INSERT por pago (3 en pagos split: efectivo + tarjeta + MP);
@@ -678,6 +706,13 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
             estado: EstadoVenta.FINALIZADA,
             fechaFinalizacion: new Date(),
             usuarioCierreId: req.usuario!.id,
+            // Encargo: reasignar a la sesión actual + marcar cobrado.
+            ...(venta.esEncargo && {
+              sesionCajaId: sesionEncargoId,
+              estadoCobroEncargo: 'COBRADO',
+              fechaCobroEncargo: new Date(),
+              usuarioCobroEncargoId: req.usuario!.id,
+            }),
           },
           include: { items: true, pagos: true },
         });
@@ -706,8 +741,14 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
         // La comanda de COCINA NO se encola acá: ya salió al ENVIAR el pedido
         // (crear/agregar items en services/venta.ts), así la cocina arranca sin
         // esperar el cobro. Acá sólo los tickets que necesitan el pago real.
-        await encolarTicketClienteParaVenta(venta.id, tx);
-        await encolarTicketDeliveryParaVenta(venta.id, tx);
+        if (venta.esEncargo) {
+          // Encargo: una sola comanda ENCARGO → mostrador, ahora con "COBRADO"
+          // (no los tickets normales de cliente/delivery).
+          await encolarComandaEncargo(venta.id, 'COBRADO', tx);
+        } else {
+          await encolarTicketClienteParaVenta(venta.id, tx);
+          await encolarTicketDeliveryParaVenta(venta.id, tx);
+        }
 
         return updated;
       });

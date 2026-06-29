@@ -705,6 +705,71 @@ export async function reimprimirVenta(
 }
 
 /**
+ * Encola la COMANDA_ENCARGO → MOSTRADOR. Es el registro físico del encargo para
+ * la encargada (decisión del dueño: siempre a mostrador, sea retiro o envío).
+ * Lleva rótulo grande invertido "ENCARGO" arriba + "A PAGAR"/"COBRADO" abajo,
+ * con todos los datos: items, cliente, día y hora/franja, retiro/envío + dirección.
+ *
+ * @param estado 'A_PAGAR' al cargar el encargo · 'COBRADO' al finalizar el cobro.
+ */
+export async function encolarComandaEncargo(
+  ventaId: string,
+  estado: 'A_PAGAR' | 'COBRADO',
+  tx?: Prisma.TransactionClient,
+): Promise<void> {
+  const client: DbClient = tx ?? prisma;
+  const venta = await client.venta.findUnique({
+    where: { id: ventaId },
+    include: { items: { orderBy: { orden: 'asc' } }, deliveryInfo: true },
+  });
+  if (!venta) return;
+
+  const snap = (venta.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
+  const clienteNombre =
+    (typeof snap.clienteNombre === 'string' && snap.clienteNombre) || 'Sin nombre';
+  const clienteTelefono =
+    typeof snap.clienteTelefono === 'string' ? snap.clienteTelefono : undefined;
+  const direccion = typeof snap.direccion === 'string' ? snap.direccion : undefined;
+  const indicaciones = typeof snap.indicaciones === 'string' ? snap.indicaciones : undefined;
+
+  const payload = {
+    numeroOrden: venta.numeroOrdenTurno,
+    numeroVenta: venta.numero,
+    hora: venta.fechaApertura.toISOString().slice(11, 16),
+    estado,
+    tipoEntrega: venta.tipoEntregaEncargo ?? (direccion ? 'ENVIO' : 'RETIRO'),
+    // YYYY-MM-DD (UTC, tal como se guardó @db.Date).
+    fechaEntrega: venta.fechaEntregaPromesa
+      ? venta.fechaEntregaPromesa.toISOString().slice(0, 10)
+      : null,
+    horaEntrega: venta.horaEntregaExacta ?? undefined,
+    franja: venta.franjaEntrega ?? undefined,
+    cliente: { nombre: clienteNombre, telefono: clienteTelefono, direccion, indicaciones },
+    items: venta.items.map((it) => {
+      const mods = (it.modificadoresAplicados as Array<{ opcionNombre?: string }> | null) ?? [];
+      return {
+        cantidad: String(it.cantidad),
+        nombre: it.nombreSnapshot,
+        modificadores: mods
+          .map((m) => m?.opcionNombre)
+          .filter((x): x is string => typeof x === 'string'),
+        observacion: it.observacion ?? undefined,
+      };
+    }),
+    total: Number(venta.total).toFixed(2),
+    pcOrigen: venta.pcOrigen,
+  };
+
+  await encolarTrabajo({
+    tipo: TipoTrabajoImpresion.COMANDA_ENCARGO,
+    destino: 'MOSTRADOR',
+    payload,
+    ventaId,
+    tx,
+  });
+}
+
+/**
  * Trabajo TEST — útil para que el admin verifique que la impresora está OK
  * desde el panel de configuración (un click → sale un ticket "=== TEST OK ===").
  */

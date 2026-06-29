@@ -18,6 +18,7 @@ import authPlugin from './plugins/auth.js';
 import authRoutes from './routes/auth.js';
 import catalogoRoutes from './routes/catalogo.js';
 import ventasRoutes from './routes/ventas.js';
+import encargosRoutes from './routes/encargos.js';
 import adminRoutes from './routes/admin.js';
 import analyticsRoutes from './routes/analytics.js';
 import syncRoutes from './routes/sync.js';
@@ -194,6 +195,7 @@ export async function buildServer() {
       await api.register(authRoutes);
       await api.register(catalogoRoutes);
       await api.register(ventasRoutes);
+      await api.register(encargosRoutes);
       await api.register(adminRoutes);
       await api.register(analyticsRoutes);
       await api.register(syncRoutes);

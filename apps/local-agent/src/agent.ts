@@ -19,6 +19,7 @@ import { Socket } from 'node:net';
 import pino from 'pino';
 import {
   imprimirComanda,
+  imprimirComandaEncargo,
   imprimirTicketCliente,
   imprimirTicketDelivery,
   testPrinter,
@@ -51,6 +52,7 @@ interface TrabajoImpresion {
     | 'TICKET_CLIENTE'
     | 'TICKET_DELIVERY'
     | 'TICKET_REIMPRESION'
+    | 'COMANDA_ENCARGO'
     | 'TEST';
   destino: DestinoImpresora;
   payload: Record<string, unknown>;
@@ -207,6 +209,12 @@ async function procesar(t: TrabajoImpresion): Promise<void> {
       case 'TICKET_DELIVERY':
         await imprimirTicketDelivery(
           t.payload as unknown as Parameters<typeof imprimirTicketDelivery>[0],
+        );
+        break;
+      case 'COMANDA_ENCARGO':
+        await imprimirComandaEncargo(
+          t.payload as unknown as Parameters<typeof imprimirComandaEncargo>[0],
+          t.destino,
         );
         break;
       case 'TEST':

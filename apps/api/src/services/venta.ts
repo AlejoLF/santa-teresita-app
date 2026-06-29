@@ -260,7 +260,8 @@ export async function getVentaCompleta(id: string) {
  */
 export async function listarVentasDeSesionActual(sesionId: string) {
   return prisma.venta.findMany({
-    where: { sesionCajaId: sesionId },
+    // Los encargos no entran al historial del cajero (tienen su propia pestaña).
+    where: { sesionCajaId: sesionId, esEncargo: false },
     orderBy: { fechaApertura: 'desc' },
     take: 100,
     select: {

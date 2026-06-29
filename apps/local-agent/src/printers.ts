@@ -604,6 +604,179 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
   await printer.execute();
 }
 
+// ─── Comanda de ENCARGO (pedido para un día futuro) ───────────────────
+//
+// Se imprime SIEMPRE en la comandera de MOSTRADOR (decisión del dueño): es el
+// registro físico del encargo para la encargada. Lleva dos rótulos grandes con
+// fondo oscuro y letras blancas: "ENCARGO" arriba y "A PAGAR"/"COBRADO" abajo.
+
+export interface ComandaEncargoPayload {
+  numeroOrden: number;
+  numeroVenta?: number;
+  hora: string;
+  estado: 'A_PAGAR' | 'COBRADO';
+  tipoEntrega: 'RETIRO' | 'ENVIO';
+  /** Día de entrega, formato "YYYY-MM-DD". */
+  fechaEntrega: string | null;
+  /** Hora exacta "HH:MM" (si no hay franja). */
+  horaEntrega?: string;
+  /** Franja MANANA/TARDE/NOCHE (si no hay hora exacta). */
+  franja?: 'MANANA' | 'TARDE' | 'NOCHE';
+  cliente: { nombre: string; telefono?: string; direccion?: string; indicaciones?: string };
+  items: Array<{
+    cantidad: string;
+    nombre: string;
+    modificadores: string[];
+    observacion?: string;
+  }>;
+  total: string;
+  pcOrigen: string;
+}
+
+const FRANJA_LABEL: Record<string, string> = {
+  MANANA: 'Mañana',
+  TARDE: 'Tarde',
+  NOCHE: 'Noche',
+};
+
+/** "YYYY-MM-DD" → "DD/MM/YYYY" (sin parsear a Date — evita corrimientos de TZ). */
+function formatFechaDia(iso: string | null): string {
+  if (!iso) return '—';
+  const [y, m, d] = iso.split('-');
+  if (!y || !m || !d) return iso;
+  return `${d}/${m}/${y}`;
+}
+
+export async function imprimirComandaEncargo(
+  payload: ComandaEncargoPayload,
+  destino: DestinoImpresora = 'MOSTRADOR',
+): Promise<void> {
+  const printer = makePrinter(destino);
+
+  // ── Header ──
+  printer.alignCenter();
+  printer.setTextDoubleHeight();
+  printer.setTextSize(1, 1);
+  printer.println('SANTA TERESITA PASTAS');
+  printer.setTextNormal();
+  printer.drawLine();
+  printer.newLine();
+
+  // ── Rótulo grande ENCARGO (fondo oscuro, letras blancas) ──
+  printer.bold(true);
+  printer.invert(true);
+  printer.setTextSize(2, 2);
+  printer.println('  ENCARGO  ');
+  printer.setTextNormal();
+  printer.invert(false);
+  printer.bold(false);
+  printer.newLine();
+
+  // ── Número de comanda grande ──
+  printer.setTextSize(3, 3);
+  printer.bold(true);
+  printer.println(`# ${String(payload.numeroOrden).padStart(3, '0')}`);
+  printer.bold(false);
+  printer.setTextNormal();
+  printer.newLine();
+
+  // ── Día y hora de entrega (grande, lo más importante del encargo) ──
+  printer.alignLeft();
+  printer.bold(true);
+  printer.setTextDoubleHeight();
+  printer.println(`Entrega: ${formatFechaDia(payload.fechaEntrega)}`);
+  const cuando = payload.horaEntrega
+    ? `${payload.horaEntrega} hs.`
+    : payload.franja
+      ? FRANJA_LABEL[payload.franja] ?? payload.franja
+      : '';
+  if (cuando) printer.println(`Horario: ${cuando}`);
+  printer.setTextNormal();
+  printer.bold(false);
+  printer.println(`Modo:    ${payload.tipoEntrega === 'ENVIO' ? 'ENVÍO a domicilio' : 'RETIRA en local'}`);
+  printer.println(`Pedido:  ${payload.hora}`);
+  printer.drawLine();
+  printer.newLine();
+
+  // ── Items ──
+  for (const item of payload.items) {
+    printer.setTextDoubleHeight();
+    printer.bold(true);
+    printer.println(`## ${item.cantidad}  ${limpiar(item.nombre)}`);
+    printer.bold(false);
+    printer.setTextNormal();
+    for (const m of item.modificadores) {
+      printer.println(`           > ${limpiar(m)}`);
+    }
+    if (item.observacion) {
+      printer.newLine();
+      printer.bold(true);
+      printer.invert(true);
+      printer.setTextDoubleHeight();
+      printer.setTextSize(2, 2);
+      printer.println(`>> ${limpiar(item.observacion).toUpperCase()}`);
+      printer.setTextNormal();
+      printer.invert(false);
+      printer.bold(false);
+    }
+    printer.newLine();
+  }
+
+  // ── Datos del cliente ──
+  printer.drawLine();
+  printer.bold(true);
+  printer.println(`Cliente: ${limpiar(payload.cliente.nombre)}`);
+  printer.bold(false);
+  if (payload.cliente.telefono) {
+    printer.println(`Tel:     ${limpiar(payload.cliente.telefono)}`);
+  }
+  if (payload.tipoEntrega === 'ENVIO' && payload.cliente.direccion) {
+    printer.bold(true);
+    printer.setTextDoubleHeight();
+    printer.println(limpiar(payload.cliente.direccion));
+    printer.setTextNormal();
+    printer.bold(false);
+  }
+  if (payload.cliente.indicaciones) {
+    printer.println(`Ref: ${limpiar(payload.cliente.indicaciones)}`);
+  }
+  printer.newLine();
+
+  // ── Total ──
+  printer.alignRight();
+  printer.bold(true);
+  printer.setTextDoubleHeight();
+  printer.println(`TOTAL: $${formatARS(payload.total)}`);
+  printer.setTextNormal();
+  printer.bold(false);
+  printer.newLine();
+
+  // ── Rótulo de estado de cobro (fondo oscuro, letras blancas) ──
+  printer.alignCenter();
+  printer.bold(true);
+  printer.invert(true);
+  printer.setTextSize(2, 2);
+  printer.println(payload.estado === 'COBRADO' ? '  COBRADO  ' : '  A PAGAR  ');
+  printer.setTextNormal();
+  printer.invert(false);
+  printer.bold(false);
+  printer.newLine();
+
+  // ── Pie ──
+  printer.drawLine();
+  printer.alignLeft();
+  printer.println(`${payload.pcOrigen}  ·  ${payload.hora}`);
+  if (payload.numeroVenta != null) {
+    printer.alignCenter();
+    printer.println(`Encargo #${payload.numeroVenta} en el programa`);
+    printer.alignLeft();
+  }
+  printer.newLine();
+  printer.cut();
+
+  await printer.execute();
+}
+
 /**
  * Test de impresora — útil para troubleshooting.
  */

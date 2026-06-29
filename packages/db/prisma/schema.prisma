@@ -172,6 +172,25 @@ enum EstadoVenta {
   ANULADA
 }
 
+/// Franja horaria de entrega de un encargo (cuando no se fija una hora exacta).
+enum FranjaEntregaEncargo {
+  MANANA
+  TARDE
+  NOCHE
+}
+
+/// Modalidad de entrega de un encargo.
+enum TipoEntregaEncargo {
+  RETIRO
+  ENVIO
+}
+
+/// Estado de cobro de un encargo: A_PAGAR (se cobra al entregar/retirar) o COBRADO.
+enum EstadoCobroEncargo {
+  A_PAGAR
+  COBRADO
+}
+
 enum TipoCliente {
   CASUAL
   REGISTRADO
@@ -300,9 +319,10 @@ model Usuario {
   creadoPor Usuario?  @relation("UsuarioCreador", fields: [creadoPorId], references: [id])
   creados   Usuario[] @relation("UsuarioCreador")
 
-  ventasAbiertas Venta[] @relation("VentaApertura")
-  ventasCerradas Venta[] @relation("VentaCierre")
-  ventasAnuladas Venta[] @relation("VentaAnulacion")
+  ventasAbiertas      Venta[] @relation("VentaApertura")
+  ventasCerradas      Venta[] @relation("VentaCierre")
+  ventasAnuladas      Venta[] @relation("VentaAnulacion")
+  ventasCobroEncargo  Venta[] @relation("VentaCobroEncargo")
 
   sesionesAbiertas  SesionCaja[] @relation("SesionApertura")
   sesionesCerradas  SesionCaja[] @relation("SesionCierre")
@@ -950,12 +970,32 @@ model Venta {
   /// hash-chain y puede no tener sesión de caja). Ver docs/MIGRACION-INNOVO.md.
   origen String? @db.VarChar(20)
 
-  cliente          Cliente?     @relation(fields: [clienteId], references: [id])
-  listaPrecios     ListaPrecios @relation(fields: [listaPreciosId], references: [id])
-  usuarioApertura  Usuario      @relation("VentaApertura", fields: [usuarioAperturaId], references: [id])
-  usuarioCierre    Usuario?     @relation("VentaCierre", fields: [usuarioCierreId], references: [id])
-  usuarioAnulacion Usuario?     @relation("VentaAnulacion", fields: [usuarioAnulacionId], references: [id])
-  sesionCaja       SesionCaja?  @relation(fields: [sesionCajaId], references: [id])
+  // ── Encargos (pedidos para días futuros — pestaña /encargos) ──────────
+  /// true = es un encargo (pedido para un día futuro). El cobro puede ser
+  /// diferido (se carga A_PAGAR y se cobra días después en la sesión actual).
+  esEncargo             Boolean               @default(false) @map("es_encargo")
+  /// Día prometido de entrega/retiro (solo encargos). @db.Date, TZ AR.
+  fechaEntregaPromesa   DateTime?             @map("fecha_entrega_promesa") @db.Date
+  /// Hora exacta "HH:MM" de entrega (XOR con franjaEntrega).
+  horaEntregaExacta     String?               @map("hora_entrega_exacta") @db.VarChar(5)
+  /// Franja MAÑANA/TARDE/NOCHE (XOR con horaEntregaExacta).
+  franjaEntrega         FranjaEntregaEncargo? @map("franja_entrega")
+  /// RETIRO en local o ENVIO a domicilio.
+  tipoEntregaEncargo    TipoEntregaEncargo?   @map("tipo_entrega_encargo")
+  /// Estado de cobro del encargo: A_PAGAR o COBRADO.
+  estadoCobroEncargo    EstadoCobroEncargo    @default(A_PAGAR) @map("estado_cobro_encargo")
+  /// Momento del cobro (si se cobró días después de cargar el encargo).
+  fechaCobroEncargo     DateTime?             @map("fecha_cobro_encargo")
+  /// Usuario que efectuó el cobro diferido del encargo.
+  usuarioCobroEncargoId String?               @map("usuario_cobro_encargo_id") @db.Uuid
+
+  cliente             Cliente?     @relation(fields: [clienteId], references: [id])
+  listaPrecios        ListaPrecios @relation(fields: [listaPreciosId], references: [id])
+  usuarioApertura     Usuario      @relation("VentaApertura", fields: [usuarioAperturaId], references: [id])
+  usuarioCierre       Usuario?     @relation("VentaCierre", fields: [usuarioCierreId], references: [id])
+  usuarioAnulacion    Usuario?     @relation("VentaAnulacion", fields: [usuarioAnulacionId], references: [id])
+  usuarioCobroEncargo Usuario?     @relation("VentaCobroEncargo", fields: [usuarioCobroEncargoId], references: [id])
+  sesionCaja          SesionCaja?  @relation(fields: [sesionCajaId], references: [id])
 
   items             ItemVenta[]
   pagos             Pago[]
@@ -971,6 +1011,8 @@ model Venta {
   @@index([clienteId])
   // Cierre de día / KPIs filtran por estado=FINALIZADA + rango de fechaFinalizacion
   @@index([estado, fechaFinalizacion])
+  // Encargos: el calendario lista por día de entrega.
+  @@index([esEncargo, fechaEntregaPromesa])
   @@map("ventas")
 }
 
@@ -1424,6 +1466,7 @@ enum TipoTrabajoImpresion {
   TICKET_CLIENTE
   TICKET_DELIVERY
   TICKET_REIMPRESION
+  COMANDA_ENCARGO
   TEST
 }
 
