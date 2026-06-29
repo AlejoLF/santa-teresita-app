@@ -48,6 +48,16 @@
     --green-teresita-700: #1f4d3c;
     --green-teresita-900: #0f2d22;
 
+    /* Madera — pestaña de Encargos (marrón cálido, distinto del verde) */
+    --wood-50: #f7f1ea;
+    --wood-100: #ecdfd0;
+    --wood-200: #d9bfa3;
+    --wood-300: #c2a081;
+    --wood-500: #8a5a3b;
+    --wood-600: #74452b;
+    --wood-700: #5c3620;
+    --wood-900: #3a2114;
+
     /* Crema */
     --cream-50: #fdfbf7;
     --cream-100: #faf6ee;
@@ -73,6 +83,7 @@
     /* Surfaces (alias) */
     --surface-app: var(--cream-50);
     --surface-app-vendedor: var(--cream-100);
+    --surface-app-encargos: var(--wood-50);
     --surface-card: #ffffff;
     --surface-elevated: #ffffff;
     --surface-sunken: var(--cream-100);

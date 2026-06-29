@@ -44,6 +44,9 @@ interface VentaCompleta {
   pagos: Array<{ id: string; metodo: string; monto: string }>;
   tieneCocina: boolean;
   deliveryInfo?: DeliveryInfo | null;
+  /** Encargos (pedidos futuros): mismo flujo de cobro, pero en tema marrón. */
+  esEncargo?: boolean;
+  estadoCobroEncargo?: 'A_PAGAR' | 'COBRADO';
 }
 
 const METODOS = [
@@ -268,7 +271,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
           },
         ],
       });
-      router.push('/cargar-pedido');
+      router.push(venta?.esEncargo ? '/encargos' : '/cargar-pedido');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error procesando el cobro');
     } finally {
@@ -284,7 +287,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
     setProcesando(true);
     try {
       await api.post(`/ventas/${venta!.id}/anular`, { motivo: motivoAnular });
-      router.push('/cargar-pedido');
+      router.push(venta?.esEncargo ? '/encargos' : '/cargar-pedido');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al anular');
     } finally {
@@ -299,19 +302,29 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
   }[venta.estado];
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="bg-teresita-700 text-cream-50 px-6 py-3 flex items-center justify-between">
+    <div className={cn('min-h-screen flex flex-col', venta.esEncargo && 'bg-surface-app-encargos')}>
+      <header
+        className={cn(
+          'px-6 py-3 flex items-center justify-between',
+          venta.esEncargo ? 'bg-wood-700 text-wood-50' : 'bg-teresita-700 text-cream-50',
+        )}
+      >
         <div className="flex items-center gap-3">
           <button
-            onClick={() => router.push('/cargar-pedido')}
-            className="text-cream-100 hover:underline"
+            onClick={() => router.push(venta.esEncargo ? '/encargos' : '/cargar-pedido')}
+            className={venta.esEncargo ? 'text-wood-100 hover:underline' : 'text-cream-100 hover:underline'}
           >
-            ← Volver al cajero
+            ← Volver {venta.esEncargo ? 'a encargos' : 'al cajero'}
           </button>
           {usuario?.rol === 'ADMIN' && (
             <button
               onClick={() => router.push('/admin')}
-              className="bg-teresita-900 hover:bg-ink-900/30 text-cream-50 px-3 py-1 rounded-md text-sm font-medium transition-colors"
+              className={cn(
+                'px-3 py-1 rounded-md text-sm font-medium transition-colors',
+                venta.esEncargo
+                  ? 'bg-wood-900 hover:bg-ink-900/30 text-wood-50'
+                  : 'bg-teresita-900 hover:bg-ink-900/30 text-cream-50',
+              )}
               title="Volver al panel admin"
             >
               ← Panel admin
@@ -320,7 +333,8 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
         </div>
         <div className="flex items-center gap-3">
           <span className="font-display text-md">
-            PEDIDO #{String(venta.numeroOrdenTurno).padStart(3, '0')}
+            {venta.esEncargo ? '📦 ENCARGO' : 'PEDIDO'} #
+            {String(venta.numeroOrdenTurno).padStart(3, '0')}
           </span>
           <span
             className={cn(
@@ -761,7 +775,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
               subtotal={venta.subtotal}
               habilitaDescuentoEfectivo={habilitaDescuentoEfectivo}
               onCancel={() => setMostrarSplit(false)}
-              onCobrado={() => router.push('/cargar-pedido')}
+              onCobrado={() => router.push(venta?.esEncargo ? '/encargos' : '/cargar-pedido')}
             />
           )}
 

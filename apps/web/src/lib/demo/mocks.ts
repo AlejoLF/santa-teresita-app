@@ -26,6 +26,8 @@ const SESSION_KEY = 'sta-demo-state-v2';
 
 interface DemoState {
   ventas: VentaSeed[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  encargos: any[];
   movimientos: typeof movimientosSeed;
   rolActivo: 'VENDEDOR' | 'ADMIN';
   usuarioActivo: { id: string; nombre: string; rol: 'VENDEDOR' | 'ADMIN' };
@@ -34,10 +36,73 @@ interface DemoState {
 function defaultState(): DemoState {
   return {
     ventas: JSON.parse(JSON.stringify(ventasIniciales)),
+    encargos: buildEncargosDemo(),
     movimientos: JSON.parse(JSON.stringify(movimientosSeed)),
     rolActivo: 'VENDEDOR',
     usuarioActivo: { id: 'u-vendedor', nombre: 'Lucía (demo)', rol: 'VENDEDOR' },
   };
+}
+
+/** Encargos demo (pedidos para días futuros). Fechas relativas a hoy. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildEncargosDemo(): any[] {
+  // Fechas relativas a HOY en hora de Argentina (igual base que la UI), formato
+  // YYYY-MM-DD, para que el día calce con el calendario/tarjetas.
+  const arHoy = new Date().toLocaleDateString('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+  });
+  const dia = (n: number) => {
+    const [y, mo, d] = arHoy.split('-').map(Number);
+    const dt = new Date(Date.UTC(y!, (mo ?? 1) - 1, d ?? 1));
+    dt.setUTCDate(dt.getUTCDate() + n);
+    return dt.toISOString().slice(0, 10);
+  };
+  const enc = (o: Record<string, unknown>) => ({
+    canal: 'MOSTRADOR',
+    modalidad: 'TAKE_AWAY',
+    tieneCocina: false,
+    fechaApertura: addDays(-1),
+    esEncargo: true,
+    pagos: [],
+    ...o,
+  });
+  return [
+    enc({
+      id: 'enc-1', numero: 4101, numeroOrdenTurno: 12, estado: 'PROCESADA',
+      estadoCobroEncargo: 'A_PAGAR', tipoEntregaEncargo: 'RETIRO',
+      fechaEntregaPromesa: dia(0), horaEntregaExacta: null, franjaEntrega: 'TARDE',
+      subtotal: '9000', total: '9000',
+      items: [{ id: 'ei1', productoId: 'p-enc-1', nombreSnapshot: 'Ravioles tradicionales · Ricota y espinaca', cantidad: '6', unidad: 'UNIDAD', precioUnitario: '1500', totalLinea: '9000', cocinaInterviene: false, modificadoresAplicados: [{ opcionNombre: 'Ricota y espinaca' }] }],
+      deliveryInfo: { direccionSnapshot: { clienteNombre: 'Marta López', clienteTelefono: '221-555-7788', direccion: null, _retiro: true } },
+    }),
+    enc({
+      id: 'enc-2', numero: 4102, numeroOrdenTurno: 18, estado: 'PROCESADA',
+      estadoCobroEncargo: 'A_PAGAR', tipoEntregaEncargo: 'ENVIO',
+      canal: 'TELEFONO', modalidad: 'DELIVERY_PROPIO',
+      fechaEntregaPromesa: dia(0), horaEntregaExacta: '20:30', franjaEntrega: null,
+      subtotal: '14400', total: '14400',
+      items: [{ id: 'ei2', productoId: 'p-enc-2', nombreSnapshot: 'Sorrentinos caseros · Jamón y mozzarella', cantidad: '8', unidad: 'UNIDAD', precioUnitario: '1800', totalLinea: '14400', cocinaInterviene: false, modificadoresAplicados: [{ opcionNombre: 'Jamón y mozzarella' }] }],
+      deliveryInfo: { direccionSnapshot: { clienteNombre: 'Flia. Gómez', clienteTelefono: '221-555-3344', direccion: 'Calle 50 nº 1234', indicaciones: 'Timbre azul', _retiro: false } },
+    }),
+    enc({
+      id: 'enc-3', numero: 4103, numeroOrdenTurno: 21, estado: 'FINALIZADA',
+      estadoCobroEncargo: 'COBRADO', tipoEntregaEncargo: 'RETIRO',
+      fechaEntregaPromesa: dia(1), horaEntregaExacta: null, franjaEntrega: 'MANANA',
+      subtotal: '6000', total: '6000', fechaFinalizacion: addDays(-1),
+      items: [{ id: 'ei3', productoId: 'p-enc-3', nombreSnapshot: 'Lasaña casera', cantidad: '2', unidad: 'PORCION', precioUnitario: '3000', totalLinea: '6000', cocinaInterviene: true, modificadoresAplicados: null }],
+      pagos: [{ id: 'pg-enc-3', metodo: 'EFECTIVO', monto: '6000' }],
+      deliveryInfo: { direccionSnapshot: { clienteNombre: 'Pedro N.', clienteTelefono: '221-555-9911', direccion: null, _retiro: true } },
+    }),
+    enc({
+      id: 'enc-4', numero: 4104, numeroOrdenTurno: 25, estado: 'PROCESADA',
+      estadoCobroEncargo: 'A_PAGAR', tipoEntregaEncargo: 'ENVIO',
+      canal: 'TELEFONO', modalidad: 'DELIVERY_PROPIO',
+      fechaEntregaPromesa: dia(3), horaEntregaExacta: null, franjaEntrega: 'NOCHE',
+      subtotal: '21000', total: '21000',
+      items: [{ id: 'ei4', productoId: 'p-enc-4', nombreSnapshot: 'Canelones de verdura', cantidad: '14', unidad: 'UNIDAD', precioUnitario: '1500', totalLinea: '21000', cocinaInterviene: true, modificadoresAplicados: null }],
+      deliveryInfo: { direccionSnapshot: { clienteNombre: 'Cumple Sofía', clienteTelefono: '221-555-2200', direccion: 'Av. 7 nº 880', _retiro: false } },
+    }),
+  ];
 }
 
 export function buildCierrePayloadFromDemo(extras?: { contado?: string; observaciones?: string }) {
@@ -1095,7 +1160,8 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
   }
   let m = p.match(/^\/ventas\/([^/]+)$/);
   if (m && method === 'GET') {
-    const v = state.ventas.find((x) => x.id === m![1]);
+    const v =
+      state.ventas.find((x) => x.id === m![1]) ?? state.encargos.find((x) => x.id === m![1]);
     if (!v) return notFound('Venta no encontrada');
     return ok(v);
   }
@@ -1142,18 +1208,20 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
   }
   m = p.match(/^\/ventas\/([^/]+)\/finalizar$/);
   if (m && method === 'POST') {
-    const v = state.ventas.find((x) => x.id === m![1]);
+    const v = state.ventas.find((x) => x.id === m![1]) ?? state.encargos.find((x) => x.id === m![1]);
     if (!v) return notFound();
     const b = body as { pagos: any[] };
     v.estado = 'FINALIZADA';
     v.fechaFinalizacion = new Date().toISOString();
     v.pagos = b.pagos.map((pg: any, i: number) => ({ id: `pg-${Date.now()}-${i}`, metodo: pg.metodo, monto: pg.monto, cuentaId: pg.cuentaId }));
+    // Encargo: marcar cobrado (en la sesión "actual" de la demo).
+    if (v.esEncargo) v.estadoCobroEncargo = 'COBRADO';
     saveState(state);
     return ok(v);
   }
   m = p.match(/^\/ventas\/([^/]+)\/anular$/);
   if (m && method === 'POST') {
-    const v = state.ventas.find((x) => x.id === m![1]);
+    const v = state.ventas.find((x) => x.id === m![1]) ?? state.encargos.find((x) => x.id === m![1]);
     if (!v) return notFound();
     v.estado = 'ANULADA';
     saveState(state);
@@ -1165,6 +1233,113 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
     if (!v) return notFound();
     saveState(state);
     return ok(v);
+  }
+
+  // ─── Encargos (pedidos para días futuros) ──────────────────────────
+  if (p === '/encargos' && method === 'GET') {
+    const desde = search.get('desde') ?? '0000-00-00';
+    const hasta = search.get('hasta') ?? '9999-99-99';
+    const encargos = state.encargos
+      .filter((e) => e.estado !== 'ANULADA')
+      .filter((e) => {
+        const f = (e.fechaEntregaPromesa ?? '').slice(0, 10);
+        return f >= desde && f <= hasta;
+      })
+      .map((e) => {
+        const snap = e.deliveryInfo?.direccionSnapshot ?? {};
+        return {
+          id: e.id,
+          numero: e.numero,
+          numeroOrdenTurno: e.numeroOrdenTurno,
+          estado: e.estado,
+          total: e.total,
+          tipoEntrega: e.tipoEntregaEncargo,
+          fechaEntrega: (e.fechaEntregaPromesa ?? '').slice(0, 10),
+          horaEntregaExacta: e.horaEntregaExacta,
+          franjaEntrega: e.franjaEntrega,
+          estadoCobro: e.estadoCobroEncargo,
+          cliente: snap.clienteNombre ?? null,
+          telefono: snap.clienteTelefono ?? null,
+          itemsCount: e.items?.length ?? 0,
+        };
+      });
+    return ok({ encargos });
+  }
+  if (p === '/encargos' && method === 'POST') {
+    const b = body as any;
+    const num = Math.max(4100, ...state.encargos.map((e) => e.numero)) + 1;
+    const items = (b.items || []).map((it: any, idx: number) => {
+      const prod = findProducto(it.productoId);
+      const delta = (it.modificadores || []).reduce((a: number, mm: any) => a + Number(mm.deltaPrecio || 0), 0);
+      const precio = (prod ? Number(prod.precioBase) : 1000) + delta;
+      const cant = Number(it.cantidad);
+      const totalLinea = prod && prod.unidadPrecio === 'POR_KILO' ? (cant / 1000) * precio : cant * precio;
+      const sabor = (it.modificadores || []).map((mm: any) => mm.opcionNombre).join(', ');
+      return {
+        id: `ei-${Date.now()}-${idx}`,
+        productoId: it.productoId,
+        nombreSnapshot: sabor ? `${prod?.nombre ?? 'Producto'} · ${sabor}` : prod?.nombre ?? 'Producto',
+        cantidad: cant.toString(),
+        unidad: prod?.formaVenta ?? 'UNIDAD',
+        precioUnitario: precio.toString(),
+        totalLinea: totalLinea.toString(),
+        cocinaInterviene: prod?.tipoProducto.cocinaInterviene ?? false,
+        modificadoresAplicados: (it.modificadores || []).map((mm: any) => ({ opcionNombre: mm.opcionNombre })),
+        observacion: it.observacion ?? null,
+      };
+    });
+    const total = items.reduce((a: number, i: any) => a + Number(i.totalLinea), 0);
+    const esEnvio = b.tipoEntrega === 'ENVIO';
+    const nueva = {
+      id: `enc-${Date.now()}`,
+      numero: num,
+      numeroOrdenTurno: state.encargos.length + 30,
+      canal: esEnvio ? 'TELEFONO' : 'MOSTRADOR',
+      modalidad: esEnvio ? 'DELIVERY_PROPIO' : 'TAKE_AWAY',
+      estado: 'PROCESADA',
+      tieneCocina: items.some((i: any) => i.cocinaInterviene),
+      fechaApertura: new Date().toISOString(),
+      esEncargo: true,
+      estadoCobroEncargo: 'A_PAGAR',
+      tipoEntregaEncargo: b.tipoEntrega,
+      fechaEntregaPromesa: b.fechaEntrega,
+      horaEntregaExacta: b.horaEntregaExacta ?? null,
+      franjaEntrega: b.franjaEntrega ?? null,
+      subtotal: total.toFixed(2),
+      total: total.toFixed(2),
+      pagos: [],
+      items,
+      deliveryInfo: {
+        direccionSnapshot: {
+          clienteNombre: b.clienteNombre,
+          clienteTelefono: b.clienteTelefono,
+          direccion: esEnvio ? b.direccionEntrega : null,
+          indicaciones: b.indicacionesEntrega ?? null,
+          _retiro: !esEnvio,
+        },
+      },
+    };
+    state.encargos.push(nueva);
+    saveState(state);
+    return ok(nueva);
+  }
+  m = p.match(/^\/encargos\/([^/]+)$/);
+  if (m && method === 'PATCH') {
+    const e = state.encargos.find((x) => x.id === m![1]);
+    if (!e) return notFound('Encargo no encontrado');
+    const b = body as any;
+    if (b.fechaEntrega) e.fechaEntregaPromesa = b.fechaEntrega;
+    if (b.horaEntregaExacta !== undefined) e.horaEntregaExacta = b.horaEntregaExacta;
+    if (b.franjaEntrega !== undefined) e.franjaEntrega = b.franjaEntrega;
+    if (b.tipoEntrega !== undefined) e.tipoEntregaEncargo = b.tipoEntrega;
+    if (!e.deliveryInfo) e.deliveryInfo = { direccionSnapshot: {} };
+    const snap = e.deliveryInfo.direccionSnapshot;
+    if (b.clienteNombre !== undefined) snap.clienteNombre = b.clienteNombre;
+    if (b.clienteTelefono !== undefined) snap.clienteTelefono = b.clienteTelefono;
+    if (b.direccionEntrega !== undefined) snap.direccion = b.direccionEntrega;
+    if (b.indicacionesEntrega !== undefined) snap.indicaciones = b.indicacionesEntrega;
+    saveState(state);
+    return ok(e);
   }
 
   // ─── Admin: dashboard / stats ──────────────────────────────────────

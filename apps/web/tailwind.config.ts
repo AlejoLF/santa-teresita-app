@@ -25,6 +25,18 @@ const config: Config = {
           200: 'var(--cream-200)',
           300: 'var(--cream-300)',
         },
+        // Madera — identidad de la pestaña de ENCARGOS (marrón, no el verde
+        // teresita), para que los empleados no la confundan con el POS normal.
+        wood: {
+          50: 'var(--wood-50)',
+          100: 'var(--wood-100)',
+          200: 'var(--wood-200)',
+          300: 'var(--wood-300)',
+          500: 'var(--wood-500)',
+          600: 'var(--wood-600)',
+          700: 'var(--wood-700)',
+          900: 'var(--wood-900)',
+        },
         ink: {
           900: 'var(--ink-900)',
           700: 'var(--ink-700)',
@@ -51,6 +63,7 @@ const config: Config = {
         surface: {
           app: 'var(--surface-app)',
           'app-vendedor': 'var(--surface-app-vendedor)',
+          'app-encargos': 'var(--surface-app-encargos)',
           card: 'var(--surface-card)',
           elevated: 'var(--surface-elevated)',
           sunken: 'var(--surface-sunken)',

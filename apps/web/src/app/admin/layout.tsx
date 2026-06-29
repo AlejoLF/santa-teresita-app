@@ -25,6 +25,7 @@ const MOBILE_TABS = [
 const NAV: NavItem[] = [
   { group: 'Inicio', label: 'Dashboard', href: '/admin', icon: '📊' },
   { group: 'Movimientos', label: 'Ventas', href: '/admin/ventas', icon: '🧾' },
+  { group: 'Movimientos', label: 'Encargos', href: '/admin/encargos', icon: '🗓️' },
   { group: 'Movimientos', label: 'Aportes y egresos', href: '/admin/movimientos', icon: '💸' },
   { group: 'Movimientos', label: 'Cuentas y saldos', href: '/admin/cuentas', icon: '💰' },
   { group: 'Movimientos', label: 'Facturas de compra', href: '/admin/facturas', icon: '📑' },

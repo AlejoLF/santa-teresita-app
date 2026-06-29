@@ -1456,6 +1456,9 @@ export default function CargarPedidoPage() {
           )}
         </div>
         <div className="flex gap-4">
+          <button onClick={() => router.push('/encargos')} className="text-wood-700 hover:text-wood-900 font-medium">
+            📦 Encargos
+          </button>
           <button onClick={() => router.push('/historial')} className="hover:text-ink-700">
             Historial (F10)
           </button>
