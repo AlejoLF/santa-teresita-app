@@ -122,7 +122,7 @@ export default function MayoristaDetallePage({
     const filas = enRango
       .map(
         (r) =>
-          `<tr><td>#${r.numero}</td><td>${new Date(r.fecha).toLocaleDateString('es-AR')}</td><td>${r.itemsCount} ítems</td><td style="text-align:right">$ ${Number(
+          `<tr><td>#${r.numero}</td><td>${new Date(r.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td><td>${r.itemsCount} ítems</td><td style="text-align:right">$ ${Number(
             r.total,
           ).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td></tr>`,
       )
@@ -137,7 +137,7 @@ export default function MayoristaDetallePage({
       <body><h1>Resumen de cuenta — ${esc(c.nombre)}</h1>
       <div class="sub">${c.cuit ? 'CUIT ' + esc(c.cuit) + ' · ' : ''}Período ${new Date(
         desde,
-      ).toLocaleDateString('es-AR')} a ${new Date(hasta).toLocaleDateString('es-AR')} · ${
+      ).toLocaleDateString('es-AR', { timeZone: 'UTC' })} a ${new Date(hasta).toLocaleDateString('es-AR', { timeZone: 'UTC' })} · ${
       enRango.length
     } remitos</div>
       <table><thead><tr><th>Remito</th><th>Fecha</th><th>Detalle</th><th style="text-align:right">Total</th></tr></thead>
@@ -283,7 +283,7 @@ export default function MayoristaDetallePage({
                 <tr key={r.id} className={cn(r.estado === 'ANULADO' && 'opacity-50')}>
                   <td className="px-4 py-2 font-mono text-ink-700">#{r.numero}</td>
                   <td className="px-4 py-2 text-ink-700 text-xs">
-                    {new Date(r.fecha).toLocaleDateString('es-AR')}
+                    {new Date(r.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                   </td>
                   <td className="px-4 py-2 text-ink-500 text-xs">
                     {r.itemsCount} ítems
@@ -325,7 +325,7 @@ export default function MayoristaDetallePage({
                   <div className="min-w-0">
                     <div className="font-medium text-ink-900 truncate">
                       <span className="font-mono text-ink-700">#{r.numero}</span> ·{' '}
-                      {new Date(r.fecha).toLocaleDateString('es-AR')}
+                      {new Date(r.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                     </div>
                     <div className="text-2xs font-mono text-ink-500 truncate">
                       {r.itemsCount} ítems
@@ -385,7 +385,7 @@ export default function MayoristaDetallePage({
               {data.cobros.map((m) => (
                 <tr key={m.id}>
                   <td className="px-4 py-2 text-ink-700 text-xs">
-                    {new Date(m.fecha).toLocaleDateString('es-AR')}
+                    {new Date(m.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                   </td>
                   <td className="px-4 py-2 text-ink-700 text-xs">{m.cuenta}</td>
                   <td className="px-4 py-2 text-ink-500 text-xs italic">{m.observacion ?? '—'}</td>
@@ -405,7 +405,7 @@ export default function MayoristaDetallePage({
                   <div className="min-w-0">
                     <div className="font-medium text-ink-900 truncate">{m.cuenta}</div>
                     <div className="text-2xs font-mono text-ink-500 truncate">
-                      {new Date(m.fecha).toLocaleDateString('es-AR')}
+                      {new Date(m.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                       {m.observacion && ` · ${m.observacion}`}
                     </div>
                   </div>

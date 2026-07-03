@@ -128,7 +128,7 @@ export default function ConfigUsuariosPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-ink-500 text-xs">
-                    {new Date(u.pinUltimoCambioAt).toLocaleDateString('es-AR')}
+                    {new Date(u.pinUltimoCambioAt).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                   </td>
                   <td className="px-4 py-3 text-center">
                     {u.intentosFallidos > 0 ? (
@@ -200,7 +200,7 @@ export default function ConfigUsuariosPage() {
                         {u.rol.toLowerCase()}
                       </span>
                       <span className="text-2xs font-mono text-ink-500">
-                        PIN: {new Date(u.pinUltimoCambioAt).toLocaleDateString('es-AR')}
+                        PIN: {new Date(u.pinUltimoCambioAt).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                       </span>
                       {u.intentosFallidos > 0 && (
                         <span className="text-2xs font-mono text-saffron-600">

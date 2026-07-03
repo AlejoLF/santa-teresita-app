@@ -399,7 +399,7 @@ export default function PagarFacturasPage({ params }: { params: Promise<{ id: st
                         {venc ? (
                           <span className={cn(vencido && 'text-pomodoro-600 font-semibold')}>
                             {vencido && '⚠ '}
-                            {venc.toLocaleDateString('es-AR')}
+                            {venc.toLocaleDateString('es-AR', { timeZone: 'UTC' })}
                           </span>
                         ) : (
                           <span className="text-ink-300">—</span>
@@ -465,7 +465,7 @@ export default function PagarFacturasPage({ params }: { params: Promise<{ id: st
                               )}
                             >
                               {vencido && '⚠ '}
-                              vence {venc.toLocaleDateString('es-AR')}
+                              vence {venc.toLocaleDateString('es-AR', { timeZone: 'UTC' })}
                             </div>
                           )}
                         </div>
@@ -679,7 +679,7 @@ export default function PagarFacturasPage({ params }: { params: Promise<{ id: st
               <span className="text-ink-500">Total:</span>
               <MoneyAmount value={totalAPagar.toFixed(2)} className="text-md text-teresita-700 font-semibold" />
               <span className="text-ink-500">Fecha:</span>
-              <span>{new Date().toLocaleDateString('es-AR')}</span>
+              <span>{new Date().toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</span>
             </div>
 
             {modo === 'a_cuenta' ? (

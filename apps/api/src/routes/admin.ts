@@ -579,36 +579,41 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     '/admin/ventas-por-hora',
     { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
     async () => {
-      const ahora = new Date();
-      const inicioHoy = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate());
-      // Mismo día de la semana pasada: [hoy-7d 00:00, hoy-6d 00:00)
-      const inicioSemanaPasada = new Date(inicioHoy);
-      inicioSemanaPasada.setDate(inicioSemanaPasada.getDate() - 7);
-      const finSemanaPasada = new Date(inicioSemanaPasada);
-      finSemanaPasada.setDate(finSemanaPasada.getDate() + 1);
+      // TODO en hora ARGENTINA explícita, sin depender de la TZ del proceso ni
+      // de la TZ de sesión de Postgres. Las columnas son `timestamp` naive que
+      // guardan UTC → la conversión correcta es UTC-primero:
+      //   (col AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires')
+      // (Incidente: EXTRACT(HOUR) directo devolvía la hora UTC → el gráfico
+      // mostraba "hora europea", 3 h adelantada.)
+      const hoyAR = new Date().toLocaleDateString('en-CA', {
+        timeZone: 'America/Argentina/Buenos_Aires',
+      });
+      // Mismo día de la semana pasada (aritmética segura a mediodía UTC).
+      const dAnterior = new Date(`${hoyAR}T12:00:00Z`);
+      dAnterior.setUTCDate(dAnterior.getUTCDate() - 7);
+      const semanaPasadaAR = dAnterior.toISOString().slice(0, 10);
 
-      // Postgres: extraer hora y agrupar (hoy + mismo día semana pasada)
+      // Postgres: extraer hora AR y agrupar (hoy + mismo día semana pasada)
       const [rows, rowsAnterior] = await Promise.all([
         prisma.$queryRaw<Array<{ hora: number; cantidad: bigint; total: number }>>`
           SELECT
-            EXTRACT(HOUR FROM fecha_finalizacion)::int AS hora,
+            EXTRACT(HOUR FROM (fecha_finalizacion AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS hora,
             COUNT(*)::bigint AS cantidad,
             SUM(total)::float AS total
           FROM ventas
           WHERE estado = 'FINALIZADA'
-            AND fecha_finalizacion >= ${inicioHoy}
+            AND (fecha_finalizacion AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires')::date = ${hoyAR}::date
           GROUP BY hora
           ORDER BY hora ASC
         `,
         prisma.$queryRaw<Array<{ hora: number; cantidad: bigint; total: number }>>`
           SELECT
-            EXTRACT(HOUR FROM fecha_finalizacion)::int AS hora,
+            EXTRACT(HOUR FROM (fecha_finalizacion AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS hora,
             COUNT(*)::bigint AS cantidad,
             SUM(total)::float AS total
           FROM ventas
           WHERE estado = 'FINALIZADA'
-            AND fecha_finalizacion >= ${inicioSemanaPasada}
-            AND fecha_finalizacion < ${finSemanaPasada}
+            AND (fecha_finalizacion AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires')::date = ${semanaPasadaAR}::date
           GROUP BY hora
           ORDER BY hora ASC
         `,
@@ -631,12 +636,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         const ra = mapAnterior.get(h);
         horasSemanaAnterior.push({ hora: h, cantidad: ra?.cantidad ?? 0, total: ra?.total ?? 0 });
       }
-      // Etiqueta del día comparado, ej. "sábado 24/06" (TZ del proceso = AR en el .exe).
-      const diaAnteriorLabel = inicioSemanaPasada.toLocaleDateString('es-AR', {
-        weekday: 'long',
-        day: '2-digit',
-        month: '2-digit',
-      });
+      // Etiqueta del día comparado, ej. "sábado 24/06". Mediodía UTC + timeZone
+      // UTC para que el día no se corra sin importar la TZ del proceso.
+      const diaAnteriorLabel = new Date(`${semanaPasadaAR}T12:00:00Z`).toLocaleDateString(
+        'es-AR',
+        { timeZone: 'UTC', weekday: 'long', day: '2-digit', month: '2-digit' },
+      );
       return { horas, horasSemanaAnterior, diaAnteriorLabel };
     },
   );

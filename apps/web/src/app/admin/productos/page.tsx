@@ -922,7 +922,7 @@ function ProductoEditModal({
                         → <MoneyAmount value={h.precioNuevo} className="text-teresita-700" />
                       </div>
                       <div className="text-ink-500">
-                        {new Date(h.fechaCambio).toLocaleDateString('es-AR')}{' '}
+                        {new Date(h.fechaCambio).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}{' '}
                         {h.lista && `· ${h.lista.nombre}`}
                       </div>
                       {h.motivo && (

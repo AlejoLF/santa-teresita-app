@@ -108,7 +108,7 @@ export default function FacturaDetallePage({ params }: { params: Promise<{ id: s
             </h1>
             <p className="text-sm text-ink-500">
               {factura.proveedor.nombre} · Emitida el{' '}
-              {new Date(factura.fechaEmision).toLocaleDateString('es-AR')}
+              {new Date(factura.fechaEmision).toLocaleDateString('es-AR', { timeZone: 'UTC' })}
             </p>
           </div>
           <span className={cn('text-2xs font-medium px-2 py-0.5 rounded uppercase tracking-wider', estadoBadge.cls)}>
@@ -617,7 +617,7 @@ function ReadOnlyView({ factura }: { factura: FacturaDetalle }) {
                     {pf.pago.cuenta.nombre} · {pf.pago.metodo}
                   </div>
                   <div className="text-2xs text-ink-500">
-                    {new Date(pf.pago.fecha).toLocaleDateString('es-AR')}
+                    {new Date(pf.pago.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                     {pf.pago.numeroReferencia && ` · ref. ${pf.pago.numeroReferencia}`}
                   </div>
                 </div>

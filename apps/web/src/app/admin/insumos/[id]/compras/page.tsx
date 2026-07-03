@@ -235,7 +235,7 @@ export default function ComprasProveedorPage({
                                   className="flex justify-between gap-2 py-1 border-b border-cream-200 last:border-0"
                                 >
                                   <span className="text-ink-500 w-24">
-                                    {new Date(h.fecha).toLocaleDateString('es-AR')}
+                                    {new Date(h.fecha).toLocaleDateString('es-AR', { timeZone: 'UTC' })}
                                   </span>
                                   <span className="text-ink-700 flex-1">FB {h.numero}</span>
                                   <span className="w-20 text-right">
@@ -345,7 +345,7 @@ export default function ComprasProveedorPage({
                               className="flex justify-between gap-2 py-1 border-b border-cream-200 last:border-0"
                             >
                               <span className="text-ink-500">
-                                {new Date(h.fecha).toLocaleDateString('es-AR')}
+                                {new Date(h.fecha).toLocaleDateString('es-AR', { timeZone: 'UTC' })}
                               </span>
                               <span className="text-right">
                                 <MoneyAmount value={h.precio} />

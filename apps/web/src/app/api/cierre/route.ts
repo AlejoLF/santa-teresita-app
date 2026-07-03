@@ -48,6 +48,7 @@ function esc(v: unknown): string {
 
 function buildEmailHtml(p: CierrePayload): string {
   const fecha = new Date(p.fecha).toLocaleDateString('es-AR', {
+    timeZone: 'UTC', // fecha de sesión es @db.Date (medianoche UTC); con TZ AR corre 1 día atrás
     weekday: 'long',
     day: 'numeric',
     month: 'long',
@@ -182,6 +183,7 @@ export async function POST(request: Request) {
     const from = process.env.CIERRE_FROM ?? 'Santa Teresita <onboarding@resend.dev>';
 
     const fechaStr = new Date(payload.fecha).toLocaleDateString('es-AR', {
+      timeZone: 'UTC', // fecha de sesión es @db.Date (medianoche UTC); con TZ AR corre 1 día atrás
       day: '2-digit',
       month: '2-digit',
       year: '2-digit',

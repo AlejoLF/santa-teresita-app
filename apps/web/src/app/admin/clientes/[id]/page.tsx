@@ -159,7 +159,7 @@ export default function ClienteDetallePage({
           <div className="text-2xs text-ink-500 uppercase">Última venta</div>
           <span className="text-sm text-ink-900 font-mono">
             {data.stats.ultimaVenta
-              ? new Date(data.stats.ultimaVenta).toLocaleDateString('es-AR')
+              ? new Date(data.stats.ultimaVenta).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })
               : '—'}
           </span>
         </div>
@@ -261,6 +261,7 @@ export default function ClienteDetallePage({
                 >
                   <td className="px-4 py-2 font-mono text-xs text-ink-700">
                     {new Date(v.fechaApertura).toLocaleDateString('es-AR', {
+                      timeZone: 'America/Argentina/Buenos_Aires',
                       day: '2-digit',
                       month: '2-digit',
                       year: '2-digit',
@@ -314,6 +315,7 @@ export default function ClienteDetallePage({
                     </Link>
                     <div className="text-2xs font-mono text-ink-500 truncate mt-0.5">
                       {new Date(v.fechaApertura).toLocaleDateString('es-AR', {
+                        timeZone: 'America/Argentina/Buenos_Aires',
                         day: '2-digit',
                         month: '2-digit',
                         year: '2-digit',

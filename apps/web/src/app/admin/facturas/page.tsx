@@ -107,7 +107,7 @@ export default function FacturasInboxPage() {
                       </div>
                       <div className="text-2xs text-ink-500 font-mono">
                         {f.tipoComprobante.replace('_', ' ')} {f.puntoVenta ? `${f.puntoVenta}-` : ''}
-                        {f.numero} · {new Date(f.fechaEmision).toLocaleDateString('es-AR')} · {f.itemsCount} item{f.itemsCount === 1 ? '' : 's'}
+                        {f.numero} · {new Date(f.fechaEmision).toLocaleDateString('es-AR', { timeZone: 'UTC' })} · {f.itemsCount} item{f.itemsCount === 1 ? '' : 's'}
                         {f.ocrConfianza != null && ` · OCR ${Math.round(Number(f.ocrConfianza) * 100)}%`}
                       </div>
                     </div>

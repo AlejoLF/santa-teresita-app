@@ -83,6 +83,7 @@ function fmtTime(iso: string | null): string {
 
 function fmtFecha(iso: string): string {
   return new Date(iso).toLocaleDateString('es-AR', {
+    timeZone: 'UTC', // sesion.fecha es @db.Date (medianoche UTC); con TZ AR corre 1 día atrás
     weekday: 'short',
     day: '2-digit',
     month: 'short',

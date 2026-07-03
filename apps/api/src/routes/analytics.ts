@@ -132,7 +132,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         ),
         v AS (
           SELECT
-            (fecha_finalizacion AT TIME ZONE 'America/Argentina/Buenos_Aires')::date AS fecha,
+            (fecha_finalizacion AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires')::date AS fecha,
             SUM(total)::text AS total
           FROM ventas
           WHERE estado = 'FINALIZADA'
@@ -142,7 +142,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         ),
         e AS (
           SELECT
-            (fecha_computo AT TIME ZONE 'America/Argentina/Buenos_Aires')::date AS fecha,
+            (fecha_computo AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires')::date AS fecha,
             SUM(monto)::text AS total
           FROM movimientos
           WHERE tipo = 'EGRESO'
@@ -172,7 +172,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         ),
         v AS (
           SELECT
-            EXTRACT(HOUR FROM (fecha_finalizacion AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS hora,
+            EXTRACT(HOUR FROM (fecha_finalizacion AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS hora,
             SUM(total)::text AS monto,
             COUNT(*)::int AS cantidad
           FROM ventas
@@ -277,8 +277,8 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         Array<{ dia: number; hora: number; cantidad: number; total: string }>
       >(Prisma.sql`
         SELECT
-          EXTRACT(DOW FROM (fecha_apertura AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS dia,
-          EXTRACT(HOUR FROM (fecha_apertura AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS hora,
+          EXTRACT(DOW FROM (fecha_apertura AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS dia,
+          EXTRACT(HOUR FROM (fecha_apertura AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS hora,
           COUNT(*)::int AS cantidad,
           COALESCE(SUM(total), 0)::text AS total
         FROM ventas
@@ -293,7 +293,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         Array<{ mes: string; total: string }>
       >(Prisma.sql`
         SELECT
-          to_char(fecha_finalizacion AT TIME ZONE 'America/Argentina/Buenos_Aires', 'YYYY-MM') AS mes,
+          to_char(fecha_finalizacion AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires', 'YYYY-MM') AS mes,
           SUM(total)::text AS total
         FROM ventas
         WHERE estado = 'FINALIZADA'
@@ -308,7 +308,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
       >(Prisma.sql`
         WITH diarios AS (
           SELECT
-            (fecha_finalizacion AT TIME ZONE 'America/Argentina/Buenos_Aires')::date AS fecha,
+            (fecha_finalizacion AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires')::date AS fecha,
             SUM(total)::numeric AS total
           FROM ventas
           WHERE estado = 'FINALIZADA'

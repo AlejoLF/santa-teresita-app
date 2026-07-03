@@ -285,7 +285,7 @@ export default function AdminCierresPage() {
                 <div className="text-2xs text-ink-500 mt-2">
                   ✓ Aprobada por {s.aprobadaAdmin.nombre}
                   {s.fechaAprobacion &&
-                    ` el ${new Date(s.fechaAprobacion).toLocaleDateString('es-AR')}`}
+                    ` el ${new Date(s.fechaAprobacion).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}`}
                 </div>
               )}
 

@@ -188,6 +188,7 @@ export default function AdminDashboard() {
         <h1 className="font-display text-xl text-ink-900">Inicio</h1>
         <span className="text-sm text-ink-500">
           {new Date().toLocaleDateString('es-AR', {
+            timeZone: 'America/Argentina/Buenos_Aires',
             weekday: 'long',
             day: 'numeric',
             month: 'long',
@@ -402,6 +403,7 @@ export default function AdminDashboard() {
                   <tr key={i}>
                     <td className="py-2 font-mono text-ink-700">
                       {new Date(d.fecha).toLocaleDateString('es-AR', {
+                        timeZone: 'UTC', // fecha es @db.Date (medianoche UTC); con TZ AR corre 1 día atrás
                         day: '2-digit',
                         month: '2-digit',
                       })}
@@ -425,6 +427,7 @@ export default function AdminDashboard() {
                     <div className="font-medium text-ink-900 truncate">{d.fuente}</div>
                     <div className="text-2xs font-mono text-ink-500 truncate">
                       {new Date(d.fecha).toLocaleDateString('es-AR', {
+                        timeZone: 'UTC', // fecha es @db.Date (medianoche UTC); con TZ AR corre 1 día atrás
                         day: '2-digit',
                         month: '2-digit',
                       })}

@@ -117,7 +117,7 @@ export default function ConfigParametrosPage() {
                       {p.actualizadoPor && (
                         <div className="text-2xs text-ink-300 mt-0.5">
                           modificado por {p.actualizadoPor} el{' '}
-                          {new Date(p.actualizadoAt).toLocaleDateString('es-AR')}
+                          {new Date(p.actualizadoAt).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                         </div>
                       )}
                     </div>

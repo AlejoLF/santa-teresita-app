@@ -218,6 +218,7 @@ export default function EmpleadoDetallePage({
                   >
                     <td className="px-4 py-2 font-mono text-xs text-ink-700">
                       {new Date(m.fechaComputo).toLocaleDateString('es-AR', {
+                        timeZone: 'America/Argentina/Buenos_Aires',
                         day: '2-digit',
                         month: '2-digit',
                         year: '2-digit',
@@ -275,6 +276,7 @@ export default function EmpleadoDetallePage({
                       </div>
                       <div className="text-2xs font-mono text-ink-500 truncate mt-0.5">
                         {new Date(m.fechaComputo).toLocaleDateString('es-AR', {
+                          timeZone: 'America/Argentina/Buenos_Aires',
                           day: '2-digit',
                           month: '2-digit',
                           year: '2-digit',

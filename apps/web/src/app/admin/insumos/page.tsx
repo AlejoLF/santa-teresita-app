@@ -267,7 +267,7 @@ function ProveedoresTab() {
                         )}
                       >
                         {vencido && '⚠ '}
-                        {venc.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' })}
+                        {venc.toLocaleDateString('es-AR', { timeZone: 'UTC', day: '2-digit', month: '2-digit' })}
                       </span>
                     ) : (
                       <span className="text-ink-300">—</span>
@@ -336,7 +336,7 @@ function ProveedoresTab() {
                       >
                         {vencido && '⚠ '}
                         vence{' '}
-                        {venc.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' })}
+                        {venc.toLocaleDateString('es-AR', { timeZone: 'UTC', day: '2-digit', month: '2-digit' })}
                       </div>
                     )}
                   </div>
@@ -987,6 +987,7 @@ function FilaInsumo({
                       <td className="py-1.5 text-ink-700">
                         {fecha
                           ? fecha.toLocaleDateString('es-AR', {
+                              timeZone: 'UTC', // fechaUltimoPrecio es @db.Date
                               day: '2-digit',
                               month: '2-digit',
                               year: 'numeric',
@@ -1115,6 +1116,7 @@ function TarjetaInsumo({
                   <div className="text-2xs text-ink-500">
                     {fecha
                       ? fecha.toLocaleDateString('es-AR', {
+                          timeZone: 'UTC', // fechaUltimoPrecio es @db.Date
                           day: '2-digit',
                           month: '2-digit',
                           year: 'numeric',

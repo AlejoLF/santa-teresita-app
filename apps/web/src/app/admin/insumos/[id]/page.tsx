@@ -213,13 +213,13 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                       </Link>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-ink-700">
-                      {new Date(f.fechaEmision).toLocaleDateString('es-AR')}
+                      {new Date(f.fechaEmision).toLocaleDateString('es-AR', { timeZone: 'UTC' })}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs">
                       {venc ? (
                         <span className={cn(vencido && 'text-pomodoro-600 font-semibold')}>
                           {vencido && '⚠ '}
-                          {venc.toLocaleDateString('es-AR')}
+                          {venc.toLocaleDateString('es-AR', { timeZone: 'UTC' })}
                         </span>
                       ) : (
                         <span className="text-ink-300">—</span>
@@ -253,7 +253,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                     </div>
                   </td>
                   <td className="px-4 py-3 font-mono text-xs text-ink-700">
-                    {new Date(p.fecha).toLocaleDateString('es-AR')}
+                    {new Date(p.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                   </td>
                   <td className="px-4 py-3 text-2xs text-ink-500">
                     <span className="inline-flex items-center gap-1">
@@ -305,10 +305,10 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                         {f.numero}
                       </Link>
                       <div className="text-2xs font-mono text-ink-500 truncate">
-                        {new Date(f.fechaEmision).toLocaleDateString('es-AR')}
+                        {new Date(f.fechaEmision).toLocaleDateString('es-AR', { timeZone: 'UTC' })}
                         {venc && (
                           <span className={cn('ml-1', vencido && 'text-pomodoro-600 font-semibold')}>
-                            · {vencido && '⚠ '}vence {venc.toLocaleDateString('es-AR')}
+                            · {vencido && '⚠ '}vence {venc.toLocaleDateString('es-AR', { timeZone: 'UTC' })}
                           </span>
                         )}
                       </div>
@@ -333,7 +333,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                     {p.numeroReferencia ?? '(sin ref)'}
                   </div>
                   <div className="text-2xs font-mono text-ink-500 truncate">
-                    {new Date(p.fecha).toLocaleDateString('es-AR')} ·{' '}
+                    {new Date(p.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })} ·{' '}
                     {p.metodo.replace('_', ' ').toLowerCase()}
                     {p.cuentaNombre && ` · ${p.cuentaNombre}`}
                   </div>
@@ -365,7 +365,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                       {p.numeroReferencia ?? '(sin ref)'}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-ink-700">
-                      {new Date(p.fecha).toLocaleDateString('es-AR')}
+                      {new Date(p.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                     </td>
                     <td className="px-4 py-3 text-2xs text-ink-500">
                       {p.metodo.replace('_', ' ').toLowerCase()}
@@ -390,7 +390,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                       {p.numeroReferencia ?? '(sin ref)'}
                     </div>
                     <div className="text-2xs font-mono text-ink-500 truncate">
-                      {new Date(p.fecha).toLocaleDateString('es-AR')} ·{' '}
+                      {new Date(p.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })} ·{' '}
                       {p.metodo.replace('_', ' ').toLowerCase()}
                       {p.cuentaNombre && ` · ${p.cuentaNombre}`}
                     </div>
@@ -427,7 +427,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                     </Link>
                   </td>
                   <td className="px-4 py-2 text-xs text-ink-500">
-                    {new Date(f.fechaEmision).toLocaleDateString('es-AR')}
+                    {new Date(f.fechaEmision).toLocaleDateString('es-AR', { timeZone: 'UTC' })}
                   </td>
                   <td className="px-4 py-2 text-right">
                     <MoneyAmount value={f.total} className="text-basil-600" />
@@ -451,7 +451,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                     {f.numero}
                   </Link>
                   <div className="text-2xs font-mono text-ink-500 truncate">
-                    {new Date(f.fechaEmision).toLocaleDateString('es-AR')}
+                    {new Date(f.fechaEmision).toLocaleDateString('es-AR', { timeZone: 'UTC' })}
                   </div>
                 </div>
                 <div className="shrink-0 text-right">
