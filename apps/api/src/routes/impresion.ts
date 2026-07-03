@@ -37,27 +37,31 @@ export default async function impresionRoutes(fastify: FastifyInstance) {
     },
     async (req) => {
       const q = req.query as { limit: number };
-      // Trabajos pendientes ordenados por fecha de encolado (FIFO).
-      // Update masivo + return en una sola query usando $queryRaw para que
-      // dos agents corriendo en paralelo no agarren el mismo job.
-      const pendientes = await prisma.$transaction(async (tx) => {
-        const ids = await tx.trabajoImpresion.findMany({
-          where: { estado: EstadoTrabajoImpresion.PENDIENTE },
-          orderBy: { encoladoAt: 'asc' },
-          take: q.limit,
-          select: { id: true },
-        });
-        if (ids.length === 0) return [];
-        const idList = ids.map((x) => x.id);
-        await tx.trabajoImpresion.updateMany({
-          where: { id: { in: idList } },
-          data: { estado: EstadoTrabajoImpresion.EN_PROCESO, procesadoAt: new Date() },
-        });
-        return tx.trabajoImpresion.findMany({
-          where: { id: { in: idList } },
-          orderBy: { encoladoAt: 'asc' },
-        });
-      });
+      // Reserva ATÓMICA de trabajos PENDIENTE → EN_PROCESO en una sola sentencia
+      // con `FOR UPDATE SKIP LOCKED` (patrón de cola de trabajos de Postgres).
+      //
+      // Por qué SQL crudo y no findMany+updateMany dentro de $transaction: cada
+      // .exe corre su PROPIO local-agent poleando ESTA misma cola compartida. Con
+      // el default READ COMMITTED, dos agents podían leer las MISMAS filas
+      // PENDIENTE antes de que cualquiera las marcara EN_PROCESO → ambos imprimían
+      // el MISMO ticket (comanda de cocina DUPLICADA entre cajas). `FOR UPDATE SKIP
+      // LOCKED` hace que cada fila la tome exactamente UN agent: el que llega
+      // segundo "saltea" las filas ya bloqueadas y agarra las siguientes (o
+      // ninguna). Sin duplicados y sin bloquearse entre sí. FIFO por encolado_at.
+      const pendientes = await prisma.$queryRaw<
+        Array<{ id: string; tipo: string; destino: string; payload: unknown; intentos: number }>
+      >`
+        UPDATE "trabajos_impresion"
+           SET estado = 'EN_PROCESO', procesado_at = now()
+         WHERE id IN (
+           SELECT id FROM "trabajos_impresion"
+            WHERE estado = 'PENDIENTE'
+            ORDER BY encolado_at ASC
+            LIMIT ${q.limit}
+            FOR UPDATE SKIP LOCKED
+         )
+         RETURNING id, tipo, destino, payload, intentos
+      `;
 
       return pendientes.map((t) => ({
         id: t.id,

@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { cn } from '@/lib/cn';
@@ -57,7 +57,20 @@ const PCORIGEN =
   typeof window !== 'undefined' ? localStorage.getItem('sta-pc-origen') || 'PC1' : 'PC1';
 
 export default function NuevoEncargoPage() {
+  // useSearchParams necesita Suspense en Next 15 (CSR bailout).
+  return (
+    <Suspense fallback={null}>
+      <NuevoEncargoInner />
+    </Suspense>
+  );
+}
+
+function NuevoEncargoInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Modo ADICIÓN: ?adicionDe=<ventaId> — el cliente suma productos a un encargo
+  // existente. Solo se cargan items (los datos de entrega viven en el padre).
+  const adicionDe = searchParams.get('adicionDe');
   const hoy = useMemo(() => hoyISO(), []);
 
   const [productos, setProductos] = useState<Producto[]>([]);
@@ -132,12 +145,15 @@ export default function NuevoEncargoPage() {
   // Validación: todos los campos obligatorios.
   const faltantes: string[] = [];
   if (cart.length === 0) faltantes.push('productos');
-  if (!fechaEntrega) faltantes.push('día');
-  if (modoHora === 'exacta' && !horaExacta) faltantes.push('hora');
-  if (modoHora === 'franja' && !franja) faltantes.push('franja');
-  if (!nombre.trim()) faltantes.push('nombre');
-  if (!telefono.trim()) faltantes.push('teléfono');
-  if (tipoEntrega === 'ENVIO' && !direccion.trim()) faltantes.push('dirección');
+  // En modo adición solo hacen falta los productos (la entrega es la del padre).
+  if (!adicionDe) {
+    if (!fechaEntrega) faltantes.push('día');
+    if (modoHora === 'exacta' && !horaExacta) faltantes.push('hora');
+    if (modoHora === 'franja' && !franja) faltantes.push('franja');
+    if (!nombre.trim()) faltantes.push('nombre');
+    if (!telefono.trim()) faltantes.push('teléfono');
+    if (tipoEntrega === 'ENVIO' && !direccion.trim()) faltantes.push('dirección');
+  }
   const valido = faltantes.length === 0;
 
   async function enviar(accion: 'cargar' | 'cobrar') {
@@ -145,6 +161,21 @@ export default function NuevoEncargoPage() {
     setEnviando(accion);
     setError(null);
     try {
+      if (adicionDe) {
+        // Adición a un encargo existente: solo items + acción.
+        const res = await api.post<{ id: string }>(`/encargos/${adicionDe}/adicion`, {
+          pcOrigen: PCORIGEN,
+          accion,
+          items: cart.map((l) => ({
+            productoId: l.productoId,
+            cantidad: l.cantidad,
+            modificadores: l.modificadores,
+          })),
+        });
+        if (accion === 'cobrar') router.push(`/venta/${res.id}?cobrar=1`);
+        else router.push('/encargos');
+        return;
+      }
       const body = {
         pcOrigen: PCORIGEN,
         accion,
@@ -177,7 +208,9 @@ export default function NuevoEncargoPage() {
   return (
     <div className="max-w-6xl mx-auto p-3 lg:p-5">
       <div className="mb-3 flex items-center justify-between">
-        <h1 className="font-display text-lg text-wood-900">Nuevo encargo</h1>
+        <h1 className="font-display text-lg text-wood-900">
+          {adicionDe ? '➕ Adición al encargo (se cobra aparte)' : 'Nuevo encargo'}
+        </h1>
         <button onClick={() => router.push('/encargos')} className="text-sm text-ink-500 hover:underline">
           ← Volver
         </button>
@@ -293,10 +326,21 @@ export default function NuevoEncargoPage() {
             </div>
           </section>
 
-          {/* Datos OBLIGATORIOS del encargo */}
+          {/* Datos OBLIGATORIOS del encargo (ocultos en modo adición: la
+              entrega/cliente son los del encargo padre) */}
           <section className="card p-3 border-t-4 border-wood-700 space-y-3">
-            <h2 className="font-display text-md text-wood-900">Datos del encargo</h2>
+            <h2 className="font-display text-md text-wood-900">
+              {adicionDe ? 'Confirmar adición' : 'Datos del encargo'}
+            </h2>
+            {adicionDe && (
+              <p className="text-2xs text-ink-500">
+                Los productos se suman al encargo original (misma entrega y cliente). Si el
+                encargo ya estaba pagado, la comanda sale con <b>PAGO PARCIAL</b> hasta cobrar
+                esta adición.
+              </p>
+            )}
 
+            <div className={cn('space-y-3', adicionDe && 'hidden')}>
             <div>
               <label className="block text-2xs font-semibold uppercase text-wood-700 mb-1">
                 Día de entrega *
@@ -445,6 +489,7 @@ export default function NuevoEncargoPage() {
               placeholder="Observaciones del encargo (opcional)"
               className="input text-xs py-1.5"
             />
+            </div>
 
             {!valido && (
               <p className="text-2xs text-pomodoro-600">Falta completar: {faltantes.join(', ')}.</p>

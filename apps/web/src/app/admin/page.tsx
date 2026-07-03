@@ -75,6 +75,9 @@ type DrillDownTipo = 'ventas' | 'efectivo' | 'tarjeta' | 'aportes' | 'egresos' |
 
 interface VentasPorHora {
   horas: Array<{ hora: number; cantidad: number; total: number }>;
+  // Mismo día de la semana anterior (sábado vs sábado pasado), misma escala.
+  horasSemanaAnterior?: Array<{ hora: number; cantidad: number; total: number }>;
+  diaAnteriorLabel?: string;
 }
 
 type PeriodoTipo = 'sesion_actual' | 'dia' | 'semana' | 'custom';
@@ -444,8 +447,16 @@ export default function AdminDashboard() {
       {/* Gráfico ventas por hora (versión ASCII-bar simple, sin libs externas) */}
       {grafico && (
         <section className="card p-5">
-          <h2 className="font-display text-md text-ink-900 mb-3">Ventas por hora · hoy</h2>
-          <VentasPorHoraChart data={grafico.horas} />
+          <h2 className="font-display text-md text-ink-900 mb-1">Ventas por hora · hoy</h2>
+          {grafico.diaAnteriorLabel && (
+            <p className="text-2xs text-ink-500 mb-3">
+              <span className="inline-block w-2.5 h-2.5 rounded-sm bg-teresita-500 align-middle mr-1" />
+              hoy ·{' '}
+              <span className="inline-block w-2.5 h-2.5 rounded-sm bg-wood-300 align-middle mx-1" />
+              {grafico.diaAnteriorLabel} (semana pasada, misma hora)
+            </p>
+          )}
+          <VentasPorHoraChart data={grafico.horas} anterior={grafico.horasSemanaAnterior} />
         </section>
       )}
     </div>
@@ -807,29 +818,53 @@ function DrillCategoria({
 
 function VentasPorHoraChart({
   data,
+  anterior,
 }: {
   data: Array<{ hora: number; cantidad: number; total: number }>;
+  anterior?: Array<{ hora: number; cantidad: number; total: number }>;
 }) {
-  const max = Math.max(1, ...data.map((d) => d.total));
+  // Escala común: el máximo entre HOY y la semana pasada, para que las barras
+  // sean comparables a simple vista.
+  const max = Math.max(
+    1,
+    ...data.map((d) => d.total),
+    ...(anterior ?? []).map((d) => d.total),
+  );
+  const anteriorPorHora = new Map((anterior ?? []).map((d) => [d.hora, d]));
   return (
-    <div className="grid gap-1">
+    <div className="grid gap-1.5">
       {data.map((d) => {
         const pct = (d.total / max) * 100;
+        const ant = anteriorPorHora.get(d.hora);
+        const pctAnt = ant ? (ant.total / max) * 100 : 0;
         return (
           <div key={d.hora} className="flex items-center gap-2 text-xs">
             <span className="font-mono w-10 text-ink-500">
               {String(d.hora).padStart(2, '0')}:00
             </span>
-            <div className="flex-1 bg-cream-200 rounded h-5 overflow-hidden">
-              <div
-                className="bg-teresita-500 h-full transition-all duration-base"
-                style={{ width: `${pct}%` }}
-              />
+            <div className="flex-1">
+              <div className="bg-cream-200 rounded h-4 overflow-hidden">
+                <div
+                  className="bg-teresita-500 h-full transition-all duration-base"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              {ant && (
+                <div
+                  className="bg-cream-100 rounded-b h-2 overflow-hidden"
+                  title={`Semana pasada: $${ant.total.toLocaleString('es-AR')} (${ant.cantidad} ventas)`}
+                >
+                  <div className="bg-wood-300 h-full" style={{ width: `${pctAnt}%` }} />
+                </div>
+              )}
             </div>
             <span className="font-mono w-24 text-right text-ink-700">
               <MoneyAmount value={d.total} />
             </span>
-            <span className="font-mono w-12 text-right text-ink-500">{d.cantidad}</span>
+            <span className="font-mono w-20 text-right text-ink-400 text-2xs">
+              {ant ? <>vs <MoneyAmount value={ant.total} /></> : '—'}
+            </span>
+            <span className="font-mono w-10 text-right text-ink-500">{d.cantidad}</span>
           </div>
         );
       })}

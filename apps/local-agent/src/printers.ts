@@ -69,6 +69,28 @@ function limpiar(s: unknown): string {
   return String(s ?? '').replace(/[\x00-\x1f\x7f]/g, ' ');
 }
 
+const ASCII_MAP: Record<string, string> = {
+  '¿': '?', '¡': '!', '€': 'EUR', '°': 'o', º: 'o', ª: 'a',
+  '–': '-', '—': '-', '«': '"', '»': '"', '…': '...',
+  '‘': "'", '’': "'", '“': '"', '”': '"',
+};
+
+/**
+ * Transcribe texto a ASCII puro (< 0x80). Necesario para comanderas cuya página
+ * de códigos activa NO es la latina (PC850) sino una multibyte tipo CJK: ahí
+ * cada byte alto (acento á/é/í/ó/ú/ñ) se interpreta como el PRIMER byte de un
+ * glifo de 2 bytes → imprime un símbolo raro (ej. "徢") Y se COME el carácter
+ * siguiente (por eso "Teléfono" salía "Tel徢ono", sin la 'f'). Mandando solo
+ * ASCII ningún byte dispara ese modo. Fold: é→e, ñ→n, ó→o, ¿→?, «»→", …→...
+ */
+function ascii(s: unknown): string {
+  return limpiar(s)
+    .normalize('NFKD') // é → e + ´ (marca combinada) ; ñ → n + ~
+    .replace(/[̀-ͯ]/g, '') // borra las marcas diacríticas combinadas
+    // eslint-disable-next-line no-control-regex
+    .replace(/[^\x20-\x7e]/g, (c) => ASCII_MAP[c] ?? ''); // resto no-ASCII → mapa o se descarta
+}
+
 export function makePrinter(destino: DestinoImpresora): ThermalPrinter {
   const cfg = runtimeConfig[destino];
   return new ThermalPrinter({
@@ -480,65 +502,73 @@ export interface TicketDeliveryPayload {
 
 export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Promise<void> {
   const printer = makePrinter('DELIVERY');
+  // La comandera de DELIVERY es de OTRO modelo: su página de códigos por defecto
+  // es multibyte (tipo CJK), así que los acentos (é/í/ó/ñ) salían como símbolos
+  // raros y se COMÍAN la letra siguiente ("Teléfono" → "Tel徢ono"). Mandamos TODO
+  // el texto como ASCII puro vía `ascii()` — ningún byte alto dispara ese modo.
+  // `PL` = println que siempre foldea a ASCII. `width` = ancho configurado de
+  // ESTA comandera (por si es más angosta que 42) para que las columnas no se
+  // desborden (antes rowTabular usaba 42 fijo y el precio se partía en 2 líneas).
+  const width = getPrinterConfig('DELIVERY').width;
+  const PL = (s: string) => printer.println(ascii(s));
 
   // ── Header ──
   printer.alignCenter();
   printer.bold(true);
-  printer.println('Santa Teresita Pastas');
+  PL('Santa Teresita Pastas');
   printer.bold(false);
-  printer.println('Av. 44 e. 12 y Plaza Paso');
-  printer.println('La Plata, Bs. As.');
+  PL('Av. 44 e. 12 y Plaza Paso');
+  PL('La Plata, Bs. As.');
   printer.newLine();
 
   printer.bold(true);
-  printer.println('DELIVERY');
+  PL('DELIVERY');
   // Número de COMANDA grande (correlativo del turno) — el mismo "# 102" que sale
-  // en la comanda de cocina y en la columna "Comanda" de /admin/ventas. Permite
-  // a la encargada cruzar el ticket físico con el pedido en el programa cuando
-  // no llega a leer el número de venta.
+  // en la comanda de cocina y en la columna "Comanda" de /admin/ventas.
   printer.setTextSize(3, 3);
-  printer.println(`# ${String(payload.numeroOrden).padStart(3, '0')}`);
+  PL(`# ${String(payload.numeroOrden).padStart(3, '0')}`);
   printer.setTextNormal();
   printer.bold(false);
-  printer.println(`Venta ${payload.numeroVenta} en el programa`);
+  PL(`Venta ${payload.numeroVenta} en el programa`);
   printer.drawLine();
 
   // ── Datos cliente ──
   printer.alignLeft();
   printer.bold(true);
-  printer.println(`Cliente: ${limpiar(payload.cliente.nombre)}`);
+  PL(`Cliente: ${payload.cliente.nombre}`);
   printer.bold(false);
   if (payload.cliente.telefono) {
-    printer.println(`Teléfono: ${limpiar(payload.cliente.telefono)}`);
+    PL(`Telefono: ${payload.cliente.telefono}`);
   }
-  printer.println(`Dirección: ${limpiar(payload.cliente.direccion)}`);
+  PL(`Direccion: ${payload.cliente.direccion}`);
   if (payload.cliente.indicaciones) {
-    printer.println(`Indicaciones: ${limpiar(payload.cliente.indicaciones)}`);
+    PL(`Indicaciones: ${payload.cliente.indicaciones}`);
   }
   if (payload.empleadoNombre) {
-    printer.println(`Repartidor: ${limpiar(payload.empleadoNombre)}`);
+    PL(`Repartidor: ${payload.empleadoNombre}`);
   } else if (payload.empresaExterna) {
-    printer.println(`Repartidor: ${limpiar(payload.empresaExterna)}`);
+    PL(`Repartidor: ${payload.empresaExterna}`);
   }
   printer.drawLine();
 
-  // ── Tabla de items (mismo helper que ticket cliente) ──
-  printer.println(rowTabular('Cant.', 'Descripción', 'Precio', 'Total')[0]!);
+  // ── Tabla de items (mismo helper que ticket cliente, con el ancho real) ──
+  PL(rowTabular('Cant.', 'Descripcion', 'Precio', 'Total', width)[0]!);
   printer.newLine();
   for (const it of payload.items) {
     const lineas = rowTabular(
       it.cantidad,
-      limpiar(it.nombre),
+      ascii(it.nombre),
       formatARS(it.precioUnitario),
       formatARS(it.subtotal),
+      width,
     );
-    for (const linea of lineas) printer.println(linea);
+    for (const linea of lineas) PL(linea);
     // Sabor/tipo elegido — debajo del item, indentado ("  > Carne").
     for (const m of it.modificadores ?? []) {
-      printer.println(`      > ${limpiar(m)}`);
+      PL(`      > ${m}`);
     }
     if (it.observacion) {
-      printer.println(`      * ${limpiar(it.observacion)}`);
+      PL(`      * ${it.observacion}`);
     }
   }
   if (payload.envio && Number(payload.envio) > 0) {
@@ -547,8 +577,9 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
       'ENVIO',
       formatARS(payload.envio),
       formatARS(payload.envio),
+      width,
     );
-    for (const linea of envioLineas) printer.println(linea);
+    for (const linea of envioLineas) PL(linea);
   }
   printer.drawLine();
 
@@ -556,7 +587,7 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
   printer.alignRight();
   printer.bold(true);
   printer.setTextDoubleHeight();
-  printer.println(`TOTAL: $${formatARS(payload.total)}`);
+  PL(`TOTAL: $${formatARS(payload.total)}`);
   printer.setTextNormal();
   printer.bold(false);
   printer.newLine();
@@ -565,12 +596,12 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
   printer.alignLeft();
   printer.bold(true);
   if (payload.pago.estado === 'A_COBRAR') {
-    printer.println(`A COBRAR: ${payload.pago.metodo}`);
+    PL(`A COBRAR: ${payload.pago.metodo}`);
     if (payload.pago.montoACobrar) {
-      printer.println(`Monto a cobrar: $${formatARS(payload.pago.montoACobrar)}`);
+      PL(`Monto a cobrar: $${formatARS(payload.pago.montoACobrar)}`);
     }
   } else {
-    printer.println(`PAGADO: ${payload.pago.metodo}`);
+    PL(`PAGADO: ${payload.pago.metodo}`);
   }
   printer.bold(false);
   printer.newLine();
@@ -587,7 +618,7 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
       });
       printer.alignCenter();
       printer.bold(true);
-      printer.println(`Entrega: ${hhmm} hs.`);
+      PL(`Entrega: ${hhmm} hs.`);
       printer.bold(false);
     }
   }
@@ -595,10 +626,10 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
   // ── Pie ──
   printer.drawLine();
   printer.alignLeft();
-  printer.println(`Impresión: ${formatFechaAR(payload.fecha)}`);
-  printer.println(`Usuario: ${limpiar(payload.cajero)}`);
+  PL(`Impresion: ${formatFechaAR(payload.fecha)}`);
+  PL(`Usuario: ${payload.cajero}`);
   printer.alignCenter();
-  printer.println(`Venta #${payload.numeroVenta} en el programa`);
+  PL(`Venta #${payload.numeroVenta} en el programa`);
   printer.cut();
 
   await printer.execute();
@@ -614,7 +645,7 @@ export interface ComandaEncargoPayload {
   numeroOrden: number;
   numeroVenta?: number;
   hora: string;
-  estado: 'A_PAGAR' | 'COBRADO';
+  estado: 'A_PAGAR' | 'COBRADO' | 'PAGO_PARCIAL';
   tipoEntrega: 'RETIRO' | 'ENVIO';
   /** Día de entrega, formato "YYYY-MM-DD". */
   fechaEntrega: string | null;
@@ -628,8 +659,18 @@ export interface ComandaEncargoPayload {
     nombre: string;
     modificadores: string[];
     observacion?: string;
+    /** ¿Este item pertenece a una parte ya cobrada? (PAGO PARCIAL). */
+    pagado?: boolean;
+    /** Nº de adición ("modificación adicional") a la que pertenece, si aplica. */
+    adicion?: number;
   }>;
   total: string;
+  /** Suma de las partes ya cobradas (PAGO PARCIAL). */
+  totalPagado?: string;
+  /** Lo que falta cobrar (PAGO PARCIAL). */
+  totalPendiente?: string;
+  /** Observaciones a nivel encargo (campo de la carga). */
+  observaciones?: string;
   pcOrigen: string;
 }
 
@@ -699,10 +740,14 @@ export async function imprimirComandaEncargo(
   printer.newLine();
 
   // ── Items ──
-  for (const item of payload.items) {
+  // En PAGO PARCIAL los agrupamos: primero lo ya PAGADO, después lo A PAGAR,
+  // cada bloque con su encabezado — la encargada ve de un vistazo qué cobrar.
+  const esParcial = payload.estado === 'PAGO_PARCIAL';
+  const imprimirItem = (item: (typeof payload.items)[number]) => {
     printer.setTextDoubleHeight();
     printer.bold(true);
-    printer.println(`## ${item.cantidad}  ${limpiar(item.nombre)}`);
+    const tagAdicion = item.adicion ? ` [ADIC.${item.adicion}]` : '';
+    printer.println(`## ${item.cantidad}  ${limpiar(item.nombre)}${tagAdicion}`);
     printer.bold(false);
     printer.setTextNormal();
     for (const m of item.modificadores) {
@@ -719,6 +764,44 @@ export async function imprimirComandaEncargo(
       printer.invert(false);
       printer.bold(false);
     }
+    printer.newLine();
+  };
+  if (esParcial) {
+    const pagados = payload.items.filter((i) => i.pagado);
+    const pendientes = payload.items.filter((i) => !i.pagado);
+    if (pagados.length > 0) {
+      printer.bold(true);
+      printer.println('--- YA PAGADO ---');
+      printer.bold(false);
+      for (const item of pagados) imprimirItem(item);
+      if (payload.totalPagado) printer.println(`     Pagado: $${formatARS(payload.totalPagado)}`);
+      printer.newLine();
+    }
+    if (pendientes.length > 0) {
+      printer.bold(true);
+      printer.println('--- A PAGAR ---');
+      printer.bold(false);
+      for (const item of pendientes) imprimirItem(item);
+      if (payload.totalPendiente) {
+        printer.bold(true);
+        printer.println(`     Falta pagar: $${formatARS(payload.totalPendiente)}`);
+        printer.bold(false);
+      }
+      printer.newLine();
+    }
+  } else {
+    for (const item of payload.items) imprimirItem(item);
+  }
+
+  // ── Observaciones del encargo (campo de la carga — grande, no puede pasarse) ──
+  if (payload.observaciones) {
+    printer.bold(true);
+    printer.invert(true);
+    printer.setTextDoubleHeight();
+    printer.println(` OBS: ${limpiar(payload.observaciones).toUpperCase()} `);
+    printer.setTextNormal();
+    printer.invert(false);
+    printer.bold(false);
     printer.newLine();
   }
 
@@ -756,7 +839,13 @@ export async function imprimirComandaEncargo(
   printer.bold(true);
   printer.invert(true);
   printer.setTextSize(2, 2);
-  printer.println(payload.estado === 'COBRADO' ? '  COBRADO  ' : '  A PAGAR  ');
+  printer.println(
+    payload.estado === 'COBRADO'
+      ? '  COBRADO  '
+      : payload.estado === 'PAGO_PARCIAL'
+        ? ' PAGO PARCIAL '
+        : '  A PAGAR  ',
+  );
   printer.setTextNormal();
   printer.invert(false);
   printer.bold(false);

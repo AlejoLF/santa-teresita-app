@@ -25,6 +25,8 @@ interface Producto {
   unidadPrecio: string;
   cantidadDefault: string | null;
   activo: boolean;
+  // Fix 3a: override por-producto de "enviar a cocina". null = hereda del tipo.
+  cocinaIntervieneOverride: boolean | null;
   tipoProducto: {
     id: string;
     nombre: string;
@@ -604,13 +606,16 @@ function ProductoEditModal({
   onClose: () => void;
   onSaved: (p: Producto) => void;
 }) {
-  const [tab, setTab] = useState<'datos' | 'sabores'>('datos');
+  const [tab, setTab] = useState<'datos' | 'sabores' | 'modificadores'>('datos');
   const [nombre, setNombre] = useState(producto.nombre);
   const [marca, setMarca] = useState(producto.marca ?? '');
   const [presentacion, setPresentacion] = useState(producto.presentacion ?? '');
   const [precio, setPrecio] = useState(producto.precioBase);
   const [activo, setActivo] = useState(producto.activo);
   const [tipoProductoId, setTipoProductoId] = useState(producto.tipoProducto.id);
+  // Fix 3a: cocina efectiva = override del producto ?? lo que trae el tipo.
+  const cocinaEfectiva = producto.cocinaIntervieneOverride ?? producto.tipoProducto.cocinaInterviene;
+  const [enviarACocina, setEnviarACocina] = useState(cocinaEfectiva);
   const [motivo, setMotivo] = useState('');
   const [historial, setHistorial] = useState<HistorialPrecio[]>([]);
   const [tiposProducto, setTiposProducto] = useState<TipoProducto[]>([]);
@@ -651,6 +656,7 @@ function ProductoEditModal({
   const cambiaMarca = marca !== (producto.marca ?? '');
   const cambiaPresentacion = presentacion !== (producto.presentacion ?? '');
   const cambiaTipo = tipoProductoId !== producto.tipoProducto.id;
+  const cambiaCocina = enviarACocina !== cocinaEfectiva;
   const cambiaListas = listasCustom.some((l) => !!seleccionListas[l.id] !== l.enLista);
   const cambia =
     nombre !== producto.nombre ||
@@ -658,6 +664,7 @@ function ProductoEditModal({
     cambiaMarca ||
     cambiaPresentacion ||
     cambiaTipo ||
+    cambiaCocina ||
     cambiaListas ||
     activo !== producto.activo;
 
@@ -676,6 +683,7 @@ function ProductoEditModal({
         precioBase: cambiaPrecio ? precio : undefined,
         activo: activo !== producto.activo ? activo : undefined,
         tipoProductoId: cambiaTipo ? tipoProductoId : undefined,
+        cocinaIntervieneOverride: cambiaCocina ? enviarACocina : undefined,
         motivoCambioPrecio: cambiaPrecio ? motivo : undefined,
         listasCustom: cambiaListas
           ? listasCustom.filter((l) => seleccionListas[l.id]).map((l) => l.id)
@@ -723,6 +731,7 @@ function ProductoEditModal({
             [
               { v: 'datos', label: 'Datos' },
               { v: 'sabores', label: 'Sabores' },
+              { v: 'modificadores', label: 'Modificadores' },
             ] as const
           ).map((t) => (
             <button
@@ -775,6 +784,26 @@ function ProductoEditModal({
                 {cambiaTipo && (
                   <div className="text-xs text-saffron-600 mt-1">
                     ⚠ Cambio de tipo · puede afectar a qué grupo de sabores aplica
+                  </div>
+                )}
+              </div>
+
+              {/* Fix 3a: enviar a cocina por-producto (override del tipo) */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer rounded-md border border-cream-300 bg-cream-100/40 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={enviarACocina}
+                    onChange={(e) => setEnviarACocina(e.target.checked)}
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm font-medium text-ink-700">🍳 Enviar a cocina</span>
+                  <span className="text-2xs text-ink-400">imprime comanda (comandera 3)</span>
+                </label>
+                {enviarACocina !== producto.tipoProducto.cocinaInterviene && (
+                  <div className="text-2xs text-saffron-600 mt-1">
+                    Override: distinto de la sub-categoría «{producto.tipoProducto.nombre}» (
+                    {producto.tipoProducto.cocinaInterviene ? 'va a cocina' : 'sin cocina'})
                   </div>
                 )}
               </div>
@@ -910,6 +939,8 @@ function ProductoEditModal({
         {tab === 'sabores' && (
           <SaboresEditor productoId={producto.id} productoNombre={producto.nombre} />
         )}
+
+        {tab === 'modificadores' && <ModificadoresManager productoId={producto.id} />}
 
         {error && (
           <div className="px-5 py-2 bg-pomodoro-100 text-pomodoro-600 text-sm">{error}</div>
@@ -1118,6 +1149,325 @@ function SaboresEditor({
           modifica el precio.
         </div>
       </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Tab: Modificadores — grupos genéricos (salsas, agregados, etc.)
+//   Fix 3d: aplicar grupos existentes a un producto, o crear grupos nuevos.
+// ────────────────────────────────────────────────────────────────────────
+
+interface GrupoMod {
+  id: string;
+  nombre: string;
+  tipoSeleccion: 'UNICA' | 'MULTIPLE';
+  obligatorio: boolean;
+  opciones: Array<{ id: string; nombre: string; deltaPrecio: string; activa: boolean }>;
+  usadoEn?: Array<{ aplicableId: string; tipo: 'TIPO' | 'PRODUCTO'; nombre: string }>;
+}
+
+interface AplicadoMod {
+  aplicableId: string;
+  origen: 'PRODUCTO' | 'TIPO';
+  grupo: GrupoMod;
+}
+
+/** Form inline para crear un grupo de modificadores con sus opciones. */
+function GrupoNuevoForm({
+  onCreated,
+  onCancel,
+}: {
+  onCreated: (grupo: { id: string; nombre: string }) => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  const [nombre, setNombre] = useState('');
+  const [tipoSeleccion, setTipoSeleccion] = useState<'UNICA' | 'MULTIPLE'>('UNICA');
+  const [obligatorio, setObligatorio] = useState(false);
+  const [opciones, setOpciones] = useState<Array<{ nombre: string; delta: string }>>([
+    { nombre: '', delta: '0' },
+  ]);
+  const [creando, setCreando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function crear() {
+    const opcionesLimpias = opciones
+      .map((o) => ({ nombre: o.nombre.trim(), deltaPrecio: o.delta.trim() || '0' }))
+      .filter((o) => o.nombre.length > 0);
+    if (!nombre.trim()) return setError('Poné un nombre al grupo (ej. Salsa)');
+    if (opcionesLimpias.length === 0) return setError('Agregá al menos una opción');
+    if (opcionesLimpias.some((o) => !/^\d+(\.\d{1,2})?$/.test(o.deltaPrecio))) {
+      return setError('Los "+$" deben ser números (ej. 0 o 500.50)');
+    }
+    setCreando(true);
+    setError(null);
+    try {
+      const r = await api.post<{ grupo: { id: string; nombre: string } }>(
+        '/admin/modificadores/grupos',
+        { nombre: nombre.trim(), tipoSeleccion, obligatorio, opciones: opcionesLimpias },
+      );
+      await onCreated(r.grupo);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al crear el grupo');
+    } finally {
+      setCreando(false);
+    }
+  }
+
+  return (
+    <div className="p-3 border border-cream-300 rounded-md bg-cream-100/40 space-y-2">
+      <div className="text-2xs uppercase tracking-wider text-teresita-700 font-medium">
+        Crear grupo de modificadores
+      </div>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={nombre}
+          onChange={(e) => setNombre(e.target.value)}
+          placeholder="Nombre del grupo (ej. Salsa)"
+          className="input text-sm py-1.5 flex-1"
+          autoFocus
+        />
+        <select
+          value={tipoSeleccion}
+          onChange={(e) => setTipoSeleccion(e.target.value as 'UNICA' | 'MULTIPLE')}
+          className="input text-sm py-1.5 w-36"
+          title="¿El cliente elige una sola opción o varias?"
+        >
+          <option value="UNICA">Elige una</option>
+          <option value="MULTIPLE">Elige varias</option>
+        </select>
+      </div>
+      <label className="flex items-center gap-2 cursor-pointer text-2xs text-ink-700">
+        <input
+          type="checkbox"
+          checked={obligatorio}
+          onChange={(e) => setObligatorio(e.target.checked)}
+          className="w-3.5 h-3.5"
+        />
+        Obligatorio (el cajero tiene que elegir una opción sí o sí)
+      </label>
+      <div className="space-y-1.5">
+        {opciones.map((o, idx) => (
+          <div key={idx} className="flex gap-2 items-center">
+            <input
+              type="text"
+              value={o.nombre}
+              onChange={(e) =>
+                setOpciones((prev) => prev.map((x, i) => (i === idx ? { ...x, nombre: e.target.value } : x)))
+              }
+              placeholder={`Opción ${idx + 1} (ej. Fileto)`}
+              className="input text-sm py-1.5 flex-1"
+            />
+            <div className="flex items-center gap-1">
+              <span className="text-2xs text-ink-500">+$</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={o.delta}
+                onChange={(e) =>
+                  setOpciones((prev) => prev.map((x, i) => (i === idx ? { ...x, delta: e.target.value } : x)))
+                }
+                className="input text-sm py-1.5 w-24 font-mono text-right"
+                title="Diferencia de precio (0 = no cambia el precio)"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setOpciones((prev) => prev.filter((_, i) => i !== idx))}
+              disabled={opciones.length === 1}
+              className="text-ink-400 hover:text-pomodoro-600 disabled:opacity-30 text-lg leading-none px-1"
+              title="Quitar opción"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => setOpciones((prev) => [...prev, { nombre: '', delta: '0' }])}
+          className="text-xs text-teresita-700 hover:underline font-medium"
+        >
+          + Agregar opción
+        </button>
+      </div>
+      {error && <div className="text-xs text-pomodoro-600">{error}</div>}
+      <div className="flex gap-2 justify-end">
+        <Button variant="secondary" size="sm" onClick={onCancel}>
+          Cancelar
+        </Button>
+        <Button size="sm" onClick={() => void crear()} disabled={creando}>
+          {creando ? 'Creando...' : 'Crear grupo'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Tab "Modificadores" del modal de edición: grupos aplicados + aplicar/crear. */
+function ModificadoresManager({ productoId }: { productoId: string }) {
+  const [aplicados, setAplicados] = useState<AplicadoMod[]>([]);
+  const [grupos, setGrupos] = useState<GrupoMod[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [grupoSel, setGrupoSel] = useState('');
+  const [crearOpen, setCrearOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchTodo = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [a, g] = await Promise.all([
+        api.get<{ aplicados: AplicadoMod[] }>(`/admin/productos/${productoId}/modificadores`),
+        api.get<{ grupos: GrupoMod[] }>('/admin/modificadores/grupos'),
+      ]);
+      // `?? []`: en modo demo estos endpoints no están mockeados y devuelven {}.
+      setAplicados(a.aplicados ?? []);
+      setGrupos(g.grupos ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al cargar modificadores');
+    } finally {
+      setLoading(false);
+    }
+  }, [productoId]);
+
+  useEffect(() => {
+    void fetchTodo();
+  }, [fetchTodo]);
+
+  const aplicadosIds = new Set(aplicados.map((a) => a.grupo.id));
+  const gruposDisponibles = grupos.filter((g) => !aplicadosIds.has(g.id));
+
+  async function aplicar(grupoId: string) {
+    if (!grupoId) return;
+    setError(null);
+    try {
+      await api.post(`/admin/productos/${productoId}/modificadores`, { grupoId });
+      setGrupoSel('');
+      await fetchTodo();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al aplicar el grupo');
+    }
+  }
+
+  async function quitar(a: AplicadoMod) {
+    if (!confirm(`¿Quitar el grupo "${a.grupo.nombre}" de este producto?`)) return;
+    setError(null);
+    try {
+      await api.delete(`/admin/modificadores/aplicables/${a.aplicableId}`);
+      await fetchTodo();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al quitar el grupo');
+    }
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+      <p className="text-2xs text-ink-500">
+        Los grupos de modificadores le aparecen al cajero al cargar este producto (ej. el grupo
+        «Salsa» con Fileto / Bolognesa). Los heredados de la sub-categoría aplican a todos sus
+        productos.
+      </p>
+
+      {error && <div className="text-xs text-pomodoro-600 bg-pomodoro-100 rounded px-2 py-1">{error}</div>}
+
+      {loading ? (
+        <div className="text-sm text-ink-500">Cargando...</div>
+      ) : (
+        <>
+          {aplicados.length === 0 && (
+            <div className="text-sm text-ink-500 italic">
+              Este producto no tiene grupos de modificadores aplicados.
+            </div>
+          )}
+          {aplicados.map((a) => (
+            <div
+              key={a.aplicableId}
+              className="border border-cream-300 rounded-md px-3 py-2 flex items-start justify-between gap-3"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium text-ink-900">{a.grupo.nombre}</span>
+                  <span
+                    className={cn(
+                      'text-2xs px-1.5 py-0.5 rounded uppercase tracking-wide',
+                      a.origen === 'TIPO'
+                        ? 'bg-cream-200 text-ink-500'
+                        : 'bg-teresita-100 text-teresita-700',
+                    )}
+                    title={
+                      a.origen === 'TIPO'
+                        ? 'Heredado de la sub-categoría (aplica a todos sus productos)'
+                        : 'Aplicado directamente a este producto'
+                    }
+                  >
+                    {a.origen === 'TIPO' ? 'de la sub-categoría' : 'del producto'}
+                  </span>
+                  <span className="text-2xs text-ink-400">
+                    {a.grupo.tipoSeleccion === 'UNICA' ? 'elige una' : 'elige varias'}
+                    {a.grupo.obligatorio ? ' · obligatorio' : ''}
+                  </span>
+                </div>
+                <div className="text-xs text-ink-500 mt-0.5 truncate">
+                  {a.grupo.opciones.filter((o) => o.activa).map((o) => o.nombre).join(' · ') || 'sin opciones'}
+                </div>
+              </div>
+              {a.origen === 'PRODUCTO' && (
+                <button
+                  onClick={() => void quitar(a)}
+                  className="text-ink-400 hover:text-pomodoro-600 text-lg leading-none shrink-0"
+                  title="Quitar este grupo del producto"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+
+          <div className="border-t border-cream-200 pt-3 space-y-2">
+            <div className="text-2xs uppercase tracking-wider text-ink-500">Aplicar grupo existente</div>
+            <div className="flex gap-2">
+              <select
+                value={grupoSel}
+                onChange={(e) => setGrupoSel(e.target.value)}
+                className="input text-sm py-1.5 flex-1"
+                disabled={gruposDisponibles.length === 0}
+              >
+                <option value="">
+                  {gruposDisponibles.length === 0
+                    ? '— no quedan grupos por aplicar —'
+                    : '— elegí un grupo —'}
+                </option>
+                {gruposDisponibles.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.nombre} ({g.opciones.filter((o) => o.activa).length} opciones)
+                  </option>
+                ))}
+              </select>
+              <Button size="sm" onClick={() => void aplicar(grupoSel)} disabled={!grupoSel}>
+                Aplicar
+              </Button>
+            </div>
+
+            {crearOpen ? (
+              <GrupoNuevoForm
+                onCancel={() => setCrearOpen(false)}
+                onCreated={async (g) => {
+                  setCrearOpen(false);
+                  await aplicar(g.id);
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setCrearOpen(true)}
+                className="text-xs text-teresita-700 hover:underline font-medium"
+              >
+                + Crear grupo nuevo (y aplicarlo a este producto)
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1823,6 +2173,9 @@ function FormProducto({
   >('POR_UNIDAD');
   const [unidadPrecioLabel, setUnidadPrecioLabel] = useState('');
   const [cantidadDefault, setCantidadDefault] = useState('');
+  // Fix 3a: casillero "Enviar a cocina" por-producto. Se pre-carga con el valor
+  // de la sub-categoría elegida (hereda) y la encargada lo puede cambiar.
+  const [enviarACocina, setEnviarACocina] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
 
@@ -1831,6 +2184,12 @@ function FormProducto({
   const [seleccionListas, setSeleccionListas] = useState<Record<string, boolean>>({});
   const [nuevaListaOpen, setNuevaListaOpen] = useState(false);
   const [nuevaListaNombre, setNuevaListaNombre] = useState('');
+
+  // Fix 3d: grupos de modificadores a aplicar al producto nuevo (existentes
+  // tildados + creados inline). Se aplican DESPUÉS del POST /admin/productos.
+  const [gruposMod, setGruposMod] = useState<GrupoMod[]>([]);
+  const [seleccionGrupos, setSeleccionGrupos] = useState<Record<string, boolean>>({});
+  const [crearGrupoOpen, setCrearGrupoOpen] = useState(false);
 
   // Quick-create inline para Categoría / Sub-categoría
   const [crearCatOpen, setCrearCatOpen] = useState(false);
@@ -1865,9 +2224,20 @@ function FormProducto({
     }
   }
 
+  async function refreshGruposMod() {
+    try {
+      const r = await api.get<{ grupos: GrupoMod[] }>('/admin/modificadores/grupos');
+      // `?? []`: en modo demo el endpoint no está mockeado y devuelve {}.
+      setGruposMod(r.grupos ?? []);
+    } catch {
+      /* silencioso */
+    }
+  }
+
   useEffect(() => {
     void refreshTipos();
     void refreshListasCustom();
+    void refreshGruposMod();
   }, []);
 
   async function crearListaInline() {
@@ -1948,13 +2318,17 @@ function FormProducto({
     if (!nombre.trim()) return setError('El nombre es obligatorio');
     if (!precioBase || !/^\d+(\.\d{1,2})?$/.test(precioBase)) return setError('Precio inválido (ej. 1500 o 1500.50)');
     if (!categoriaId) return setError('Elegí una categoría');
-    if (!tipoProductoId) return setError('Elegí una sub-categoría (o creá una nueva)');
+    // Sub-categoría OPCIONAL (Fix 3b): si no elegís, el backend usa/crea "General".
     setGuardando(true);
     setError(null);
     try {
-      await api.post('/admin/productos', {
+      const creado = await api.post<{ producto: { id: string } }>('/admin/productos', {
         nombre: nombre.trim(),
-        tipoProductoId,
+        // Sub-categoría opcional: si hay tipo lo mandamos; si no, va la categoría
+        // y el backend usa/crea "General".
+        ...(tipoProductoId ? { tipoProductoId } : {}),
+        categoriaId,
+        cocinaIntervieneOverride: enviarACocina,
         codigo: codigo.trim() || null,
         marca: marca.trim() || null,
         presentacion: presentacion.trim() || null,
@@ -1966,6 +2340,24 @@ function FormProducto({
         cantidadDefault: cantidadDefault.trim() || null,
         listasCustom: Object.keys(seleccionListas).filter((id) => seleccionListas[id]),
       });
+      // Aplicar los grupos de modificadores tildados al producto recién creado.
+      // Si alguno falla, el producto YA existe: avisamos y se puede aplicar
+      // después desde Editar → Modificadores (no bloqueamos la creación).
+      const grupoIds = Object.keys(seleccionGrupos).filter((id) => seleccionGrupos[id]);
+      const fallidos: string[] = [];
+      for (const grupoId of grupoIds) {
+        try {
+          await api.post(`/admin/productos/${creado.producto.id}/modificadores`, { grupoId });
+        } catch {
+          fallidos.push(gruposMod.find((g) => g.id === grupoId)?.nombre ?? grupoId);
+        }
+      }
+      if (fallidos.length > 0) {
+        alert(
+          `El producto se creó, pero no se pudo aplicar: ${fallidos.join(', ')}. ` +
+            'Aplicalos desde Editar → Modificadores.',
+        );
+      }
       onCreated();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al crear producto');
@@ -2045,7 +2437,7 @@ function FormProducto({
         <div className="col-span-2">
           <div className="flex items-center justify-between mb-1">
             <label className="block text-sm font-medium text-ink-700">
-              Sub-categoría *
+              Sub-categoría <span className="text-2xs text-ink-400 font-normal">(opcional)</span>
               {!categoriaId && (
                 <span className="text-2xs text-ink-400 font-normal ml-2">
                   (elegí primero una categoría)
@@ -2063,15 +2455,19 @@ function FormProducto({
           </div>
           <select
             value={tipoProductoId}
-            onChange={(e) => setTipoProductoId(e.target.value)}
+            onChange={(e) => {
+              const id = e.target.value;
+              setTipoProductoId(id);
+              // Pre-cargar "enviar a cocina" con lo que trae la sub-categoría (herencia).
+              const t = subcatsDeCategoria.find((x) => x.id === id);
+              if (t) setEnviarACocina(!!t.cocinaInterviene);
+            }}
             disabled={!categoriaId}
             className="input disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <option value="">
               {categoriaId
-                ? subcatsDeCategoria.length === 0
-                  ? '— sin sub-categorías · creá una —'
-                  : '— elegí una —'
+                ? '— sin sub-categoría (va a "General") —'
                 : '— elegí primero una categoría —'}
             </option>
             {subcatsDeCategoria.map((t) => (
@@ -2114,6 +2510,81 @@ function FormProducto({
                 Cocina interviene (imprime comanda)
               </label>
             </div>
+          )}
+        </div>
+
+        {/* Fix 3a: enviar a cocina por-producto (independiente de la sub-categoría) */}
+        <div className="col-span-2">
+          <label className="flex items-center gap-2 cursor-pointer rounded-md border border-cream-300 bg-cream-100/40 px-3 py-2">
+            <input
+              type="checkbox"
+              checked={enviarACocina}
+              onChange={(e) => setEnviarACocina(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span className="text-sm font-medium text-ink-700">🍳 Enviar a cocina</span>
+            <span className="text-2xs text-ink-400">
+              imprime comanda en cocina (comandera 3) y activa la producción
+            </span>
+          </label>
+        </div>
+
+        {/* Fix 3d: modificadores del producto nuevo (elegir existentes o crear) */}
+        <div className="col-span-2">
+          <label className="block text-sm font-medium text-ink-700 mb-1">
+            Modificadores <span className="text-2xs text-ink-400 font-normal">(opcional)</span>
+          </label>
+          <p className="text-2xs text-ink-500 mb-2">
+            Grupos de opciones que el cajero elige al cargar el producto (ej. «Salsa» →
+            Fileto / Bolognesa). Tildá los que apliquen o creá uno nuevo.
+          </p>
+          {gruposMod.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {gruposMod.map((g) => (
+                <label
+                  key={g.id}
+                  className={cn(
+                    'flex items-center gap-1.5 cursor-pointer rounded-md border px-2.5 py-1.5 text-sm transition-colors',
+                    seleccionGrupos[g.id]
+                      ? 'border-teresita-700 bg-teresita-100 text-teresita-900'
+                      : 'border-cream-300 bg-white text-ink-700 hover:border-ink-300',
+                  )}
+                  title={g.opciones.filter((o) => o.activa).map((o) => o.nombre).join(' · ')}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!seleccionGrupos[g.id]}
+                    onChange={(e) =>
+                      setSeleccionGrupos((s) => ({ ...s, [g.id]: e.target.checked }))
+                    }
+                    className="w-3.5 h-3.5"
+                  />
+                  {g.nombre}
+                  <span className="text-2xs text-ink-400">
+                    ({g.opciones.filter((o) => o.activa).length})
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          {crearGrupoOpen ? (
+            <GrupoNuevoForm
+              onCancel={() => setCrearGrupoOpen(false)}
+              onCreated={async (g) => {
+                setCrearGrupoOpen(false);
+                await refreshGruposMod();
+                // Auto-tildar el grupo recién creado para que se aplique al crear.
+                setSeleccionGrupos((s) => ({ ...s, [g.id]: true }));
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setCrearGrupoOpen(true)}
+              className="text-xs text-teresita-700 hover:underline font-medium"
+            >
+              + Crear grupo nuevo
+            </button>
           )}
         </div>
 

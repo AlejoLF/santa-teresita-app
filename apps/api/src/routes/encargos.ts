@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { EncargoNuevoSchema, EncargoEditarSchema } from '@sta/shared/schemas';
-import { crearEncargo, listarEncargos } from '../services/encargo.js';
+import { EncargoNuevoSchema, EncargoEditarSchema, ItemNuevoSchema } from '@sta/shared/schemas';
+import { crearEncargo, crearAdicionEncargo, listarEncargos } from '../services/encargo.js';
 import { getVentaCompleta } from '../services/venta.js';
 import { FueraDeHorarioError } from '../services/sesion-caja.js';
 import { recordAudit } from '../services/audit.js';
+import { encolarComandaEncargo } from '../services/impresion.js';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta } from '@sta/db';
 
@@ -111,9 +112,15 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
       if (!venta || !venta.esEncargo) {
         return reply.code(404).send({ error: 'Encargo no encontrado' });
       }
-      if (venta.estado !== EstadoVenta.PROCESADA || venta.estadoCobroEncargo !== 'A_PAGAR') {
+      // Los encargos COBRADOS también se editan (el cliente cambia dirección,
+      // horario, etc. después de pagar). Solo se bloquean los anulados y las
+      // adiciones (los datos de entrega viven en el encargo principal).
+      if (venta.estado === EstadoVenta.ANULADA) {
+        return reply.code(400).send({ error: 'El encargo está anulado.' });
+      }
+      if (venta.encargoPadreId) {
         return reply.code(400).send({
-          error: 'Solo se pueden editar encargos pendientes (A_PAGAR, sin cobrar).',
+          error: 'Las adiciones se editan desde el encargo principal.',
         });
       }
 
@@ -178,9 +185,98 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
           contexto: { campos: Object.keys(body) },
           tx,
         });
+
+        // Toda modificación re-imprime la comanda del encargo (fusionada, con
+        // el estado real: A PAGAR / COBRADO / PAGO PARCIAL).
+        await encolarComandaEncargo(venta.id, 'A_PAGAR', tx);
       });
 
       return reply.send(await getVentaCompleta(venta.id));
+    },
+  );
+
+  // POST /encargos/:id/adicion — "modificación adicional al pedido X": items
+  // agregados a un encargo ya cargado (pagado o no). Crea una venta hija con su
+  // propia secuencia de pago. accion 'cobrar' → el front va al cobro (marrón);
+  // 'cargar' → queda a pagar y sale la comanda fusionada (PAGO PARCIAL si
+  // el encargo original ya estaba pagado).
+  fastify.post(
+    '/encargos/:id/adicion',
+    {
+      preHandler: fastify.requireAuth(),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          pcOrigen: z.string().min(1).max(40),
+          items: z.array(ItemNuevoSchema).min(1),
+          accion: z.enum(['cargar', 'cobrar']),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const body = req.body as {
+        pcOrigen: string;
+        items: Array<z.infer<typeof ItemNuevoSchema>>;
+        accion: 'cargar' | 'cobrar';
+      };
+      try {
+        const adicion = await crearAdicionEncargo({
+          padreId: params.id,
+          items: body.items,
+          pcOrigen: body.pcOrigen,
+          usuarioId: req.usuario!.id,
+          accion: body.accion,
+        });
+        return reply.code(201).send(await getVentaCompleta(adicion.id));
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error: 'Fuera del horario de atención configurado',
+            codigo: 'FUERA_DE_HORARIO',
+            resolucion: e.resolucion,
+          });
+        }
+        if (e instanceof Error && e.message.includes('no encontrado')) {
+          return reply.code(404).send({ error: e.message });
+        }
+        if (e instanceof Error && e.message.includes('anulado')) {
+          return reply.code(400).send({ error: e.message });
+        }
+        throw e;
+      }
+    },
+  );
+
+  // POST /encargos/:id/reimprimir — re-encola la comanda del encargo (fusionada
+  // con sus adiciones, estado real). Disponible en cualquier estado no anulado.
+  fastify.post(
+    '/encargos/:id/reimprimir',
+    {
+      preHandler: fastify.requireAuth(),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const venta = await prisma.venta.findUnique({
+        where: { id: params.id },
+        select: { id: true, esEncargo: true, estado: true },
+      });
+      if (!venta || !venta.esEncargo) {
+        return reply.code(404).send({ error: 'Encargo no encontrado' });
+      }
+      if (venta.estado === EstadoVenta.ANULADA) {
+        return reply.code(400).send({ error: 'El encargo está anulado.' });
+      }
+      await encolarComandaEncargo(venta.id, 'A_PAGAR');
+      await recordAudit({
+        tabla: 'ventas',
+        registroId: venta.id,
+        accion: 'REIMPRESION',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { comandaEncargo: true },
+      });
+      return { ok: true };
     },
   );
 }

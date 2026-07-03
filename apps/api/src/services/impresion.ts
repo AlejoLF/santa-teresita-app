@@ -35,6 +35,32 @@ type DbClient = Prisma.TransactionClient | typeof prisma;
 export type DestinoImpresion = 'MOSTRADOR' | 'DELIVERY' | 'COCINA';
 
 /**
+ * Cómo se imprime un modificador en los tickets (línea hija "> ..." debajo del
+ * producto). Los grupos CLÁSICOS imprimen solo la opción, como siempre:
+ *   - sabores ("Sabor — Ravioles")            → "> Carne"
+ *   - salsa de porciones ("Tipo — Salsa ...") → "> Fileto"
+ * Los grupos GENÉRICOS creados desde el admin (fix 3d: "Salsa", "Agregados",
+ * etc.) imprimen "Grupo: Opción" → "> Salsa: Fileto" — la cocina ve de qué
+ * grupo es la opción sin ambigüedad.
+ */
+function nombreModParaTicket(m: {
+  opcionNombre?: string;
+  grupoNombre?: string | null;
+} | null): string | null {
+  if (!m || typeof m.opcionNombre !== 'string' || !m.opcionNombre) return null;
+  const grupo = typeof m.grupoNombre === 'string' ? m.grupoNombre.trim() : '';
+  if (
+    !grupo ||
+    grupo.startsWith('Sabor') ||
+    grupo.startsWith('Tipo — Salsa') ||
+    grupo.startsWith('Tipo - Salsa')
+  ) {
+    return m.opcionNombre;
+  }
+  return `${grupo}: ${m.opcionNombre}`;
+}
+
+/**
  * Devuelve el "repartidor" que se deriva automáticamente del canal cuando
  * es una plataforma externa. Para los canales internos (MOSTRADOR/TELEFONO/
  * WHATSAPP/WEB) devuelve null — en esos casos el repartidor lo asigna
@@ -225,12 +251,16 @@ export async function buildComandaPayload(
     hora: venta.fechaApertura.toISOString().slice(11, 16),
     canal: venta.canal,
     items: venta.items.map((it) => {
-      const mods = (it.modificadoresAplicados as Array<{ opcionNombre?: string }> | null) ?? [];
+      const mods =
+        (it.modificadoresAplicados as Array<{
+          opcionNombre?: string;
+          grupoNombre?: string | null;
+        }> | null) ?? [];
       return {
         cantidad: String(it.cantidad),
         nombre: it.nombreSnapshot,
         modificadores: mods
-          .map((m) => m?.opcionNombre)
+          .map(nombreModParaTicket)
           .filter((x): x is string => typeof x === 'string'),
         observacion: it.observacion ?? undefined,
         parteDeCombo: it.combo?.nombre,
@@ -304,6 +334,28 @@ export async function encolarComandasParaVenta(
     }
   }
   return destinos;
+}
+
+/**
+ * ¿La venta YA tiene una comanda de COCINA encolada (en cualquier estado)?
+ *
+ * La comanda de cocina debe salir UNA sola vez: al "enviar a cocina" (crear con
+ * `enviarACocina`), o al confirmar el pago si la venta se creó con "Cobrar".
+ * Este chequeo evita el duplicado:
+ *   - `agregarItemsAVenta` re-encola SOLO si ya se había enviado (así los items
+ *     nuevos llegan a una cocina que ya arrancó; si no arrancó, no imprime nada).
+ *   - `finalizar` encola la comanda SOLO si no se envió antes (cubre el flujo
+ *     "Cobrar", donde recién ahí sale a cocina).
+ */
+export async function ventaYaEnviadaACocina(
+  ventaId: string,
+  tx: Prisma.TransactionClient,
+): Promise<boolean> {
+  const existe = await tx.trabajoImpresion.findFirst({
+    where: { ventaId, tipo: TipoTrabajoImpresion.COMANDA_COCINA },
+    select: { id: true },
+  });
+  return !!existe;
 }
 
 /**
@@ -463,12 +515,16 @@ async function buildTicketDeliveryPayload(
       ? venta.deliveryInfo.horaPrometida.toISOString()
       : null,
     items: venta.items.map((it) => {
-      const mods = (it.modificadoresAplicados as Array<{ opcionNombre?: string }> | null) ?? [];
+      const mods =
+        (it.modificadoresAplicados as Array<{
+          opcionNombre?: string;
+          grupoNombre?: string | null;
+        }> | null) ?? [];
       return {
         cantidad: String(it.cantidad),
         nombre: it.nombreSnapshot,
         modificadores: mods
-          .map((m) => m?.opcionNombre)
+          .map(nombreModParaTicket)
           .filter((x): x is string => typeof x === 'string'),
         observacion: it.observacion ?? undefined,
         precioUnitario: Number(it.precioUnitario).toFixed(2),
@@ -609,12 +665,16 @@ export async function encolarTicketClienteParaVenta(
     vendedor: vendedorNombre,
     pcOrigen: venta.pcOrigen,
     items: venta.items.map((it) => {
-      const mods = (it.modificadoresAplicados as Array<{ opcionNombre?: string }> | null) ?? [];
+      const mods =
+        (it.modificadoresAplicados as Array<{
+          opcionNombre?: string;
+          grupoNombre?: string | null;
+        }> | null) ?? [];
       return {
         cantidad: String(it.cantidad),
         nombre: it.nombreSnapshot,
         modificadores: mods
-          .map((m) => m?.opcionNombre)
+          .map(nombreModParaTicket)
           .filter((x): x is string => typeof x === 'string'),
         observacion: it.observacion ?? undefined,
         precio: Number(it.precioUnitario).toFixed(2),
@@ -714,13 +774,32 @@ export async function reimprimirVenta(
  */
 export async function encolarComandaEncargo(
   ventaId: string,
-  estado: 'A_PAGAR' | 'COBRADO',
+  _estadoHint: 'A_PAGAR' | 'COBRADO',
   tx?: Prisma.TransactionClient,
 ): Promise<void> {
   const client: DbClient = tx ?? prisma;
-  const venta = await client.venta.findUnique({
+  // Resolver la RAÍZ: si ventaId es una adición ("modificación adicional"), la
+  // comanda sale SIEMPRE fusionada desde el encargo padre. El estado global se
+  // CALCULA acá (no se usa el hint): todo cobrado → COBRADO, nada → A PAGAR,
+  // mezcla raíz/adiciones → PAGO PARCIAL con detalle de qué está pago y qué no.
+  const inicial = await client.venta.findUnique({
     where: { id: ventaId },
-    include: { items: { orderBy: { orden: 'asc' } }, deliveryInfo: true },
+    select: { id: true, encargoPadreId: true },
+  });
+  if (!inicial) return;
+  const rootId = inicial.encargoPadreId ?? inicial.id;
+
+  const venta = await client.venta.findUnique({
+    where: { id: rootId },
+    include: {
+      items: { orderBy: { orden: 'asc' } },
+      deliveryInfo: true,
+      adicionesEncargo: {
+        where: { estado: { not: 'ANULADA' } },
+        orderBy: { fechaApertura: 'asc' },
+        include: { items: { orderBy: { orden: 'asc' } } },
+      },
+    },
   });
   if (!venta) return;
 
@@ -731,6 +810,49 @@ export async function encolarComandaEncargo(
     typeof snap.clienteTelefono === 'string' ? snap.clienteTelefono : undefined;
   const direccion = typeof snap.direccion === 'string' ? snap.direccion : undefined;
   const indicaciones = typeof snap.indicaciones === 'string' ? snap.indicaciones : undefined;
+
+  const mapItems = (
+    its: typeof venta.items,
+    pagado: boolean,
+    adicionDe?: number,
+  ) =>
+    its.map((it) => {
+      const mods =
+        (it.modificadoresAplicados as Array<{
+          opcionNombre?: string;
+          grupoNombre?: string | null;
+        }> | null) ?? [];
+      return {
+        cantidad: String(it.cantidad),
+        nombre: it.nombreSnapshot,
+        modificadores: mods
+          .map(nombreModParaTicket)
+          .filter((x): x is string => typeof x === 'string'),
+        observacion: it.observacion ?? undefined,
+        pagado,
+        ...(adicionDe !== undefined && { adicion: adicionDe }),
+      };
+    });
+
+  const rootPagado = venta.estadoCobroEncargo === 'COBRADO';
+  const partes = [
+    { pagado: rootPagado, total: Number(venta.total), items: venta.items, adicion: undefined as number | undefined },
+    ...venta.adicionesEncargo.map((a, i) => ({
+      pagado: a.estadoCobroEncargo === 'COBRADO',
+      total: Number(a.total),
+      items: a.items,
+      adicion: i + 1 as number | undefined,
+    })),
+  ];
+  const todoPagado = partes.every((p) => p.pagado);
+  const nadaPagado = partes.every((p) => !p.pagado);
+  const estado: 'A_PAGAR' | 'COBRADO' | 'PAGO_PARCIAL' = todoPagado
+    ? 'COBRADO'
+    : nadaPagado
+      ? 'A_PAGAR'
+      : 'PAGO_PARCIAL';
+  const totalPagado = partes.filter((p) => p.pagado).reduce((a, p) => a + p.total, 0);
+  const totalGlobal = partes.reduce((a, p) => a + p.total, 0);
 
   const payload = {
     numeroOrden: venta.numeroOrdenTurno,
@@ -745,18 +867,13 @@ export async function encolarComandaEncargo(
     horaEntrega: venta.horaEntregaExacta ?? undefined,
     franja: venta.franjaEntrega ?? undefined,
     cliente: { nombre: clienteNombre, telefono: clienteTelefono, direccion, indicaciones },
-    items: venta.items.map((it) => {
-      const mods = (it.modificadoresAplicados as Array<{ opcionNombre?: string }> | null) ?? [];
-      return {
-        cantidad: String(it.cantidad),
-        nombre: it.nombreSnapshot,
-        modificadores: mods
-          .map((m) => m?.opcionNombre)
-          .filter((x): x is string => typeof x === 'string'),
-        observacion: it.observacion ?? undefined,
-      };
-    }),
-    total: Number(venta.total).toFixed(2),
+    items: partes.flatMap((p) => mapItems(p.items, p.pagado, p.adicion)),
+    total: totalGlobal.toFixed(2),
+    totalPagado: totalPagado.toFixed(2),
+    totalPendiente: (totalGlobal - totalPagado).toFixed(2),
+    // Observaciones a nivel encargo (campo "Observaciones del encargo" de la
+    // carga) — antes NO viajaban en el payload y no salían impresas.
+    observaciones: venta.observaciones ?? undefined,
     pcOrigen: venta.pcOrigen,
   };
 
@@ -764,7 +881,7 @@ export async function encolarComandaEncargo(
     tipo: TipoTrabajoImpresion.COMANDA_ENCARGO,
     destino: 'MOSTRADOR',
     payload,
-    ventaId,
+    ventaId: rootId,
     tx,
   });
 }

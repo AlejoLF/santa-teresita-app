@@ -12,7 +12,7 @@ import type { ItemNuevo, VentaNueva } from '@sta/shared';
 import { subtotalItem } from '@sta/shared';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
 import { recordAudit } from './audit.js';
-import { encolarComandasParaVenta } from './impresion.js';
+import { encolarComandasParaVenta, ventaYaEnviadaACocina } from './impresion.js';
 
 /**
  * Crea una venta en estado PROCESADA, con items snapshot del precio.
@@ -94,7 +94,11 @@ export async function crearVenta(args: {
     });
     const subTotalNum = Number(subTotalItemStr);
     subtotalVenta += subTotalNum;
-    if (producto.tipoProducto.cocinaInterviene) tieneCocina = true;
+    // Cocina: el override por-producto (casillero "Enviar a cocina") gana; si es
+    // null, hereda de `tipoProducto.cocinaInterviene` (comportamiento de siempre).
+    const cocinaInterviene =
+      producto.cocinaIntervieneOverride ?? producto.tipoProducto.cocinaInterviene;
+    if (cocinaInterviene) tieneCocina = true;
 
     itemsToCreate.push({
       producto: { connect: { id: producto.id } },
@@ -108,7 +112,7 @@ export async function crearVenta(args: {
       totalLinea: subTotalItemStr,
       observacion: item.observacion ?? null,
       orden: idx,
-      cocinaInterviene: producto.tipoProducto.cocinaInterviene,
+      cocinaInterviene,
       ...(item.parteDeComboId && {
         combo: { connect: { id: item.parteDeComboId } },
       }),
@@ -230,14 +234,16 @@ export async function crearVenta(args: {
       tx,
     });
 
-    // Encolar la comanda de COCINA al ENVIAR (crear), no al cobrar: la cocina
-    // tiene que empezar a producir apenas entra el pedido, aunque todavía no
-    // se haya cobrado (mostrador "enviar a cocina", o cualquier canal con
-    // items que cocinan). El bug de comandas parciales (venta 274, armar el
-    // pedido de a poco) lo cubre el dedup de encolarComandasParaVenta: si ya
-    // hay una comanda PENDIENTE sin imprimir, la actualiza en vez de duplicar.
-    // El TICKET_CLIENTE y el TICKET_DELIVERY sí salen al finalizar (con el pago).
-    await encolarComandasParaVenta(venta.id, tx);
+    // Comanda de COCINA: solo si el pedido se "envía" al crear (Enviar a cocina /
+    // Cargar otro / apps externas → enviarACocina=true, el default). En el flujo
+    // "Cobrar" (enviarACocina=false) la comanda NO sale acá: sale al confirmar el
+    // pago en POST /ventas/:id/finalizar, para no imprimir en cocina un pedido que
+    // el cliente todavía está armando (y no cocinar pedidos que se caen antes de
+    // pagar). El dedup de encolarComandasParaVenta colapsa disparos en ráfaga.
+    // El TICKET_CLIENTE y el TICKET_DELIVERY siempre salen al finalizar (con el pago).
+    if (data.enviarACocina !== false) {
+      await encolarComandasParaVenta(venta.id, tx);
+    }
     return venta;
   });
 }
@@ -251,6 +257,13 @@ export async function getVentaCompleta(id: string) {
       cliente: true,
       listaPrecios: true,
       deliveryInfo: true,
+      // Adiciones de encargo ("modificación adicional al pedido X") — el modal
+      // de detalle las muestra con su estado de cobro y saldo pendiente.
+      adicionesEncargo: {
+        where: { estado: { not: 'ANULADA' } },
+        orderBy: { fechaApertura: 'asc' },
+        include: { items: { orderBy: { orden: 'asc' } }, pagos: true },
+      },
     },
   });
 }
@@ -336,7 +349,10 @@ export async function agregarItemsAVenta(args: {
       unidadPrecio: producto.unidadPrecio,
     });
     subtotalAdicional += Number(subTotalItemStr);
-    if (producto.tipoProducto.cocinaInterviene) tieneCocinaNuevo = true;
+    // Cocina: override por-producto gana; si es null, hereda del tipo.
+    const cocinaInterviene =
+      producto.cocinaIntervieneOverride ?? producto.tipoProducto.cocinaInterviene;
+    if (cocinaInterviene) tieneCocinaNuevo = true;
 
     itemsToCreate.push({
       producto: { connect: { id: producto.id } },
@@ -350,7 +366,7 @@ export async function agregarItemsAVenta(args: {
       totalLinea: subTotalItemStr,
       observacion: item.observacion ?? null,
       orden: ordenInicial + idx,
-      cocinaInterviene: producto.tipoProducto.cocinaInterviene,
+      cocinaInterviene,
       ...(item.parteDeComboId && {
         combo: { connect: { id: item.parteDeComboId } },
       }),
@@ -372,11 +388,14 @@ export async function agregarItemsAVenta(args: {
       },
     });
 
-    // Re-encolar la comanda de COCINA con los items nuevos: la cocina tiene
-    // que ver lo agregado al toque, sin esperar al cobro. El dedup colapsa
-    // disparos en ráfaga; si la comanda anterior ya se imprimió, sale una
-    // nueva completa (la cocina ve el pedido actualizado).
-    await encolarComandasParaVenta(ventaId, tx);
+    // Re-encolar la comanda de COCINA con los items nuevos — SOLO si el pedido YA
+    // fue enviado a cocina (se creó con "Enviar a cocina", o ya se cobró). Así la
+    // cocina que ya arrancó ve lo agregado al toque. Si todavía NO se envió (flujo
+    // "Cobrar" sin confirmar el pago), no imprimimos nada acá: la comanda saldrá
+    // completa al confirmar el pago. El dedup colapsa disparos en ráfaga.
+    if (await ventaYaEnviadaACocina(ventaId, tx)) {
+      await encolarComandasParaVenta(ventaId, tx);
+    }
     return updated;
   });
 }

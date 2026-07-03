@@ -700,6 +700,12 @@ function buildMovimientosListado(state: DemoState, search: URLSearchParams) {
 function buildSesionActual(state: DemoState) {
   const finalizadas = state.ventas.filter((v) => v.estado === 'FINALIZADA');
   const abiertas = state.ventas.filter((v) => v.estado === 'PROCESADA');
+  // Encargos A_PAGAR: informativo, NO bloquean el cierre (viven en state.encargos,
+  // aparte de state.ventas — igual que en la API real, esEncargo no cuenta como
+  // "pedido abierto" del turno).
+  const encargosAPagar = (state.encargos ?? []).filter(
+    (e) => e?.estado === 'PROCESADA' && e?.estadoCobroEncargo === 'A_PAGAR',
+  ).length;
   const pagos = finalizadas.flatMap((v) => v.pagos);
 
   const cobrosPorMetodo: Array<{ metodo: string; monto: string; cantidad: number }> = [];
@@ -741,6 +747,7 @@ function buildSesionActual(state: DemoState) {
     })),
     ventasCount: finalizadas.length,
     ventasAbiertas: abiertas.length,
+    encargosAPagar,
     totalEfectivo: totalEfectivo.toString(),
     totalEgresos: totalEgresos.toString(),
     recaudacionEsperadaEfectivo: (50000 + totalEfectivo + totalAportes - totalEgresos).toString(),

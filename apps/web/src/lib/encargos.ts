@@ -4,7 +4,8 @@ export const TZ_AR = 'America/Argentina/Buenos_Aires';
 
 export type FranjaEntrega = 'MANANA' | 'TARDE' | 'NOCHE';
 export type TipoEntrega = 'RETIRO' | 'ENVIO';
-export type EstadoCobro = 'A_PAGAR' | 'COBRADO';
+// PARCIAL = el encargo original y sus adiciones tienen mezcla de pagado/no pagado.
+export type EstadoCobro = 'A_PAGAR' | 'COBRADO' | 'PARCIAL';
 
 export interface EncargoListItem {
   id: string;

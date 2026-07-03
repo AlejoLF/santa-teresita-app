@@ -822,6 +822,11 @@ export default function CargarPedidoPage() {
         canal: cart.canal,
         modalidad: cart.modalidad,
         pcOrigen: localStorage.getItem('sta_pc_origen') ?? 'PC1',
+        // "Cobrar" NO manda a cocina al crear la venta: la comanda sale al
+        // confirmar el pago (finalizar). "Enviar a cocina" y "Cargar otro" sí
+        // mandan a cocina ahora (envío explícito). Evita que un pedido que el
+        // cliente todavía está armando imprima en cocina antes de tiempo.
+        enviarACocina: modo !== 'cobrar',
         items: itemsPayload,
         // Datos de cliente cuando es delivery — viajan a deliveryInfo y a la comanda.
         ...(esDelivery && cart.clienteNombre.trim() && { clienteNombre: cart.clienteNombre.trim() }),
@@ -2024,6 +2029,22 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
     return out;
   }, [producto]);
 
+  // Fix 3d: si el producto tiene MÁS de un grupo de modificadores (ej. "Sabor"
+  // + "Salsa" aplicado desde el admin), la lista aplanada muestra un encabezado
+  // cada vez que cambia de grupo, así el cajero ve a qué grupo pertenece cada
+  // opción. Con un solo grupo no se muestra nada (comportamiento de siempre).
+  const multiGrupo = useMemo(
+    () => new Set(sabores.map((s) => s.grupoId).filter(Boolean)).size > 1,
+    [sabores],
+  );
+  function tituloGrupoEn(idx: number): string | null {
+    if (!multiGrupo) return null;
+    const s = sabores[idx];
+    if (!s?.grupoNombre) return null;
+    if (idx === 0 || sabores[idx - 1]?.grupoId !== s.grupoId) return s.grupoNombre;
+    return null;
+  }
+
   const esPastaFresca = useMemo(() => {
     const cat = producto.tipoProducto.categoria.nombre.toLowerCase();
     return cat.includes('pasta fresca') || cat === 'pastas frescas';
@@ -2426,9 +2447,15 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
               <div className="grid gap-1.5">
                 {sabores.map((s, idx) => {
                   const seleccionado = saborRadioId === s.id;
+                  const tituloGrupo = tituloGrupoEn(idx);
                   return (
+                    <div key={s.id} className="contents">
+                    {tituloGrupo && (
+                      <div className="text-2xs font-medium uppercase tracking-wider text-teresita-700 mt-1">
+                        {tituloGrupo}
+                      </div>
+                    )}
                     <button
-                      key={s.id}
                       ref={(el) => { inputRefs.current[s.id] = el as unknown as HTMLInputElement; }}
                       type="button"
                       onClick={() => setSaborRadioId(s.id)}
@@ -2487,6 +2514,7 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
                         </span>
                       )}
                     </button>
+                    </div>
                   );
                 })}
               </div>
@@ -2608,12 +2636,18 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
               </div>
             )}
             {sabores.map((s, idx) => {
+              const tituloGrupo = tituloGrupoEn(idx);
               if (isPorcionMode) {
                 // Modo radio: cada sabor es un botón seleccionable. UN solo sabor a la vez.
                 const seleccionado = saborRadioId === s.id;
                 return (
+                  <div key={s.id} className="contents">
+                  {tituloGrupo && (
+                    <div className="text-2xs font-medium uppercase tracking-wider text-teresita-700 mt-1">
+                      {tituloGrupo}
+                    </div>
+                  )}
                   <button
-                    key={s.id}
                     ref={(el) => { inputRefs.current[s.id] = el as unknown as HTMLInputElement; }}
                     type="button"
                     onClick={() => setSaborRadioId(s.id)}
@@ -2647,12 +2681,18 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
                       </span>
                     )}
                   </button>
+                  </div>
                 );
               }
               // Modo normal: input de cantidad por sabor
               return (
+                <div key={s.id} className="contents">
+                {tituloGrupo && (
+                  <div className="text-2xs font-medium uppercase tracking-wider text-teresita-700 mt-1">
+                    {tituloGrupo}
+                  </div>
+                )}
                 <div
-                  key={s.id}
                   className="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-cream-50 focus-within:bg-teresita-50 focus-within:ring-1 focus-within:ring-teresita-700/30"
                 >
                   {!esProductoFantasma && (
@@ -2681,6 +2721,7 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
                     className="w-20 input text-center font-mono py-1.5 text-sm"
                   />
                   <span className="text-2xs text-ink-300 w-10 text-left">{unidadCant}</span>
+                </div>
                 </div>
               );
             })}

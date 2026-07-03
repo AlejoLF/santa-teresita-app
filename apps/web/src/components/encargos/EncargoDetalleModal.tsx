@@ -38,6 +38,17 @@ interface VentaEncargo {
   }>;
   pagos: Array<{ id: string; metodo: string; monto: string }>;
   deliveryInfo?: { direccionSnapshot: Record<string, unknown> | null } | null;
+  observaciones?: string | null;
+  encargoPadreId?: string | null;
+  // Adiciones ("modificación adicional al pedido X") con su propia secuencia de pago.
+  adicionesEncargo?: Array<{
+    id: string;
+    numeroOrdenTurno: number;
+    total: string;
+    estado: 'PROCESADA' | 'FINALIZADA' | 'ANULADA';
+    estadoCobroEncargo: EstadoCobro;
+    items: Array<{ id: string; nombreSnapshot: string; cantidad: string; totalLinea: string }>;
+  }>;
 }
 
 const METODO_LABEL: Record<string, string> = {
@@ -92,8 +103,43 @@ export function EncargoDetalleModal({
   const direccion = typeof snap.direccion === 'string' ? snap.direccion : '';
   const indicaciones = typeof snap.indicaciones === 'string' ? snap.indicaciones : '';
 
-  const cobrado = v?.estadoCobroEncargo === 'COBRADO';
-  const editable = v?.estado === 'PROCESADA' && v?.estadoCobroEncargo === 'A_PAGAR';
+  const adiciones = v?.adicionesEncargo ?? [];
+  const partesPagadas = v
+    ? [v.estadoCobroEncargo === 'COBRADO', ...adiciones.map((a) => a.estadoCobroEncargo === 'COBRADO')]
+    : [];
+  const todoCobrado = partesPagadas.length > 0 && partesPagadas.every(Boolean);
+  const nadaCobrado = partesPagadas.every((p) => !p);
+  const parcial = !todoCobrado && !nadaCobrado;
+  const cobrado = todoCobrado;
+  const totalMerged = v
+    ? Number(v.total) + adiciones.reduce((a, x) => a + Number(x.total), 0)
+    : 0;
+  const saldoPendiente = v
+    ? (v.estadoCobroEncargo === 'A_PAGAR' ? Number(v.total) : 0) +
+      adiciones.filter((a) => a.estadoCobroEncargo === 'A_PAGAR').reduce((a, x) => a + Number(x.total), 0)
+    : 0;
+  const adicionPendiente = adiciones.find((a) => a.estadoCobroEncargo === 'A_PAGAR');
+  // Editable: cualquier encargo no anulado (los COBRADOS también — el cliente
+  // cambia dirección/horario después de pagar; el server re-imprime la comanda).
+  const editable = v?.estado !== 'ANULADA';
+  const puedeAnular = v?.estado === 'PROCESADA' && v?.estadoCobroEncargo === 'A_PAGAR' && adiciones.length === 0;
+  const [reimprimiendo, setReimprimiendo] = useState(false);
+  const [reimprimioOk, setReimprimioOk] = useState(false);
+
+  async function reimprimir() {
+    if (!v) return;
+    setReimprimiendo(true);
+    setReimprimioOk(false);
+    try {
+      await api.post(`/encargos/${v.id}/reimprimir`, {});
+      setReimprimioOk(true);
+      setTimeout(() => setReimprimioOk(false), 3000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo re-imprimir.');
+    } finally {
+      setReimprimiendo(false);
+    }
+  }
 
   async function anular() {
     if (!v) return;
@@ -128,10 +174,14 @@ export function EncargoDetalleModal({
               <span
                 className={cn(
                   'px-2 py-0.5 rounded text-2xs font-bold uppercase tracking-wide',
-                  cobrado ? 'bg-basil-100 text-basil-600' : 'bg-saffron-100 text-saffron-600',
+                  cobrado
+                    ? 'bg-basil-100 text-basil-600'
+                    : parcial
+                      ? 'bg-saffron-600 text-white'
+                      : 'bg-saffron-100 text-saffron-600',
                 )}
               >
-                {cobrado ? 'COBRADO' : 'A PAGAR'}
+                {cobrado ? 'COBRADO' : parcial ? 'PAGO PARCIAL' : 'A PAGAR'}
               </span>
             )}
           </div>
@@ -208,6 +258,9 @@ export function EncargoDetalleModal({
                   </div>
                 )}
                 {indicaciones && <div className="text-xs text-saffron-600">⚠ {indicaciones}</div>}
+                {v.observaciones && (
+                  <div className="text-xs text-wood-700 font-medium">📝 {v.observaciones}</div>
+                )}
               </div>
                 </>
               )}
@@ -256,10 +309,53 @@ export function EncargoDetalleModal({
                 })}
               </div>
 
-              {/* Total */}
-              <div className="flex justify-between items-baseline">
-                <span className="text-sm font-medium text-ink-700">Total</span>
-                <MoneyAmount value={v.total} className="font-mono text-lg text-wood-900 font-bold" />
+              {/* Adiciones (modificaciones adicionales, cada una con su pago) */}
+              {adiciones.map((a, i) => (
+                <div key={a.id} className="card border border-wood-200">
+                  <div className="px-4 py-1.5 bg-wood-100/60 flex items-center justify-between">
+                    <span className="text-2xs font-semibold uppercase tracking-wide text-wood-900">
+                      ➕ Adición {i + 1} · #{String(a.numeroOrdenTurno).padStart(3, '0')}
+                    </span>
+                    <span
+                      className={cn(
+                        'px-1.5 py-0.5 rounded text-2xs font-bold uppercase',
+                        a.estadoCobroEncargo === 'COBRADO'
+                          ? 'bg-basil-100 text-basil-600'
+                          : 'bg-saffron-100 text-saffron-600',
+                      )}
+                    >
+                      {a.estadoCobroEncargo === 'COBRADO' ? 'PAGADA' : 'A PAGAR'}
+                    </span>
+                  </div>
+                  <div className="divide-y divide-cream-200">
+                    {a.items.map((it) => (
+                      <div key={it.id} className="px-4 py-1.5 flex justify-between text-sm">
+                        <span className="text-ink-900">
+                          <span className="font-mono text-ink-500">{it.cantidad}×</span>{' '}
+                          {it.nombreSnapshot}
+                        </span>
+                        <MoneyAmount value={it.totalLinea} className="text-wood-700" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              {/* Total (fusionado con adiciones) */}
+              <div className="space-y-0.5">
+                <div className="flex justify-between items-baseline">
+                  <span className="text-sm font-medium text-ink-700">Total</span>
+                  <MoneyAmount
+                    value={totalMerged.toFixed(2)}
+                    className="font-mono text-lg text-wood-900 font-bold"
+                  />
+                </div>
+                {parcial && (
+                  <div className="flex justify-between items-baseline text-saffron-600">
+                    <span className="text-xs font-medium">Falta pagar</span>
+                    <MoneyAmount value={saldoPendiente.toFixed(2)} className="font-mono text-sm font-bold" />
+                  </div>
+                )}
               </div>
 
               {v.pagos.length > 0 && (
@@ -280,6 +376,19 @@ export function EncargoDetalleModal({
         {/* Acciones */}
         {v && v.estado !== 'ANULADA' && !editing && (
           <footer className="px-5 py-3 border-t border-cream-300 bg-wood-50 flex flex-wrap justify-end gap-2 shrink-0">
+            {reimprimioOk && (
+              <span className="text-2xs text-basil-600 self-center mr-auto">
+                ✓ Comanda enviada a la impresora
+              </span>
+            )}
+            <button
+              onClick={() => void reimprimir()}
+              disabled={reimprimiendo}
+              className="px-3 py-2 text-sm rounded-md border border-cream-300 text-ink-700 hover:bg-cream-200 transition-colors disabled:opacity-50"
+              title="Vuelve a imprimir la comanda del encargo (con adiciones y estado de pago)"
+            >
+              {reimprimiendo ? '…' : '🖨 Re-imprimir'}
+            </button>
             {editable && (
               <>
                 <button
@@ -289,21 +398,40 @@ export function EncargoDetalleModal({
                   ✏️ Editar
                 </button>
                 <button
-                  onClick={anular}
-                  disabled={anulando}
-                  className="px-3 py-2 text-sm rounded-md text-pomodoro-600 hover:bg-pomodoro-100 transition-colors disabled:opacity-50"
+                  onClick={() => router.push(`/encargos/nuevo?adicionDe=${v.id}`)}
+                  className="px-3 py-2 text-sm rounded-md border border-wood-300 bg-wood-100 text-wood-900 font-medium hover:bg-wood-200 transition-colors"
+                  title="El cliente suma productos al encargo — se cobra aparte"
                 >
-                  Anular
-                </button>
-                <button
-                  onClick={() => router.push(`/venta/${v.id}?cobrar=1`)}
-                  className="px-4 py-2 text-sm rounded-md bg-wood-700 text-wood-50 font-medium hover:bg-wood-900 transition-colors"
-                >
-                  💵 Cobrar
+                  ➕ Adicionar
                 </button>
               </>
             )}
-            {cobrado && (
+            {puedeAnular && (
+              <button
+                onClick={anular}
+                disabled={anulando}
+                className="px-3 py-2 text-sm rounded-md text-pomodoro-600 hover:bg-pomodoro-100 transition-colors disabled:opacity-50"
+              >
+                Anular
+              </button>
+            )}
+            {v.estadoCobroEncargo === 'A_PAGAR' && v.estado === 'PROCESADA' && (
+              <button
+                onClick={() => router.push(`/venta/${v.id}?cobrar=1`)}
+                className="px-4 py-2 text-sm rounded-md bg-wood-700 text-wood-50 font-medium hover:bg-wood-900 transition-colors"
+              >
+                💵 Cobrar
+              </button>
+            )}
+            {v.estadoCobroEncargo === 'COBRADO' && adicionPendiente && (
+              <button
+                onClick={() => router.push(`/venta/${adicionPendiente.id}?cobrar=1`)}
+                className="px-4 py-2 text-sm rounded-md bg-wood-700 text-wood-50 font-medium hover:bg-wood-900 transition-colors"
+              >
+                💵 Cobrar saldo (<MoneyAmount value={saldoPendiente.toFixed(2)} />)
+              </button>
+            )}
+            {cobrado && !adicionPendiente && (
               <span className="text-2xs text-basil-600 self-center">
                 ✓ Cobrado — registrado en la caja del día del cobro
               </span>

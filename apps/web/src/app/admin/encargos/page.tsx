@@ -118,7 +118,7 @@ export default function AdminEncargosPage() {
                             : 'bg-saffron-100 text-saffron-600',
                         )}
                       >
-                        {e.estadoCobro === 'COBRADO' ? 'Cobrado' : 'A pagar'}
+                        {e.estadoCobro === 'COBRADO' ? 'Cobrado' : e.estadoCobro === 'PARCIAL' ? 'Pago parcial' : 'A pagar'}
                       </span>
                     </td>
                     <td className="px-4 py-2 text-right">
@@ -158,7 +158,7 @@ export default function AdminEncargosPage() {
                           e.estadoCobro === 'COBRADO' ? 'text-basil-600' : 'text-saffron-600',
                         )}
                       >
-                        {e.estadoCobro === 'COBRADO' ? 'Cobrado' : 'A pagar'}
+                        {e.estadoCobro === 'COBRADO' ? 'Cobrado' : e.estadoCobro === 'PARCIAL' ? 'Pago parcial' : 'A pagar'}
                       </div>
                     </div>
                   </div>

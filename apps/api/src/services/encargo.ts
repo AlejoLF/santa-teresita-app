@@ -211,6 +211,145 @@ export async function crearEncargo(args: {
 }
 
 /**
+ * Crea una ADICIÓN a un encargo existente ("modificación adicional al pedido X"):
+ * el cliente sumó productos a un encargo ya cargado (pagado o no). Es una venta
+ * hija (esEncargo + encargoPadreId) con su PROPIA secuencia de pago:
+ *   - Nace PROCESADA + A_PAGAR en la sesión ACTUAL.
+ *   - Si se cobra ya (accion='cobrar'), va por el finalizar normal de encargos
+ *     (entra a la caja de la sesión del cobro).
+ *   - Si queda a pagar, la comanda fusionada sale con "PAGO PARCIAL" mostrando
+ *     qué está pagado y qué no.
+ * Hereda del padre: canal/modalidad/lista/cliente + datos de entrega (solo
+ * informativos acá — la comanda siempre se arma desde el padre).
+ */
+export async function crearAdicionEncargo(args: {
+  padreId: string;
+  items: EncargoNuevo['items'];
+  pcOrigen: string;
+  usuarioId: string;
+  accion: 'cargar' | 'cobrar';
+}): Promise<Venta> {
+  const { padreId, items, pcOrigen, usuarioId, accion } = args;
+
+  const padre = await prisma.venta.findUnique({ where: { id: padreId } });
+  if (!padre || !padre.esEncargo) throw new Error('Encargo no encontrado');
+  if (padre.estado === EstadoVenta.ANULADA) throw new Error('El encargo está anulado');
+  // Las adiciones cuelgan SIEMPRE de la raíz (sin anidar).
+  const rootId = padre.encargoPadreId ?? padre.id;
+  const root = padre.encargoPadreId
+    ? await prisma.venta.findUnique({ where: { id: rootId } })
+    : padre;
+  if (!root) throw new Error('Encargo no encontrado');
+
+  const sesion = await getOrCreateSesionActual(usuarioId);
+  const numeroOrden = await siguienteNumeroOrdenTurno(sesion.id);
+
+  // Snapshot de precios — mismo criterio que crearEncargo, con la lista del padre.
+  const productoIds = [...new Set(items.map((i) => i.productoId))];
+  const productos = await prisma.producto.findMany({
+    where: { id: { in: productoIds } },
+    include: {
+      tipoProducto: true,
+      preciosPorLista: { where: { listaId: root.listaPreciosId }, take: 1 },
+    },
+  });
+  const lista = await prisma.listaPrecios.findUnique({ where: { id: root.listaPreciosId } });
+  const ajustePct = Number(lista?.ajustePctDefault ?? 0);
+  const productoMap = new Map(productos.map((p) => [p.id, p]));
+
+  const itemsToCreate: Array<Prisma.ItemVentaCreateWithoutVentaInput> = [];
+  let subtotalVenta = 0;
+  let tieneCocina = false;
+  for (const [idx, item] of items.entries()) {
+    const producto = productoMap.get(item.productoId);
+    if (!producto) throw new Error(`Producto ${item.productoId} no existe`);
+    const precioOverride = producto.preciosPorLista[0]?.precioEfectivo;
+    const precioListaSinDelta = precioOverride
+      ? Number(precioOverride)
+      : Number(producto.precioBase) * (1 + ajustePct / 100);
+    const deltaMod = item.modificadores.reduce(
+      (acc, m) => acc + Math.max(0, Number(m.deltaPrecio || 0)),
+      0,
+    );
+    const precioUnitario = precioListaSinDelta + deltaMod;
+    const subTotalItemStr = subtotalItem({
+      cantidad: item.cantidad,
+      precioUnitario: precioUnitario.toFixed(2),
+      unidadPrecio: producto.unidadPrecio,
+    });
+    subtotalVenta += Number(subTotalItemStr);
+    const cocinaItem =
+      producto.cocinaIntervieneOverride ?? producto.tipoProducto.cocinaInterviene;
+    if (cocinaItem) tieneCocina = true;
+    itemsToCreate.push({
+      producto: { connect: { id: producto.id } },
+      nombreSnapshot: producto.nombre,
+      cantidad: String(item.cantidad),
+      unidad: producto.formaVenta as DbFormaVenta,
+      precioUnitario: precioUnitario.toFixed(2),
+      modificadoresAplicados: item.modificadores as never,
+      deltaModificadores: deltaMod.toFixed(2),
+      subtotal: subTotalItemStr,
+      totalLinea: subTotalItemStr,
+      observacion: item.observacion ?? null,
+      orden: idx,
+      cocinaInterviene: cocinaItem,
+    });
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const venta = await tx.venta.create({
+      data: {
+        canal: root.canal,
+        modalidad: root.modalidad,
+        pcOrigen,
+        clienteId: root.clienteId,
+        listaPreciosId: root.listaPreciosId,
+        sesionCajaId: sesion.id,
+        numeroOrdenTurno: numeroOrden,
+        usuarioAperturaId: usuarioId,
+        // Referencia visible en el programa/tickets (pedido explícito del dueño).
+        observaciones: `Modificación adicional al pedido #${root.numero}`,
+        subtotal: subtotalVenta.toFixed(2),
+        total: subtotalVenta.toFixed(2),
+        tieneCocina,
+        estado: EstadoVenta.PROCESADA,
+        esEncargo: true,
+        encargoPadreId: root.id,
+        fechaEntregaPromesa: root.fechaEntregaPromesa,
+        horaEntregaExacta: root.horaEntregaExacta,
+        franjaEntrega: root.franjaEntrega,
+        tipoEntregaEncargo: root.tipoEntregaEncargo,
+        estadoCobroEncargo: 'A_PAGAR',
+        items: { create: itemsToCreate },
+      },
+    });
+
+    await recordAudit({
+      tabla: 'ventas',
+      registroId: venta.id,
+      accion: 'INSERT',
+      usuarioId,
+      pcOrigen,
+      valorNuevo: {
+        encargoAdicion: true,
+        encargoPadre: root.numero,
+        total: venta.total,
+      },
+      tx,
+    });
+
+    // Si queda a pagar, re-imprimimos YA la comanda fusionada (saldrá con
+    // PAGO PARCIAL si el padre estaba cobrado). Si es 'cobrar', la comanda
+    // fusionada sale al finalizar el cobro.
+    if (accion === 'cargar') {
+      await encolarComandaEncargo(venta.id, 'A_PAGAR', tx);
+    }
+    return venta;
+  });
+}
+
+/**
  * Lista los encargos cuyo día de entrega cae en [desde, hasta] (formato
  * YYYY-MM-DD). Excluye anulados. Devuelve lo necesario para el calendario y
  * las tarjetas (sin items, salvo el conteo).
@@ -224,6 +363,8 @@ export async function listarEncargos(args: { desde: string; hasta: string }) {
       esEncargo: true,
       estado: { not: EstadoVenta.ANULADA },
       fechaEntregaPromesa: { gte: desde, lte: hasta },
+      // Las adiciones no son tarjetas propias: se funden en el encargo raíz.
+      encargoPadreId: null,
     },
     orderBy: [{ fechaEntregaPromesa: 'asc' }, { horaEntregaExacta: 'asc' }, { numeroOrdenTurno: 'asc' }],
     select: {
@@ -240,6 +381,10 @@ export async function listarEncargos(args: { desde: string; hasta: string }) {
       cliente: { select: { nombre: true, apellido: true, telefono: true } },
       deliveryInfo: { select: { direccionSnapshot: true } },
       _count: { select: { items: true } },
+      adicionesEncargo: {
+        where: { estado: { not: EstadoVenta.ANULADA } },
+        select: { total: true, estadoCobroEncargo: true },
+      },
     },
   });
 
@@ -250,12 +395,25 @@ export async function listarEncargos(args: { desde: string; hasta: string }) {
     const clienteNombre =
       nombreSnap ||
       (e.cliente ? `${e.cliente.nombre}${e.cliente.apellido ? ' ' + e.cliente.apellido : ''}`.trim() : '');
+    // Estado/total fusionados con las adiciones: todo cobrado → COBRADO, nada
+    // → A_PAGAR, mezcla → PARCIAL (la tarjeta lo muestra en naranja).
+    const partes = [
+      e.estadoCobroEncargo === 'COBRADO',
+      ...e.adicionesEncargo.map((a) => a.estadoCobroEncargo === 'COBRADO'),
+    ];
+    const estadoCobroMerged = partes.every(Boolean)
+      ? 'COBRADO'
+      : partes.every((p) => !p)
+        ? 'A_PAGAR'
+        : 'PARCIAL';
+    const totalMerged =
+      Number(e.total) + e.adicionesEncargo.reduce((a, x) => a + Number(x.total), 0);
     return {
       id: e.id,
       numero: e.numero,
       numeroOrdenTurno: e.numeroOrdenTurno,
       estado: e.estado,
-      total: e.total.toString(),
+      total: totalMerged.toFixed(2),
       tipoEntrega: e.tipoEntregaEncargo,
       // YYYY-MM-DD (UTC, como se guardó).
       fechaEntrega: e.fechaEntregaPromesa
@@ -263,7 +421,7 @@ export async function listarEncargos(args: { desde: string; hasta: string }) {
         : null,
       horaEntregaExacta: e.horaEntregaExacta,
       franjaEntrega: e.franjaEntrega,
-      estadoCobro: e.estadoCobroEncargo,
+      estadoCobro: estadoCobroMerged,
       cliente: clienteNombre || null,
       telefono: (telSnap || e.cliente?.telefono) ?? null,
       itemsCount: e._count.items,

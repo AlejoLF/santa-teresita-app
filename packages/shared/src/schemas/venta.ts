@@ -76,6 +76,16 @@ export const VentaNuevaSchema = z.object({
   // Mercado Libre, DELIVERATE). Se persiste en `Venta.idExternoCanal` para
   // reconciliar después con la app de la plataforma.
   idExternoCanal: z.string().max(120).optional(),
+  // ¿Enviar la comanda de COCINA al CREAR la venta?
+  //   true  = envío explícito ("Enviar a cocina" / "Cargar otro" / apps externas):
+  //           la cocina arranca a producir apenas entra el pedido.
+  //   false = flujo "Cobrar": la venta se crea para ir a cobrar, pero la comanda
+  //           de cocina NO sale acá — sale al confirmar el pago (finalizar). Así un
+  //           pedido que el cliente todavía está armando no imprime en cocina antes
+  //           de tiempo (y no se cocina un pedido que se cae antes de pagar).
+  // Default true: webhooks/canales que no mandan el flag conservan el comportamiento
+  // de siempre (comanda al crear).
+  enviarACocina: z.boolean().optional().default(true),
 });
 export type VentaNueva = z.infer<typeof VentaNuevaSchema>;
 

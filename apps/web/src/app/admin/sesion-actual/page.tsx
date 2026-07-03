@@ -34,6 +34,9 @@ interface SesionData {
   movimientos: Array<{ id: string; tipo: string; monto: string; categoria: string }>;
   ventasCount: number;
   ventasAbiertas: number;
+  // Encargos A_PAGAR de la sesión: informativo, NO bloquean el cierre (se cobran
+  // el día de entrega, días después, y ahí entran a la caja del momento).
+  encargosAPagar?: number;
   totalEfectivo: string;
   totalEgresos: string;
   recaudacionEsperadaEfectivo: string;
@@ -280,6 +283,12 @@ export default function SesionActualPage() {
             <div className="text-xs text-saffron-600 mt-1">
               {data.ventasAbiertas} pedido{data.ventasAbiertas > 1 ? 's' : ''} abierto
               {data.ventasAbiertas > 1 ? 's' : ''}
+            </div>
+          )}
+          {(data.encargosAPagar ?? 0) > 0 && (
+            <div className="text-xs text-ink-500 mt-1">
+              📦 {data.encargosAPagar} encargo{(data.encargosAPagar ?? 0) > 1 ? 's' : ''} a pagar ·
+              {' '}se cobra{(data.encargosAPagar ?? 0) > 1 ? 'n' : ''} el día de entrega (no bloquea el cierre)
             </div>
           )}
         </div>

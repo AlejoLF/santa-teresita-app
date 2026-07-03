@@ -239,7 +239,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             fechaFinalizacion: { gte: inicioAyer, lt: finAyer },
           },
         }),
-        prisma.venta.count({ where: { estado: EstadoVenta.PROCESADA } }),
+        // `esEncargo: false`: los encargos A_PAGAR (pedidos futuros que se cobran
+        // otro día) no son "pedidos abiertos" del turno — tienen su propia pestaña.
+        prisma.venta.count({ where: { estado: EstadoVenta.PROCESADA, esEncargo: false } }),
         prisma.pago.findMany({
           where: {
             estado: 'CONFIRMADO',
@@ -569,40 +571,73 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // GET /admin/ventas-por-hora — para el gráfico de hoy
+  // GET /admin/ventas-por-hora — para el gráfico de hoy, con comparación contra
+  // el MISMO DÍA de la semana anterior (sábado 12hs vs sábado pasado 12hs) —
+  // pedido del dueño: comparar con "ayer" no sirve porque cada día de la semana
+  // tiene un patrón distinto.
   fastify.get(
     '/admin/ventas-por-hora',
     { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
     async () => {
       const ahora = new Date();
       const inicioHoy = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate());
+      // Mismo día de la semana pasada: [hoy-7d 00:00, hoy-6d 00:00)
+      const inicioSemanaPasada = new Date(inicioHoy);
+      inicioSemanaPasada.setDate(inicioSemanaPasada.getDate() - 7);
+      const finSemanaPasada = new Date(inicioSemanaPasada);
+      finSemanaPasada.setDate(finSemanaPasada.getDate() + 1);
 
-      // Postgres: extraer hora y agrupar
-      const rows = await prisma.$queryRaw<
-        Array<{ hora: number; cantidad: bigint; total: number }>
-      >`
-        SELECT
-          EXTRACT(HOUR FROM fecha_finalizacion)::int AS hora,
-          COUNT(*)::bigint AS cantidad,
-          SUM(total)::float AS total
-        FROM ventas
-        WHERE estado = 'FINALIZADA'
-          AND fecha_finalizacion >= ${inicioHoy}
-        GROUP BY hora
-        ORDER BY hora ASC
-      `;
+      // Postgres: extraer hora y agrupar (hoy + mismo día semana pasada)
+      const [rows, rowsAnterior] = await Promise.all([
+        prisma.$queryRaw<Array<{ hora: number; cantidad: bigint; total: number }>>`
+          SELECT
+            EXTRACT(HOUR FROM fecha_finalizacion)::int AS hora,
+            COUNT(*)::bigint AS cantidad,
+            SUM(total)::float AS total
+          FROM ventas
+          WHERE estado = 'FINALIZADA'
+            AND fecha_finalizacion >= ${inicioHoy}
+          GROUP BY hora
+          ORDER BY hora ASC
+        `,
+        prisma.$queryRaw<Array<{ hora: number; cantidad: bigint; total: number }>>`
+          SELECT
+            EXTRACT(HOUR FROM fecha_finalizacion)::int AS hora,
+            COUNT(*)::bigint AS cantidad,
+            SUM(total)::float AS total
+          FROM ventas
+          WHERE estado = 'FINALIZADA'
+            AND fecha_finalizacion >= ${inicioSemanaPasada}
+            AND fecha_finalizacion < ${finSemanaPasada}
+          GROUP BY hora
+          ORDER BY hora ASC
+        `,
+      ]);
 
       // Llenamos huecos (horas sin ventas → 0)
       const map = new Map<number, { cantidad: number; total: number }>();
       for (const r of rows) {
         map.set(r.hora, { cantidad: Number(r.cantidad), total: Number(r.total ?? 0) });
       }
+      const mapAnterior = new Map<number, { cantidad: number; total: number }>();
+      for (const r of rowsAnterior) {
+        mapAnterior.set(r.hora, { cantidad: Number(r.cantidad), total: Number(r.total ?? 0) });
+      }
       const horas: Array<{ hora: number; cantidad: number; total: number }> = [];
+      const horasSemanaAnterior: Array<{ hora: number; cantidad: number; total: number }> = [];
       for (let h = 9; h <= 23; h++) {
         const r = map.get(h);
         horas.push({ hora: h, cantidad: r?.cantidad ?? 0, total: r?.total ?? 0 });
+        const ra = mapAnterior.get(h);
+        horasSemanaAnterior.push({ hora: h, cantidad: ra?.cantidad ?? 0, total: ra?.total ?? 0 });
       }
-      return { horas };
+      // Etiqueta del día comparado, ej. "sábado 24/06" (TZ del proceso = AR en el .exe).
+      const diaAnteriorLabel = inicioSemanaPasada.toLocaleDateString('es-AR', {
+        weekday: 'long',
+        day: '2-digit',
+        month: '2-digit',
+      });
+      return { horas, horasSemanaAnterior, diaAnteriorLabel };
     },
   );
 
@@ -684,6 +719,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             tipoProductoId: z.string().uuid().optional(),
             formaVentaLabel: z.string().max(40).nullable().optional(),
             unidadPrecioLabel: z.string().max(40).nullable().optional(),
+            // Fix 3a: casillero "Enviar a cocina" por-producto. null = hereda del tipo.
+            cocinaIntervieneOverride: z.boolean().nullable().optional(),
             listasCustom: z.array(z.string().uuid()).optional(),
           })
           .refine(
@@ -698,6 +735,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               d.tipoProductoId !== undefined ||
               d.formaVentaLabel !== undefined ||
               d.unidadPrecioLabel !== undefined ||
+              d.cocinaIntervieneOverride !== undefined ||
               d.listasCustom !== undefined,
             { message: 'Hay que enviar al menos un campo a cambiar' },
           ),
@@ -717,6 +755,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         tipoProductoId?: string;
         formaVentaLabel?: string | null;
         unidadPrecioLabel?: string | null;
+        cocinaIntervieneOverride?: boolean | null;
         listasCustom?: string[];
       };
 
@@ -741,6 +780,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             ...(body.tipoProductoId !== undefined && { tipoProductoId: body.tipoProductoId }),
             ...(body.formaVentaLabel !== undefined && { formaVentaLabel: body.formaVentaLabel }),
             ...(body.unidadPrecioLabel !== undefined && { unidadPrecioLabel: body.unidadPrecioLabel }),
+            ...(body.cocinaIntervieneOverride !== undefined && {
+              cocinaIntervieneOverride: body.cocinaIntervieneOverride,
+            }),
           },
         });
         if (cambiaPrecio) {
@@ -1722,8 +1764,16 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const ventasCount = await prisma.venta.count({
         where: { sesionCajaId: sesion.id, estado: EstadoVenta.FINALIZADA },
       });
+      // `esEncargo: false`: los encargos A_PAGAR (pedidos futuros que se cobran EL
+      // DÍA de entrega, días después) nacen PROCESADA en la sesión donde se cargan,
+      // pero NO son "pedidos sin cobrar" del turno — NO deben bloquear el cierre.
+      // Al cobrarse se reasigna sesionCajaId a la sesión del cobro (entran a la
+      // caja de ese momento). Se cuentan aparte en `encargosAPagar` (informativo).
       const ventasAbiertas = await prisma.venta.count({
-        where: { sesionCajaId: sesion.id, estado: EstadoVenta.PROCESADA },
+        where: { sesionCajaId: sesion.id, estado: EstadoVenta.PROCESADA, esEncargo: false },
+      });
+      const encargosAPagar = await prisma.venta.count({
+        where: { sesionCajaId: sesion.id, estado: EstadoVenta.PROCESADA, esEncargo: true },
       });
 
       // Cobros por método — informativo, no afecta el cálculo de caja.
@@ -1815,6 +1865,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         }),
         ventasCount,
         ventasAbiertas,
+        encargosAPagar,
         totalEfectivo: totalEfectivo.toFixed(2),
         totalIngresosCaja: totalIngresosCaja.toFixed(2),
         totalEgresosCaja: totalEgresosCaja.toFixed(2),
@@ -3975,7 +4026,10 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       schema: {
         body: z.object({
           nombre: z.string().min(1).max(160),
-          tipoProductoId: z.string().uuid(),
+          // Fix 3b: subcategoría OPCIONAL. Si no viene tipoProductoId, se usa/crea
+          // un tipo "General" en la categoría (por eso también aceptamos categoriaId).
+          tipoProductoId: z.string().uuid().optional(),
+          categoriaId: z.string().uuid().optional(),
           codigo: z.string().max(40).nullable().optional(),
           marca: z.string().max(80).nullable().optional(),
           presentacion: z.string().max(80).nullable().optional(),
@@ -3988,6 +4042,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           unidadPrecioLabel: z.string().max(40).nullable().optional(),
           cantidadDefault: z.string().nullable().optional(),
           descripcion: z.string().nullable().optional(),
+          // Fix 3a: casillero "Enviar a cocina" por-producto. null = hereda del tipo.
+          cocinaIntervieneOverride: z.boolean().nullable().optional(),
           // Listas custom (mayoristas) a las que se agrega el producto. La
           // pública y las de canal lo incluyen siempre.
           listasCustom: z.array(z.string().uuid()).optional(),
@@ -3997,7 +4053,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     async (req, reply) => {
       const body = req.body as {
         nombre: string;
-        tipoProductoId: string;
+        tipoProductoId?: string;
+        categoriaId?: string;
         codigo?: string | null;
         marca?: string | null;
         presentacion?: string | null;
@@ -4014,9 +4071,40 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         unidadPrecioLabel?: string | null;
         cantidadDefault?: string | null;
         descripcion?: string | null;
+        cocinaIntervieneOverride?: boolean | null;
         listasCustom?: string[];
       };
-      const tipo = await prisma.tipoProducto.findUnique({ where: { id: body.tipoProductoId } });
+      // Fix 3b: subcategoría opcional. Si no viene tipoProductoId, usamos (o
+      // creamos) un tipo "General" en la categoría elegida — así el producto queda
+      // bien colgado sin obligar a la encargada a crear una sub-categoría antes.
+      let tipoProductoId: string;
+      if (body.tipoProductoId) {
+        tipoProductoId = body.tipoProductoId;
+      } else {
+        if (!body.categoriaId) {
+          return reply
+            .code(400)
+            .send({ error: 'Elegí una sub-categoría, o al menos una categoría' });
+        }
+        const cat = await prisma.categoria.findUnique({ where: { id: body.categoriaId } });
+        if (!cat) return reply.code(404).send({ error: 'Categoría no existe' });
+        let general = await prisma.tipoProducto.findFirst({
+          where: { categoriaId: body.categoriaId, nombre: 'General' },
+        });
+        if (!general) {
+          general = await prisma.tipoProducto.create({
+            data: {
+              nombre: 'General',
+              categoriaId: body.categoriaId,
+              cocinaInterviene: false,
+              esSubcategoria: true,
+              orden: 999,
+            },
+          });
+        }
+        tipoProductoId = general.id;
+      }
+      const tipo = await prisma.tipoProducto.findUnique({ where: { id: tipoProductoId } });
       if (!tipo) return reply.code(404).send({ error: 'Tipo de producto no existe' });
       // Si viene código, verificar único
       if (body.codigo) {
@@ -4026,7 +4114,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const producto = await prisma.producto.create({
         data: {
           nombre: body.nombre,
-          tipoProductoId: body.tipoProductoId,
+          tipoProductoId,
           codigo: body.codigo ?? null,
           marca: body.marca ?? null,
           presentacion: body.presentacion ?? null,
@@ -4037,6 +4125,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           unidadPrecioLabel: body.unidadPrecioLabel ?? null,
           cantidadDefault: body.cantidadDefault ?? null,
           descripcion: body.descripcion ?? null,
+          cocinaIntervieneOverride: body.cocinaIntervieneOverride ?? null,
           activo: true,
         },
       });
@@ -4238,6 +4327,259 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         });
         return { ok: true, deleted: false, deactivated: true };
       }
+    },
+  );
+
+  // ──────────────────────────────────────────────────────────────────────
+  //   MODIFICADORES (grupos genéricos: salsas, agregados, etc.)
+  //
+  //   Fix 3d: la encargada puede CREAR grupos de modificadores con sus opciones
+  //   (ej. "Salsa" → Fileto / Bolognesa / Mixta / Rosa) y APLICARLOS a cualquier
+  //   producto, además de los sabores clásicos. El cajero ya renderiza todos los
+  //   grupos aplicables del producto (los aplana en el modal de modificadores).
+  // ──────────────────────────────────────────────────────────────────────
+
+  // GET /admin/modificadores/grupos — todos los grupos con opciones + dónde se usan.
+  fastify.get(
+    '/admin/modificadores/grupos',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const grupos = await prisma.grupoModificador.findMany({
+        include: {
+          opciones: { orderBy: { orden: 'asc' } },
+          aplicables: {
+            include: {
+              tipoProducto: { select: { id: true, nombre: true } },
+              producto: { select: { id: true, nombre: true } },
+            },
+          },
+        },
+        orderBy: { nombre: 'asc' },
+      });
+      return {
+        grupos: grupos.map((g) => ({
+          id: g.id,
+          nombre: g.nombre,
+          tipoSeleccion: g.tipoSeleccion,
+          obligatorio: g.obligatorio,
+          opciones: g.opciones.map((o) => ({
+            id: o.id,
+            nombre: o.nombre,
+            deltaPrecio: o.deltaPrecio.toString(),
+            activa: o.activa,
+          })),
+          usadoEn: g.aplicables.map((a) => ({
+            aplicableId: a.id,
+            tipo: a.tipoProducto ? ('TIPO' as const) : ('PRODUCTO' as const),
+            nombre: a.tipoProducto?.nombre ?? a.producto?.nombre ?? '—',
+          })),
+        })),
+      };
+    },
+  );
+
+  // POST /admin/modificadores/grupos — crear grupo nuevo con sus opciones.
+  fastify.post(
+    '/admin/modificadores/grupos',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z.object({
+          nombre: z.string().min(1).max(80),
+          tipoSeleccion: z.enum(['UNICA', 'MULTIPLE']).default('UNICA'),
+          obligatorio: z.boolean().default(false),
+          opciones: z
+            .array(
+              z.object({
+                nombre: z.string().min(1).max(120),
+                deltaPrecio: z.string().regex(/^\d+(\.\d{1,2})?$/).default('0'),
+              }),
+            )
+            .min(1, 'El grupo necesita al menos una opción'),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const body = req.body as {
+        nombre: string;
+        tipoSeleccion: 'UNICA' | 'MULTIPLE';
+        obligatorio: boolean;
+        opciones: Array<{ nombre: string; deltaPrecio: string }>;
+      };
+      const yaExiste = await prisma.grupoModificador.findFirst({
+        where: { nombre: body.nombre },
+      });
+      if (yaExiste) {
+        return reply.code(409).send({ error: `Ya existe un grupo llamado "${body.nombre}"` });
+      }
+      const grupo = await prisma.grupoModificador.create({
+        data: {
+          nombre: body.nombre,
+          tipoSeleccion: body.tipoSeleccion,
+          obligatorio: body.obligatorio,
+          minOpciones: body.obligatorio ? 1 : 0,
+          maxOpciones: body.tipoSeleccion === 'UNICA' ? 1 : body.opciones.length,
+          opciones: {
+            create: body.opciones.map((o, idx) => ({
+              nombre: o.nombre,
+              deltaPrecio: o.deltaPrecio,
+              orden: idx,
+            })),
+          },
+        },
+        include: { opciones: { orderBy: { orden: 'asc' } } },
+      });
+      await recordAudit({
+        tabla: 'grupos_modificador',
+        registroId: grupo.id,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { nombre: grupo.nombre, opciones: body.opciones.map((o) => o.nombre) },
+      });
+      return reply.code(201).send({ grupo });
+    },
+  );
+
+  // GET /admin/productos/:id/modificadores — grupos aplicados a este producto
+  // (directos del producto + heredados de su tipo/sub-categoría).
+  fastify.get(
+    '/admin/productos/:id/modificadores',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const producto = await prisma.producto.findUnique({
+        where: { id: params.id },
+        include: {
+          modificadores: {
+            include: {
+              grupoModificador: { include: { opciones: { orderBy: { orden: 'asc' } } } },
+            },
+          },
+          tipoProducto: {
+            include: {
+              modificadores: {
+                include: {
+                  grupoModificador: { include: { opciones: { orderBy: { orden: 'asc' } } } },
+                },
+              },
+            },
+          },
+        },
+      });
+      if (!producto) return reply.code(404).send({ error: 'Producto no encontrado' });
+      const mapear = (
+        a: (typeof producto.modificadores)[number],
+        origen: 'PRODUCTO' | 'TIPO',
+      ) => ({
+        aplicableId: a.id,
+        origen,
+        grupo: {
+          id: a.grupoModificador.id,
+          nombre: a.grupoModificador.nombre,
+          tipoSeleccion: a.grupoModificador.tipoSeleccion,
+          obligatorio: a.grupoModificador.obligatorio,
+          opciones: a.grupoModificador.opciones.map((o) => ({
+            id: o.id,
+            nombre: o.nombre,
+            deltaPrecio: o.deltaPrecio.toString(),
+            activa: o.activa,
+          })),
+        },
+      });
+      return {
+        aplicados: [
+          ...producto.modificadores.map((a) => mapear(a, 'PRODUCTO')),
+          ...producto.tipoProducto.modificadores.map((a) => mapear(a, 'TIPO')),
+        ],
+      };
+    },
+  );
+
+  // POST /admin/productos/:id/modificadores — aplicar un grupo existente al producto.
+  fastify.post(
+    '/admin/productos/:id/modificadores',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({ grupoId: z.string().uuid() }),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const body = req.body as { grupoId: string };
+      const producto = await prisma.producto.findUnique({
+        where: { id: params.id },
+        include: { tipoProducto: { include: { modificadores: true } }, modificadores: true },
+      });
+      if (!producto) return reply.code(404).send({ error: 'Producto no encontrado' });
+      const grupo = await prisma.grupoModificador.findUnique({ where: { id: body.grupoId } });
+      if (!grupo) return reply.code(404).send({ error: 'Grupo no encontrado' });
+      const yaDirecto = producto.modificadores.some((a) => a.grupoModificadorId === body.grupoId);
+      const yaHeredado = producto.tipoProducto.modificadores.some(
+        (a) => a.grupoModificadorId === body.grupoId,
+      );
+      if (yaDirecto || yaHeredado) {
+        return reply.code(409).send({
+          error: yaHeredado
+            ? 'Ese grupo ya aplica por la sub-categoría del producto'
+            : 'Ese grupo ya está aplicado a este producto',
+        });
+      }
+      const aplicable = await prisma.modificadorAplicable.create({
+        data: { grupoModificadorId: body.grupoId, productoId: params.id },
+      });
+      await recordAudit({
+        tabla: 'modificadores_aplicables',
+        registroId: aplicable.id,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { grupo: grupo.nombre, producto: producto.nombre },
+      });
+      return reply.code(201).send({ aplicable });
+    },
+  );
+
+  // DELETE /admin/modificadores/aplicables/:id — quitar un grupo de un producto.
+  // Solo aplicaciones DIRECTAS al producto: las heredadas del tipo se quitan
+  // desde el tipo (afectan a todos sus productos — no lo hacemos silencioso).
+  fastify.delete(
+    '/admin/modificadores/aplicables/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const aplicable = await prisma.modificadorAplicable.findUnique({
+        where: { id: params.id },
+        include: {
+          grupoModificador: { select: { nombre: true } },
+          producto: { select: { nombre: true } },
+        },
+      });
+      if (!aplicable) return reply.code(404).send({ error: 'Aplicación no encontrada' });
+      if (!aplicable.productoId) {
+        return reply.code(400).send({
+          error:
+            'Ese grupo aplica a la sub-categoría entera (no a este producto puntual). Quitalo desde la sub-categoría.',
+        });
+      }
+      await prisma.modificadorAplicable.delete({ where: { id: params.id } });
+      await recordAudit({
+        tabla: 'modificadores_aplicables',
+        registroId: params.id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: {
+          grupo: aplicable.grupoModificador.nombre,
+          producto: aplicable.producto?.nombre ?? null,
+        },
+      });
+      return { ok: true };
     },
   );
 

@@ -423,6 +423,11 @@ model Producto {
   descripcion     String?
   imagenUrl       String?      @map("imagen_url")
   codigo          String?      @unique @db.VarChar(40)
+  /// Override por-producto de si va a COCINA (comandera 3). null = HEREDA de
+  /// `tipoProducto.cocinaInterviene` (comportamiento de siempre). true/false =
+  /// fuerza este producto sin importar el tipo. Lo setea el casillero "Enviar a
+  /// cocina" al crear/editar el producto. Resolución: override ?? tipo.
+  cocinaIntervieneOverride Boolean? @map("cocina_interviene_override")
   activo          Boolean      @default(true)
   creadoAt        DateTime     @default(now()) @map("creado_at")
 
@@ -988,6 +993,11 @@ model Venta {
   fechaCobroEncargo     DateTime?             @map("fecha_cobro_encargo")
   /// Usuario que efectuó el cobro diferido del encargo.
   usuarioCobroEncargoId String?               @map("usuario_cobro_encargo_id") @db.Uuid
+  /// Adiciones de encargo: si esta venta es una "modificación adicional al
+  /// pedido X" (items agregados a un encargo ya cargado/cobrado), apunta al
+  /// encargo raíz. La comanda se imprime SIEMPRE fusionada desde la raíz
+  /// (rótulo PAGO PARCIAL cuando hay mezcla de pagado/no pagado).
+  encargoPadreId        String?               @map("encargo_padre_id") @db.Uuid
 
   cliente             Cliente?     @relation(fields: [clienteId], references: [id])
   listaPrecios        ListaPrecios @relation(fields: [listaPreciosId], references: [id])
@@ -996,6 +1006,8 @@ model Venta {
   usuarioAnulacion    Usuario?     @relation("VentaAnulacion", fields: [usuarioAnulacionId], references: [id])
   usuarioCobroEncargo Usuario?     @relation("VentaCobroEncargo", fields: [usuarioCobroEncargoId], references: [id])
   sesionCaja          SesionCaja?  @relation(fields: [sesionCajaId], references: [id])
+  encargoPadre        Venta?       @relation("EncargoAdiciones", fields: [encargoPadreId], references: [id])
+  adicionesEncargo    Venta[]      @relation("EncargoAdiciones")
 
   items             ItemVenta[]
   pagos             Pago[]
@@ -1013,6 +1025,7 @@ model Venta {
   @@index([estado, fechaFinalizacion])
   // Encargos: el calendario lista por día de entrega.
   @@index([esEncargo, fechaEntregaPromesa])
+  @@index([encargoPadreId])
   @@map("ventas")
 }
 

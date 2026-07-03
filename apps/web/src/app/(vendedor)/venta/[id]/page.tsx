@@ -1359,18 +1359,32 @@ function TipoPedidoEditor({
     setModalidad(modalidadActual);
   }, [canalActual, modalidadActual]);
 
-  async function guardar() {
+  // Aplica el cambio APENAS se elige del desplegable (sin botones ✓/✗ chiquitos
+  // que nadie veía). Así al pasar a delivery aparecen al toque los campos de
+  // envío/dirección y los botones grandes de Cobrar/Guardar de la pantalla.
+  async function aplicar(nuevoCanal: string, nuevaModalidad: string) {
+    setCanal(nuevoCanal);
+    setModalidad(nuevaModalidad);
     setGuardando(true);
     setError(null);
     try {
-      await api.patch(`/ventas/${ventaId}`, { canal, modalidad });
-      setEditando(false);
+      await api.patch(`/ventas/${ventaId}`, { canal: nuevoCanal, modalidad: nuevaModalidad });
       await onUpdated();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Error al guardar');
+      // Rollback visual al valor real.
+      setCanal(canalActual);
+      setModalidad(modalidadActual);
     } finally {
       setGuardando(false);
     }
+  }
+
+  // Canal → modalidad por defecto (mismo mapeo que cargar-pedido).
+  function modalidadDefault(c: string): string {
+    if (c === 'MOSTRADOR') return 'TAKE_AWAY';
+    if (c === 'TELEFONO' || c === 'WHATSAPP' || c === 'WEB') return 'DELIVERY_PROPIO';
+    return 'DELIVERY_PLATAFORMA';
   }
 
   if (!editando) {
@@ -1399,8 +1413,9 @@ function TipoPedidoEditor({
     <span className="inline-flex items-center gap-1 bg-cream-100 px-2 py-1 rounded">
       <select
         value={canal}
-        onChange={(e) => setCanal(e.target.value)}
-        className="text-2xs border border-cream-300 rounded px-1 py-0.5"
+        disabled={guardando}
+        onChange={(e) => void aplicar(e.target.value, modalidadDefault(e.target.value))}
+        className="text-sm border border-cream-300 rounded px-2 py-1 disabled:opacity-60"
       >
         {CANALES.map((c) => (
           <option key={c} value={c}>
@@ -1410,8 +1425,9 @@ function TipoPedidoEditor({
       </select>
       <select
         value={modalidad}
-        onChange={(e) => setModalidad(e.target.value)}
-        className="text-2xs border border-cream-300 rounded px-1 py-0.5"
+        disabled={guardando}
+        onChange={(e) => void aplicar(canal, e.target.value)}
+        className="text-sm border border-cream-300 rounded px-2 py-1 disabled:opacity-60"
       >
         {MODALIDADES.map((m) => (
           <option key={m} value={m}>
@@ -1419,19 +1435,17 @@ function TipoPedidoEditor({
           </option>
         ))}
       </select>
-      <button
-        onClick={guardar}
-        disabled={guardando}
-        className="text-2xs text-basil-600 hover:underline disabled:opacity-50"
-      >
-        {guardando ? '...' : '✓'}
-      </button>
-      <button
-        onClick={() => setEditando(false)}
-        className="text-2xs text-ink-500 hover:text-pomodoro-600"
-      >
-        ✕
-      </button>
+      {guardando ? (
+        <span className="text-2xs text-ink-500 animate-pulse">guardando…</span>
+      ) : (
+        <button
+          onClick={() => setEditando(false)}
+          className="text-xs px-2.5 py-1 rounded-md bg-teresita-700 text-cream-50 font-medium hover:bg-teresita-900"
+          title="Terminar de editar el tipo de pedido"
+        >
+          Listo
+        </button>
+      )}
       {error && <span className="text-2xs text-pomodoro-600 ml-1">{error}</span>}
     </span>
   );

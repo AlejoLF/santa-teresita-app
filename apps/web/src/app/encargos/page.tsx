@@ -190,7 +190,7 @@ export default function EncargosPage() {
                       : 'bg-saffron-100 text-saffron-600',
                   )}
                 >
-                  {e.estadoCobro === 'COBRADO' ? 'Cobrado' : 'A pagar'}
+                  {e.estadoCobro === 'COBRADO' ? 'Cobrado' : e.estadoCobro === 'PARCIAL' ? 'Pago parcial' : 'A pagar'}
                 </span>
               </div>
               <div className="text-sm font-medium text-ink-900 truncate">{e.cliente ?? 'Sin nombre'}</div>

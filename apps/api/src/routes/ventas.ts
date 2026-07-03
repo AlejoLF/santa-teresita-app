@@ -22,9 +22,11 @@ import { recordAudit } from '../services/audit.js';
 import { aprobarConPinAdmin } from '../services/auth.js';
 import {
   encolarComandasCanceladas,
+  encolarComandasParaVenta,
   encolarTicketClienteParaVenta,
   encolarTicketDeliveryParaVenta,
   encolarComandaEncargo,
+  ventaYaEnviadaACocina,
 } from '../services/impresion.js';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta, EstadoPago } from '@sta/db';
@@ -738,14 +740,20 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
         //     "EFECTIVO / A_COBRAR" porque al crear venta todavía no había
         //     pagos registrados (incidente: ticket de #79 DEBITO impreso como
         //     EFECTIVO).
-        // La comanda de COCINA NO se encola acá: ya salió al ENVIAR el pedido
-        // (crear/agregar items en services/venta.ts), así la cocina arranca sin
-        // esperar el cobro. Acá sólo los tickets que necesitan el pago real.
+        // Comanda de COCINA: normalmente ya salió al ENVIAR el pedido (crear con
+        // "Enviar a cocina" / "Cargar otro", o al agregar items). PERO si el pedido
+        // se creó con "Cobrar" (enviarACocina=false), todavía no se envió a cocina:
+        // sale ACÁ, al confirmar el pago. `ventaYaEnviadaACocina` evita duplicar si
+        // ya había salido. Los tickets cliente/delivery salen acá porque necesitan
+        // el pago real ya registrado.
         if (venta.esEncargo) {
           // Encargo: una sola comanda ENCARGO → mostrador, ahora con "COBRADO"
           // (no los tickets normales de cliente/delivery).
           await encolarComandaEncargo(venta.id, 'COBRADO', tx);
         } else {
+          if (!(await ventaYaEnviadaACocina(venta.id, tx))) {
+            await encolarComandasParaVenta(venta.id, tx);
+          }
           await encolarTicketClienteParaVenta(venta.id, tx);
           await encolarTicketDeliveryParaVenta(venta.id, tx);
         }
