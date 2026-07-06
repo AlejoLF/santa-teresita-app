@@ -403,12 +403,22 @@ function buildDashboard(state: DemoState) {
 
 function ventasPorHora() {
   const horas = [];
+  const horasSemanaAnterior = [];
   for (let h = 9; h <= 22; h++) {
     const cantidad = Math.max(0, Math.round(Math.sin((h - 9) / 4) * 8 + 6 + (h === 13 || h === 21 ? 5 : 0)));
     const total = cantidad * (3500 + Math.round(Math.random() * 2500));
     horas.push({ hora: h, cantidad, total });
+    // Mismo día de la semana pasada: curva parecida con variación.
+    const cantAnt = Math.max(0, Math.round(Math.sin((h - 8.5) / 4) * 7 + 5 + (h === 21 ? 4 : 0)));
+    horasSemanaAnterior.push({ hora: h, cantidad: cantAnt, total: cantAnt * (3300 + Math.round(Math.random() * 2200)) });
   }
-  return { horas };
+  const diaAnteriorLabel = new Date(Date.now() - 7 * 86400000).toLocaleDateString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    weekday: 'long',
+    day: '2-digit',
+    month: '2-digit',
+  });
+  return { horas, horasSemanaAnterior, diaAnteriorLabel };
 }
 
 // ─── Análisis de ventas (página /admin/ventas) ────────────────────────

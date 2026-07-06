@@ -450,16 +450,17 @@ export default function AdminDashboard() {
       {/* Gráfico ventas por hora (versión ASCII-bar simple, sin libs externas) */}
       {grafico && (
         <section className="card p-5">
-          <h2 className="font-display text-md text-ink-900 mb-1">Ventas por hora · hoy</h2>
-          {grafico.diaAnteriorLabel && (
-            <p className="text-2xs text-ink-500 mb-3">
-              <span className="inline-block w-2.5 h-2.5 rounded-sm bg-teresita-500 align-middle mr-1" />
-              hoy ·{' '}
-              <span className="inline-block w-2.5 h-2.5 rounded-sm bg-wood-300 align-middle mx-1" />
-              {grafico.diaAnteriorLabel} (semana pasada, misma hora)
-            </p>
-          )}
-          <VentasPorHoraChart data={grafico.horas} anterior={grafico.horasSemanaAnterior} />
+          <h2 className="font-display text-md text-ink-900 mb-2">
+            Ventas por hora{' '}
+            <span className="text-xs text-ink-500 font-sans font-normal">
+              · hoy vs {grafico.diaAnteriorLabel ?? 'mismo día semana anterior'}
+            </span>
+          </h2>
+          <VentasPorHoraChart
+            data={grafico.horas}
+            anterior={grafico.horasSemanaAnterior}
+            labelAnterior={grafico.diaAnteriorLabel}
+          />
         </section>
       )}
     </div>
@@ -822,55 +823,98 @@ function DrillCategoria({
 function VentasPorHoraChart({
   data,
   anterior,
+  labelAnterior,
 }: {
   data: Array<{ hora: number; cantidad: number; total: number }>;
   anterior?: Array<{ hora: number; cantidad: number; total: number }>;
+  labelAnterior?: string;
 }) {
   // Escala común: el máximo entre HOY y la semana pasada, para que las barras
-  // sean comparables a simple vista.
+  // sean comparables a simple vista. Cada serie lleva su monto AL LADO de su
+  // barra (verde = hoy, marrón = mismo día de la semana pasada) — nada de
+  // columnas "vs" que no se sabe de quién son.
   const max = Math.max(
     1,
     ...data.map((d) => d.total),
     ...(anterior ?? []).map((d) => d.total),
   );
   const anteriorPorHora = new Map((anterior ?? []).map((d) => [d.hora, d]));
+  const totalHoy = data.reduce((a, d) => a + d.total, 0);
+  const cantHoy = data.reduce((a, d) => a + d.cantidad, 0);
+  const totalAnt = (anterior ?? []).reduce((a, d) => a + d.total, 0);
+  const cantAnt = (anterior ?? []).reduce((a, d) => a + d.cantidad, 0);
+  // Las barras usan hasta el 62% del ancho: siempre queda lugar para el monto.
+  const BAR_MAX = 62;
   return (
-    <div className="grid gap-1.5">
-      {data.map((d) => {
-        const pct = (d.total / max) * 100;
-        const ant = anteriorPorHora.get(d.hora);
-        const pctAnt = ant ? (ant.total / max) * 100 : 0;
-        return (
-          <div key={d.hora} className="flex items-center gap-2 text-xs">
-            <span className="font-mono w-10 text-ink-500">
-              {String(d.hora).padStart(2, '0')}:00
+    <div>
+      {/* Resumen del día — la referencia de colores ES el resumen */}
+      <div className="flex flex-wrap gap-x-6 gap-y-1 mb-3 text-sm">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block w-3 h-3 rounded-sm bg-teresita-500" />
+          <span className="text-ink-700 font-medium">Hoy:</span>
+          <MoneyAmount value={totalHoy} className="font-mono text-ink-900 font-semibold" />
+          <span className="text-2xs text-ink-500">({cantHoy} ventas)</span>
+        </span>
+        {anterior && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-3 h-3 rounded-sm bg-wood-500" />
+            <span className="text-wood-700 font-medium capitalize">
+              {labelAnterior ?? 'Semana pasada'}:
             </span>
-            <div className="flex-1">
-              <div className="bg-cream-200 rounded h-4 overflow-hidden">
-                <div
-                  className="bg-teresita-500 h-full transition-all duration-base"
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-              {ant && (
-                <div
-                  className="bg-cream-100 rounded-b h-2 overflow-hidden"
-                  title={`Semana pasada: $${ant.total.toLocaleString('es-AR')} (${ant.cantidad} ventas)`}
-                >
-                  <div className="bg-wood-300 h-full" style={{ width: `${pctAnt}%` }} />
+            <MoneyAmount value={totalAnt} className="font-mono text-wood-700 font-semibold" />
+            <span className="text-2xs text-wood-500">({cantAnt} ventas)</span>
+          </span>
+        )}
+      </div>
+
+      <div className="grid gap-2">
+        {data.map((d) => {
+          const pct = (d.total / max) * BAR_MAX;
+          const ant = anteriorPorHora.get(d.hora);
+          const pctAnt = ant ? (ant.total / max) * BAR_MAX : 0;
+          return (
+            <div key={d.hora} className="flex items-start gap-2 text-xs">
+              <span className="font-mono w-10 shrink-0 text-ink-500 pt-0.5">
+                {String(d.hora).padStart(2, '0')}:00
+              </span>
+              <div className="flex-1 min-w-0 space-y-0.5">
+                {/* HOY (verde) */}
+                <div className="flex items-center gap-1.5">
+                  <div
+                    className="h-4 rounded-sm bg-teresita-500 shrink-0"
+                    style={{ width: `${pct}%`, minWidth: d.total > 0 ? 3 : 0 }}
+                  />
+                  {d.total > 0 ? (
+                    <span className="font-mono text-ink-900 whitespace-nowrap">
+                      <MoneyAmount value={d.total} />{' '}
+                      <span className="text-2xs text-ink-400">({d.cantidad})</span>
+                    </span>
+                  ) : (
+                    <span className="font-mono text-2xs text-ink-300">—</span>
+                  )}
                 </div>
-              )}
+                {/* Mismo día semana pasada (marrón) */}
+                {ant && (
+                  <div className="flex items-center gap-1.5">
+                    <div
+                      className="h-2.5 rounded-sm bg-wood-500 shrink-0"
+                      style={{ width: `${pctAnt}%`, minWidth: ant.total > 0 ? 3 : 0 }}
+                    />
+                    {ant.total > 0 ? (
+                      <span className="font-mono text-2xs text-wood-700 whitespace-nowrap">
+                        <MoneyAmount value={ant.total} />{' '}
+                        <span className="text-wood-500">({ant.cantidad})</span>
+                      </span>
+                    ) : (
+                      <span className="font-mono text-2xs text-ink-300">—</span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-            <span className="font-mono w-24 text-right text-ink-700">
-              <MoneyAmount value={d.total} />
-            </span>
-            <span className="font-mono w-20 text-right text-ink-400 text-2xs">
-              {ant ? <>vs <MoneyAmount value={ant.total} /></> : '—'}
-            </span>
-            <span className="font-mono w-10 text-right text-ink-500">{d.cantidad}</span>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
