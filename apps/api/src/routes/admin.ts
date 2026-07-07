@@ -24,6 +24,7 @@ import { sendMail, sendTestEmail } from '../services/mailer.js';
 import { actualizarCashflow } from '../services/excel-writeback.js';
 import {
   getSesionActualReadOnly,
+  getSesionAnteriorReadOnly,
   getOrCreateSesionActual,
   FueraDeHorarioError,
 } from '../services/sesion-caja.js';
@@ -159,7 +160,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
       schema: {
         querystring: z.object({
-          periodo: z.enum(['sesion_actual', 'dia', 'semana', 'custom']).default('dia'),
+          periodo: z
+            .enum(['sesion_actual', 'sesion_anterior', 'dia', 'semana', 'custom'])
+            .default('dia'),
           desde: z.string().optional(), // ISO datetime, solo para custom
           hasta: z.string().optional(),
         }),
@@ -167,7 +170,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     },
     async (req) => {
       const q = req.query as {
-        periodo: 'sesion_actual' | 'dia' | 'semana' | 'custom';
+        periodo: 'sesion_actual' | 'sesion_anterior' | 'dia' | 'semana' | 'custom';
         desde?: string;
         hasta?: string;
       };
@@ -192,6 +195,17 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           rangoLabel = 'Sesión actual';
         } else {
           rangoLabel = 'Hoy (sin sesión abierta)';
+        }
+      } else if (q.periodo === 'sesion_anterior') {
+        // Ventana [apertura, cierre] de la sesión inmediatamente previa a la
+        // actual — mismo criterio de ventana-por-fechas que sesion_actual.
+        const { sesion } = await getSesionAnteriorReadOnly();
+        if (sesion) {
+          rangoDesde = sesion.horarioApertura;
+          rangoHasta = sesion.horarioCierre ?? ahora;
+          rangoLabel = 'Sesión anterior';
+        } else {
+          rangoLabel = 'Hoy (sin sesión anterior)';
         }
       } else if (q.periodo === 'semana') {
         rangoDesde = new Date(inicioHoy);
@@ -909,9 +923,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           tipo: z.enum(['INGRESO', 'EGRESO', 'TRANSFERENCIA_INTERNA', 'AJUSTE']).optional(),
           categoriaId: z.string().uuid().optional(),
           cuentaId: z.string().uuid().optional(),
-          // `sesion=actual` filtra por la sesión de caja abierta. Tiene prioridad
+          // `sesion=actual|anterior` filtra por sesión de caja. Tiene prioridad
           // sobre desde/hasta (es un filtro por sesión, no por fecha).
-          sesion: z.enum(['actual']).optional(),
+          sesion: z.enum(['actual', 'anterior']).optional(),
           desde: z.string().datetime().optional(),
           hasta: z.string().datetime().optional(),
           page: z.coerce.number().int().min(1).default(1),
@@ -924,7 +938,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         tipo?: 'INGRESO' | 'EGRESO' | 'TRANSFERENCIA_INTERNA' | 'AJUSTE';
         categoriaId?: string;
         cuentaId?: string;
-        sesion?: 'actual';
+        sesion?: 'actual' | 'anterior';
         desde?: string;
         hasta?: string;
         page: number;
@@ -943,6 +957,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           select: { id: true },
         });
         sesionCajaId = abierta?.id ?? '00000000-0000-0000-0000-000000000000';
+      } else if (q.sesion === 'anterior') {
+        const { sesion } = await getSesionAnteriorReadOnly();
+        sesionCajaId = sesion?.id ?? '00000000-0000-0000-0000-000000000000';
       }
 
       const where = {

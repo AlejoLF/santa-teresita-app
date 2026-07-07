@@ -1,8 +1,18 @@
 'use client';
 
-export type Periodo = 'hoy' | 'semana' | 'mes' | 'trimestre' | 'anio' | 'custom';
+export type Periodo =
+  | 'sesion_actual'
+  | 'sesion_anterior'
+  | 'hoy'
+  | 'semana'
+  | 'mes'
+  | 'trimestre'
+  | 'anio'
+  | 'custom';
 
 const PERIODOS: Array<{ key: Periodo; label: string }> = [
+  { key: 'sesion_actual', label: '🟢 Sesión actual' },
+  { key: 'sesion_anterior', label: '⏮ Sesión anterior' },
   { key: 'hoy', label: 'Hoy' },
   { key: 'semana', label: '7 días' },
   { key: 'mes', label: '30 días' },

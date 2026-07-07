@@ -47,10 +47,11 @@ interface Listado {
 
 const PAGE_SIZE = 50;
 
-type Periodo = 'sesion' | 'hoy' | 'semana' | 'mes' | 'custom';
+type Periodo = 'sesion' | 'sesion_anterior' | 'hoy' | 'semana' | 'mes' | 'custom';
 
 const PERIODOS: Array<{ value: Periodo; label: string }> = [
   { value: 'sesion', label: 'Sesión actual' },
+  { value: 'sesion_anterior', label: 'Sesión anterior' },
   { value: 'hoy', label: 'Hoy' },
   { value: 'semana', label: 'Semana' },
   { value: 'mes', label: 'Mes' },
@@ -122,6 +123,8 @@ export default function AdminMovimientosPage() {
       if (cuentaFiltro) params.set('cuentaId', cuentaFiltro);
       if (periodo === 'sesion') {
         params.set('sesion', 'actual');
+      } else if (periodo === 'sesion_anterior') {
+        params.set('sesion', 'anterior');
       } else if (periodo === 'custom') {
         const desde = fechaInputAIso(customDesde, false);
         const hasta = fechaInputAIso(customHasta, true);

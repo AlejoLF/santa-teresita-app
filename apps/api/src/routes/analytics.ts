@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { Prisma } from '@sta/db';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta, RolUsuario } from '@sta/db';
+import {
+  getSesionActualReadOnly,
+  getSesionAnteriorReadOnly,
+} from '../services/sesion-caja.js';
 
 /**
  * Endpoints de Analytics — el panel pro para Julio (contador) y la encargada.
@@ -14,21 +18,36 @@ import { EstadoVenta, RolUsuario } from '@sta/db';
  */
 export default async function analyticsRoutes(fastify: FastifyInstance) {
   const QuerySchema = z.object({
-    periodo: z.enum(['hoy', 'semana', 'mes', 'trimestre', 'anio', 'custom']).default('mes'),
+    periodo: z
+      .enum(['sesion_actual', 'sesion_anterior', 'hoy', 'semana', 'mes', 'trimestre', 'anio', 'custom'])
+      .default('mes'),
     desde: z.string().optional(),
     hasta: z.string().optional(),
   });
 
   /** Resuelve el rango (desde, hasta, desdeAnterior) según el período. */
-  function resolverRango(q: z.infer<typeof QuerySchema>): {
+  async function resolverRango(q: z.infer<typeof QuerySchema>): Promise<{
     desde: Date;
     hasta: Date;
     desdeAnterior: Date;
     hastaAnterior: Date;
-  } {
+  }> {
     let hasta = new Date();
-    const desde = new Date(hasta);
-    if (q.periodo === 'custom') {
+    let desde = new Date(hasta);
+    if (q.periodo === 'sesion_actual' || q.periodo === 'sesion_anterior') {
+      // Ventana [apertura, cierre] de la sesión de caja pedida. Si no existe
+      // (instalación nueva sin sesiones), ventana vacía → gráficos en cero.
+      const { sesion } =
+        q.periodo === 'sesion_actual'
+          ? await getSesionActualReadOnly()
+          : await getSesionAnteriorReadOnly();
+      if (sesion) {
+        desde = sesion.horarioApertura;
+        hasta = sesion.horarioCierre ?? new Date();
+      } else {
+        desde = new Date(hasta);
+      }
+    } else if (q.periodo === 'custom') {
       if (!q.desde || !q.hasta) {
         throw new Error('Para periodo=custom, desde y hasta son requeridos (YYYY-MM-DD)');
       }
@@ -75,7 +94,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
     },
     async (req) => {
       const q = req.query as z.infer<typeof QuerySchema>;
-      const { desde, hasta, desdeAnterior, hastaAnterior } = resolverRango(q);
+      const { desde, hasta, desdeAnterior, hastaAnterior } = await resolverRango(q);
 
       // KPIs período actual
       const ventas = await prisma.venta.aggregate({
@@ -269,7 +288,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
     },
     async (req) => {
       const q = req.query as z.infer<typeof QuerySchema>;
-      const { desde, hasta } = resolverRango(q);
+      const { desde, hasta } = await resolverRango(q);
 
       // Heatmap día (0-6) × hora (0-23) — día y hora en horario de La Plata
       // (AT TIME ZONE) para que las franjas no salgan corridas 3 h (Supabase=UTC).
@@ -341,7 +360,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
     },
     async (req) => {
       const q = req.query as z.infer<typeof QuerySchema>;
-      const { desde, hasta } = resolverRango(q);
+      const { desde, hasta } = await resolverRango(q);
 
       // RFM: Recency (días desde última compra), Frequency (cant. compras),
       // Monetary (total gastado). Calculados sobre TODA la historia, no solo
@@ -542,7 +561,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
     },
     async (req) => {
       const q = req.query as z.infer<typeof QuerySchema> & { categoriaId?: string };
-      const { desde, hasta, desdeAnterior, hastaAnterior } = resolverRango(q);
+      const { desde, hasta, desdeAnterior, hastaAnterior } = await resolverRango(q);
 
       // Filtro de categoría: si vino el id, joineamos productos + tipos_producto
       // para filtrar por categoria_id. Si no vino, ninguna condición extra.
@@ -733,7 +752,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
     },
     async (req) => {
       const q = req.query as z.infer<typeof QuerySchema>;
-      const { desde, hasta } = resolverRango(q);
+      const { desde, hasta } = await resolverRango(q);
 
       // Comisiones por canal (ajustables via configuracion_sistema en el futuro)
       const COMISIONES_DEFAULT: Record<string, number> = {
@@ -853,7 +872,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
     },
     async (req) => {
       const q = req.query as z.infer<typeof QuerySchema>;
-      const { desde, hasta } = resolverRango(q);
+      const { desde, hasta } = await resolverRango(q);
 
       // Performance por vendedor: agregamos en CTEs separadas para evitar
       // subqueries correlacionadas. Una para totales por venta, otra para
@@ -976,7 +995,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
     },
     async (req) => {
       const q = req.query as z.infer<typeof QuerySchema>;
-      const { desde, hasta } = resolverRango(q);
+      const { desde, hasta } = await resolverRango(q);
 
       // Pines del DÍA actual (operativo)
       const inicioHoy = new Date();

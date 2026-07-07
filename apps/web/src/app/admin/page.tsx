@@ -80,7 +80,7 @@ interface VentasPorHora {
   diaAnteriorLabel?: string;
 }
 
-type PeriodoTipo = 'sesion_actual' | 'dia' | 'semana' | 'custom';
+type PeriodoTipo = 'sesion_actual' | 'sesion_anterior' | 'dia' | 'semana' | 'custom';
 
 export default function AdminDashboard() {
   const [data, setData] = useState<Dashboard | null>(null);
@@ -202,6 +202,7 @@ export default function AdminDashboard() {
         {(
           [
             { v: 'sesion_actual', label: 'Sesión actual' },
+            { v: 'sesion_anterior', label: 'Sesión anterior' },
             { v: 'dia', label: 'Hoy' },
             { v: 'semana', label: 'Semana' },
             { v: 'custom', label: 'Personalizado' },

@@ -125,3 +125,22 @@ export async function getSesionActualReadOnly(): Promise<{
   });
   return { sesion, resolucion };
 }
+
+/**
+ * La sesión INMEDIATAMENTE ANTERIOR a la "actual" (por horarioApertura).
+ * Referencia = la sesión actual resuelta por horarios; si no hay (fuera de
+ * horario sin abiertas), la última sesión existente. Devuelve null solo si no
+ * existe ninguna sesión previa (instalación nueva). La usan los filtros
+ * "Sesión anterior" del dashboard, movimientos, ventas y analytics.
+ */
+export async function getSesionAnteriorReadOnly(): Promise<{ sesion: SesionCaja | null }> {
+  const r = await getSesionActualReadOnly();
+  const ref =
+    r.sesion ?? (await prisma.sesionCaja.findFirst({ orderBy: { horarioApertura: 'desc' } }));
+  if (!ref) return { sesion: null };
+  const sesion = await prisma.sesionCaja.findFirst({
+    where: { horarioApertura: { lt: ref.horarioApertura } },
+    orderBy: { horarioApertura: 'desc' },
+  });
+  return { sesion };
+}
