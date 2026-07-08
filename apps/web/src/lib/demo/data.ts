@@ -20,6 +20,8 @@ export const categorias = [
       { id: id('tp-noquis'), nombre: 'Ñoquis', cocinaInterviene: false, activo: true, orden: 3, categoriaId: id('cat-pastas-frescas') },
       { id: id('tp-tallarines'), nombre: 'Tallarines', cocinaInterviene: false, activo: true, orden: 4, categoriaId: id('cat-pastas-frescas') },
       { id: id('tp-fideos'), nombre: 'Fideos secos', cocinaInterviene: false, activo: true, orden: 5, categoriaId: id('cat-pastas-frescas') },
+      // Porción caliente: dispara el flujo sabor + salsa incluida (como en prod).
+      { id: id('tp-porcion-simple'), nombre: 'Porción simple', cocinaInterviene: true, activo: true, orden: 6, categoriaId: id('cat-pastas-frescas') },
     ],
   },
   {
@@ -158,6 +160,7 @@ export const productosSeed: ProductoSeed[] = [
   { id: id('p-0013'), codigo: '0013', nombre: 'Ñoquis de papa', precioBase: '1200', formaVenta: 'PORCION', unidadPrecio: 'POR_PORCION', cantidadDefault: '1', tipoId: id('tp-noquis'), activo: true },
   { id: id('p-0014'), codigo: '0014', nombre: 'Tallarines al huevo', precioBase: '1100', formaVenta: 'PORCION', unidadPrecio: 'POR_PORCION', cantidadDefault: '1', tipoId: id('tp-tallarines'), activo: true },
   { id: id('p-0015'), codigo: '0015', nombre: 'Fideos secos por kilo', precioBase: '4500', formaVenta: 'GRAMO', unidadPrecio: 'POR_KILO', cantidadDefault: '500', tipoId: id('tp-fideos'), activo: true },
+  { id: id('p-3000'), codigo: '3000', nombre: 'Ravioles porción simple', precioBase: '6200', formaVenta: 'PORCION', unidadPrecio: 'POR_PORCION', cantidadDefault: '1', tipoId: id('tp-porcion-simple'), grupoMod: grupoModRavioles, activo: true },
   // Rellenos
   { id: id('p-0021'), codigo: '0021', nombre: 'Canelones', precioBase: '1600', formaVenta: 'UNIDAD', unidadPrecio: 'POR_UNIDAD', cantidadDefault: '1', tipoId: id('tp-canelones'), grupoMod: grupoModCanelones, activo: true },
   { id: id('p-0022'), codigo: '0022', nombre: 'Lasaña casera', precioBase: '1800', formaVenta: 'PORCION', unidadPrecio: 'POR_PORCION', cantidadDefault: '1', tipoId: id('tp-lasagna'), activo: true },

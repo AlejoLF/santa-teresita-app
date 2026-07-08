@@ -244,6 +244,12 @@ function productosFull() {
       modificadores: mods,
       saboresResumen: sabores.map((s) => s.nombre).slice(0, 8),
       sabores,
+      // Misma regla que la API real: detectado por el nombre del tipo.
+      incluyeSalsa: tipo.nombre.toLowerCase().endsWith('porción simple')
+        ? ('SIMPLE' as const)
+        : tipo.nombre.toLowerCase().endsWith('porción especial')
+          ? ('ESPECIAL' as const)
+          : null,
     };
   });
 }
@@ -1088,6 +1094,24 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
   // ─── Catálogo ──────────────────────────────────────────────────────
   if (p === '/catalogo/categorias' && method === 'GET') return ok({ categorias });
   if (p === '/catalogo/productos' && method === 'GET') return ok({ productos: productosFull() });
+  {
+    const mSalsa = p.match(/^\/catalogo\/salsa\/(SIMPLE|ESPECIAL)$/);
+    if (mSalsa && method === 'GET') {
+      const tipoSalsa = mSalsa[1] as 'SIMPLE' | 'ESPECIAL';
+      const grupoNombre = tipoSalsa === 'SIMPLE' ? 'Tipo — Salsa simple' : 'Tipo — Salsa especial';
+      return ok({
+        producto: { id: `p-salsa-${tipoSalsa.toLowerCase()}`, nombre: `Salsa ${tipoSalsa.toLowerCase()}`, precioBase: '0' },
+        sabores: grupoModSalsa.opciones.map((o) => ({
+          opcionId: o.id,
+          grupoId: grupoModSalsa.id,
+          grupoNombre,
+          nombre: o.nombre,
+          deltaPrecio: '0',
+          codigo: null,
+        })),
+      });
+    }
+  }
   if (p.startsWith('/catalogo/buscar-por-codigo/') && method === 'GET') {
     const codigo = p.split('/').pop()!;
     let codigoNorm = codigo;

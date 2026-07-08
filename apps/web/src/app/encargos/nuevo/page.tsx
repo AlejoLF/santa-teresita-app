@@ -288,8 +288,10 @@ function NuevoEncargoInner() {
                     <div className="flex-1 min-w-0">
                       <div className="text-ink-900 truncate">
                         {l.nombre}
-                        {l.modificadores[0] && (
-                          <span className="text-ink-500"> ({l.modificadores[0].opcionNombre})</span>
+                        {l.modificadores.length > 0 && (
+                          <span className="text-ink-500">
+                            {' '}({l.modificadores.map((m) => m.opcionNombre).join(' · ')})
+                          </span>
                         )}
                       </div>
                       <div className="text-2xs font-mono text-ink-500">
@@ -539,36 +541,87 @@ function ConfigProductoModal({
   onClose: () => void;
   onConfirm: (modificadores: Modificador[], cantidad: number) => void;
 }) {
-  const [opciones, setOpciones] = useState<Sabor[]>(producto.sabores ?? []);
+  // Sabores propios del producto (ej. "Ricota y espinaca" de los Ravioles).
+  const opciones = producto.sabores ?? [];
   const [sel, setSel] = useState<string>('');
+  // Salsa INCLUIDA de las porciones calientes — mismo comportamiento que el
+  // cargar-pedido normal: se elige aparte del sabor y viaja como modificador
+  // con deltaPrecio 0 (el precio de la porción ya la incluye).
+  const [salsas, setSalsas] = useState<Sabor[]>([]);
+  const [salsaProductoId, setSalsaProductoId] = useState<string | null>(null);
+  const [salsaSel, setSalsaSel] = useState<string>('');
   const [cantidad, setCantidad] = useState(1);
   const [cargando, setCargando] = useState(false);
 
-  // Si la pasta "incluye salsa", traemos las salsas del tipo correspondiente.
   useEffect(() => {
-    if (producto.incluyeSalsa && (!producto.sabores || producto.sabores.length === 0)) {
+    // OJO: se buscan las salsas SIEMPRE que la porción incluya salsa — antes
+    // solo se buscaban si el producto no tenía sabores, y desde la reorg de
+    // porciones (sabores a nivel producto) el menú de salsas no aparecía.
+    if (producto.incluyeSalsa) {
       setCargando(true);
       api
-        .get<{ sabores: Sabor[] }>(`/catalogo/salsa/${producto.incluyeSalsa}`)
-        .then((r) => setOpciones(r.sabores ?? []))
-        .catch(() => setOpciones([]))
+        .get<{ producto: { id: string }; sabores: Sabor[] }>(`/catalogo/salsa/${producto.incluyeSalsa}`)
+        .then((r) => {
+          setSalsas(r.sabores ?? []);
+          setSalsaProductoId(r.producto?.id ?? null);
+        })
+        .catch(() => setSalsas([]))
         .finally(() => setCargando(false));
     }
   }, [producto]);
 
-  function confirmar() {
-    const op = opciones.find((o) => o.opcionId === sel);
-    const mods: Modificador[] = op
+  // Extras "manuales" de salsa — no son OpcionModificador reales, son etiquetas
+  // frontend-only (mismo listado que el cargar-pedido normal).
+  const extrasSalsa: Array<{ id: string; nombre: string }> =
+    producto.incluyeSalsa === 'SIMPLE'
       ? [
-          {
-            grupoId: op.grupoId,
-            grupoNombre: op.grupoNombre,
-            opcionId: op.opcionId,
-            opcionNombre: op.nombre,
-            deltaPrecio: op.deltaPrecio ?? '0',
-          },
+          { id: '__aceite', nombre: 'Aceite' },
+          { id: '__aceite_oliva', nombre: 'Aceite de oliva' },
+          { id: '__manteca', nombre: 'Manteca' },
         ]
-      : [];
+      : producto.incluyeSalsa === 'ESPECIAL'
+        ? [
+            { id: '__mixta', nombre: 'Mixta' },
+            { id: '__rosa', nombre: 'Rosa' },
+          ]
+        : [];
+
+  function confirmar() {
+    const mods: Modificador[] = [];
+    const op = opciones.find((o) => o.opcionId === sel);
+    if (op) {
+      mods.push({
+        grupoId: op.grupoId,
+        grupoNombre: op.grupoNombre,
+        opcionId: op.opcionId,
+        opcionNombre: op.nombre,
+        deltaPrecio: op.deltaPrecio ?? '0',
+      });
+    }
+    if (producto.incluyeSalsa && salsaSel) {
+      const salsaReal = salsas.find((s) => s.opcionId === salsaSel);
+      if (salsaReal) {
+        mods.push({
+          grupoId: salsaReal.grupoId,
+          grupoNombre: salsaReal.grupoNombre,
+          opcionId: salsaReal.opcionId,
+          opcionNombre: salsaReal.nombre,
+          deltaPrecio: '0', // incluida — el cargo está en la porción
+        });
+      } else {
+        const extra = extrasSalsa.find((e) => e.id === salsaSel);
+        if (extra) {
+          mods.push({
+            grupoId: salsaProductoId ?? '__salsa',
+            grupoNombre:
+              producto.incluyeSalsa === 'SIMPLE' ? 'Tipo — Salsa simple' : 'Tipo — Salsa especial',
+            opcionId: extra.id,
+            opcionNombre: extra.nombre,
+            deltaPrecio: '0',
+          });
+        }
+      }
+    }
     onConfirm(mods, cantidad);
   }
 
@@ -579,23 +632,63 @@ function ConfigProductoModal({
         {cargando ? (
           <p className="text-sm text-ink-500 py-4">Cargando opciones…</p>
         ) : (
-          <div className="max-h-[40vh] overflow-y-auto divide-y divide-cream-200 mb-3">
-            {opciones.map((o) => (
-              <button
-                key={o.opcionId}
-                onClick={() => setSel(o.opcionId)}
-                className={cn(
-                  'w-full text-left px-2 py-2 text-sm flex justify-between items-center',
-                  sel === o.opcionId ? 'bg-wood-100' : 'hover:bg-cream-100',
-                )}
-              >
-                <span>{o.nombre}</span>
-                {Number(o.deltaPrecio) > 0 && (
-                  <span className="text-2xs font-mono text-ink-500">+${Number(o.deltaPrecio).toLocaleString('es-AR')}</span>
-                )}
-              </button>
-            ))}
-            {opciones.length === 0 && <p className="text-sm text-ink-500 py-3">Sin opciones — se agrega directo.</p>}
+          <div className="max-h-[52vh] overflow-y-auto mb-3 space-y-3">
+            {/* Sabor del producto (si tiene) */}
+            {opciones.length > 0 && (
+              <div>
+                <div className="text-2xs font-semibold uppercase tracking-wider text-wood-700 mb-1">
+                  Sabor *
+                </div>
+                <div className="divide-y divide-cream-200 border border-cream-200 rounded-md">
+                  {opciones.map((o) => (
+                    <button
+                      key={o.opcionId}
+                      onClick={() => setSel(o.opcionId)}
+                      className={cn(
+                        'w-full text-left px-2 py-2 text-sm flex justify-between items-center',
+                        sel === o.opcionId ? 'bg-wood-100' : 'hover:bg-cream-100',
+                      )}
+                    >
+                      <span>{o.nombre}</span>
+                      {Number(o.deltaPrecio) > 0 && (
+                        <span className="text-2xs font-mono text-ink-500">+${Number(o.deltaPrecio).toLocaleString('es-AR')}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Salsa incluida (porciones calientes) — igual que el cargar-pedido */}
+            {producto.incluyeSalsa && (
+              <div>
+                <div className="text-2xs font-semibold uppercase tracking-wider text-wood-700 mb-1">
+                  Salsa {producto.incluyeSalsa === 'SIMPLE' ? 'simple' : 'especial'} (incluida)
+                </div>
+                <div className="divide-y divide-cream-200 border border-cream-200 rounded-md">
+                  {[...salsas.map((s) => ({ id: s.opcionId, nombre: s.nombre })), ...extrasSalsa].map(
+                    (s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => setSalsaSel(salsaSel === s.id ? '' : s.id)}
+                        className={cn(
+                          'w-full text-left px-2 py-2 text-sm flex justify-between items-center',
+                          salsaSel === s.id ? 'bg-wood-100' : 'hover:bg-cream-100',
+                        )}
+                      >
+                        <span>{s.nombre}</span>
+                        {salsaSel === s.id && <span className="text-wood-700 text-xs">✓</span>}
+                      </button>
+                    ),
+                  )}
+                  {salsas.length === 0 && extrasSalsa.length === 0 && (
+                    <p className="text-sm text-ink-500 px-2 py-2">Cargando salsas…</p>
+                  )}
+                </div>
+              </div>
+            )}
+            {opciones.length === 0 && !producto.incluyeSalsa && (
+              <p className="text-sm text-ink-500 py-3">Sin opciones — se agrega directo.</p>
+            )}
           </div>
         )}
         <div className="flex items-center gap-2">
