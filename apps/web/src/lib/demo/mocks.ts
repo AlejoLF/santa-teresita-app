@@ -1012,9 +1012,20 @@ const MAYORISTAS_DEMO = [
     activo: true,
     lista: { id: 'lm-a', nombre: 'Mayorista A' },
     remitos: [
-      { id: 'rem-1', numero: 101, fecha: addDays(-20), total: '85000', estado: 'PENDIENTE', itemsCount: 6, observaciones: null },
-      { id: 'rem-2', numero: 102, fecha: addDays(-10), total: '64000', estado: 'PENDIENTE', itemsCount: 4, observaciones: 'Sin TACC' },
-      { id: 'rem-3', numero: 103, fecha: addDays(-3), total: '120000', estado: 'PENDIENTE', itemsCount: 9, observaciones: null },
+      { id: 'rem-1', numero: 101, fecha: addDays(-20), total: '85000', estado: 'PENDIENTE', itemsCount: 6, observaciones: null, items: [
+        { nombre: 'Ravioles tradicionales', cantidad: '20', precioUnitario: '1500', subtotal: '30000' },
+        { nombre: 'Sorrentinos caseros', cantidad: '22', precioUnitario: '1818.18', subtotal: '40000' },
+        { nombre: 'Salsa casera', cantidad: '18.75', precioUnitario: '800', subtotal: '15000' },
+      ] },
+      { id: 'rem-2', numero: 102, fecha: addDays(-10), total: '64000', estado: 'PENDIENTE', itemsCount: 4, observaciones: 'Sin TACC', items: [
+        { nombre: 'Ñoquis de papa', cantidad: '25', precioUnitario: '1600', subtotal: '40000' },
+        { nombre: 'Tallarines al huevo', cantidad: '20', precioUnitario: '1200', subtotal: '24000' },
+      ] },
+      { id: 'rem-3', numero: 103, fecha: addDays(-3), total: '120000', estado: 'PENDIENTE', itemsCount: 9, observaciones: null, items: [
+        { nombre: 'Canelones', cantidad: '30', precioUnitario: '1600', subtotal: '48000' },
+        { nombre: 'Lasaña casera', cantidad: '25', precioUnitario: '1800', subtotal: '45000' },
+        { nombre: 'Pesto fresco', cantidad: '22.5', precioUnitario: '1200', subtotal: '27000' },
+      ] },
     ],
     cobros: [
       { id: 'cob-1', fecha: addDays(-8), monto: '100000', cuenta: 'Santander', usuario: 'Julio (Dueño)', observacion: 'Transferencia' },
@@ -1032,8 +1043,14 @@ const MAYORISTAS_DEMO = [
     activo: true,
     lista: { id: 'lm-b', nombre: 'Mayorista B' },
     remitos: [
-      { id: 'rem-4', numero: 104, fecha: addDays(-15), total: '48000', estado: 'PENDIENTE', itemsCount: 3, observaciones: null },
-      { id: 'rem-5', numero: 105, fecha: addDays(-5), total: '52000', estado: 'PENDIENTE', itemsCount: 5, observaciones: null },
+      { id: 'rem-4', numero: 104, fecha: addDays(-15), total: '48000', estado: 'PENDIENTE', itemsCount: 3, observaciones: null, items: [
+        { nombre: 'Tarta pascualina', cantidad: '20', precioUnitario: '1400', subtotal: '28000' },
+        { nombre: 'Tarta de verdura', cantidad: '14.28', precioUnitario: '1400', subtotal: '20000' },
+      ] },
+      { id: 'rem-5', numero: 105, fecha: addDays(-5), total: '52000', estado: 'PENDIENTE', itemsCount: 5, observaciones: null, items: [
+        { nombre: 'Ravioles tradicionales', cantidad: '24', precioUnitario: '1500', subtotal: '36000' },
+        { nombre: 'Salsa casera', cantidad: '20', precioUnitario: '800', subtotal: '16000' },
+      ] },
     ],
     cobros: [
       { id: 'cob-2', fecha: addDays(-12), monto: '48000', cuenta: 'Efectivo', usuario: 'María (Encargada)', observacion: null },

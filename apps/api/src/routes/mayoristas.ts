@@ -225,7 +225,12 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           where: { clienteMayoristaId: id },
           orderBy: { fecha: 'desc' },
           take: 500,
-          include: { _count: { select: { items: true } } },
+          // Items completos: el "Imprimir resumen" lista los productos de cada
+          // remito (nombre, cantidad, unitario, total de línea).
+          include: {
+            _count: { select: { items: true } },
+            items: { orderBy: { orden: 'asc' } },
+          },
         }),
         prisma.movimiento.findMany({
           where: { entidadId: id, tipo: 'INGRESO' },
@@ -272,6 +277,12 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           estado: r.estado,
           itemsCount: r._count.items,
           observaciones: r.observaciones,
+          items: r.items.map((it) => ({
+            nombre: it.nombreSnapshot,
+            cantidad: it.cantidad.toString(),
+            precioUnitario: it.precioUnitario.toFixed(2),
+            subtotal: it.subtotal.toFixed(2),
+          })),
         })),
         cobros: cobros
           .filter((m) => m.estado === EstadoMovimiento.CONFIRMADO)

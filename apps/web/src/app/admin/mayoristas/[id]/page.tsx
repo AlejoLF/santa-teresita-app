@@ -15,6 +15,8 @@ interface Remito {
   estado: 'PENDIENTE' | 'ANULADO';
   itemsCount: number;
   observaciones: string | null;
+  // Detalle de productos — el resumen impreso los lista debajo de cada remito.
+  items?: Array<{ nombre: string; cantidad: string; precioUnitario: string; subtotal: string }>;
 }
 interface Cobro {
   id: string;
@@ -119,32 +121,74 @@ export default function MayoristaDetallePage({
       String(v ?? '')
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    const filas = enRango
-      .map(
-        (r) =>
-          `<tr><td>#${r.numero}</td><td>${new Date(r.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td><td>${r.itemsCount} ítems</td><td style="text-align:right">$ ${Number(
-            r.total,
-          ).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td></tr>`,
-      )
+    const money = (v: unknown) =>
+      Number(v ?? 0).toLocaleString('es-AR', { minimumFractionDigits: 2 });
+    const cant = (v: unknown) => Number(v ?? 0).toLocaleString('es-AR');
+    // Bloque por remito: encabezado (nº · fecha · total) + tabla de productos
+    // con cantidades, valores unitarios y total por línea.
+    const bloques = enRango
+      .map((r) => {
+        const items = r.items ?? [];
+        const filasItems = items
+          .map(
+            (it) =>
+              `<tr><td>${esc(it.nombre)}</td><td class="num">${cant(it.cantidad)}</td><td class="num">$ ${money(it.precioUnitario)}</td><td class="num">$ ${money(it.subtotal)}</td></tr>`,
+          )
+          .join('');
+        return `<section class="remito">
+          <div class="rem-head">
+            <span class="rem-num">Remito #${r.numero}</span>
+            <span class="rem-fecha">${new Date(r.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</span>
+            <span class="rem-total">$ ${money(r.total)}</span>
+          </div>
+          ${
+            items.length > 0
+              ? `<table class="items"><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">P. unitario</th><th class="num">Total</th></tr></thead><tbody>${filasItems}</tbody></table>`
+              : `<div class="sin-items">${r.itemsCount} ítems (sin detalle)</div>`
+          }
+          ${r.observaciones ? `<div class="obs">Obs: ${esc(r.observaciones)}</div>` : ''}
+        </section>`;
+      })
       .join('');
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Resumen ${esc(c.nombre)}</title>
-      <style>body{font-family:system-ui,sans-serif;padding:24px;color:#1a1a1a}
-      h1{font-size:18px;margin:0 0 4px} .sub{color:#666;font-size:13px;margin-bottom:16px}
-      table{width:100%;border-collapse:collapse;font-size:13px}
-      th,td{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left}
-      th{text-transform:uppercase;font-size:11px;color:#666}
-      .total{font-size:16px;font-weight:bold;text-align:right;margin-top:16px}</style></head>
-      <body><h1>Resumen de cuenta — ${esc(c.nombre)}</h1>
+      <style>
+      body{font-family:system-ui,sans-serif;padding:24px 28px 60px;color:#1a1a1a}
+      /* Membrete de la fábrica — centrado a página */
+      .membrete{text-align:center;margin-bottom:18px;padding-bottom:12px;border-bottom:2px solid #1a1a1a}
+      .membrete .nombre{font-size:20px;font-weight:700;letter-spacing:2px;text-transform:uppercase}
+      .membrete .desc{font-size:12px;color:#555;margin-top:2px}
+      .membrete .dir{font-size:12px;color:#555;margin-top:1px}
+      h1{font-size:16px;margin:0 0 4px} .sub{color:#666;font-size:12px;margin-bottom:14px}
+      .remito{margin-bottom:14px;break-inside:avoid}
+      .rem-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;background:#f3f0ea;border:1px solid #ddd;border-bottom:none;padding:5px 8px;font-size:13px}
+      .rem-num{font-weight:700} .rem-fecha{color:#555} .rem-total{font-weight:700;margin-left:auto}
+      table.items{width:100%;border-collapse:collapse;font-size:12px;border:1px solid #ddd}
+      table.items th,table.items td{padding:4px 8px;border-bottom:1px solid #eee;text-align:left}
+      table.items th{text-transform:uppercase;font-size:10px;color:#666;background:#fafafa}
+      td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+      .sin-items{border:1px solid #ddd;padding:5px 8px;font-size:12px;color:#666}
+      .obs{font-size:11px;color:#777;padding:3px 8px;border:1px solid #ddd;border-top:none}
+      .total{font-size:17px;font-weight:bold;text-align:right;margin-top:16px}
+      /* Pie de página en cada hoja impresa */
+      .pie{position:fixed;bottom:8px;left:0;right:0;text-align:center;font-size:10px;color:#888}
+      </style></head>
+      <body>
+      <div class="membrete">
+        <div class="nombre">Santa Teresita Pastas</div>
+        <div class="desc">Fábrica de pastas artesanales</div>
+        <div class="dir">Av. 44 e/ 12 y Plaza Paso · La Plata, Buenos Aires</div>
+      </div>
+      <h1>Resumen de cuenta — ${esc(c.nombre)}</h1>
       <div class="sub">${c.cuit ? 'CUIT ' + esc(c.cuit) + ' · ' : ''}Período ${new Date(
         desde,
       ).toLocaleDateString('es-AR', { timeZone: 'UTC' })} a ${new Date(hasta).toLocaleDateString('es-AR', { timeZone: 'UTC' })} · ${
       enRango.length
     } remitos</div>
-      <table><thead><tr><th>Remito</th><th>Fecha</th><th>Detalle</th><th style="text-align:right">Total</th></tr></thead>
-      <tbody>${filas}</tbody></table>
-      <div class="total">TOTAL A FACTURAR: $ ${totalRango.toLocaleString('es-AR', {
+      ${bloques}
+      <div class="total">TOTAL: $ ${totalRango.toLocaleString('es-AR', {
         minimumFractionDigits: 2,
       })}</div>
+      <div class="pie">Santa Teresita Pastas · Av. 44 e/ 12 y Plaza Paso, La Plata</div>
       <script>window.onload=function(){window.print()}</script></body></html>`;
     // Abrimos el resumen como un documento navegable (Blob) en una pestaña
     // nueva. Antes se usaba window.open('', '_blank', 'width=...,height=...'):
