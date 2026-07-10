@@ -58,6 +58,22 @@
     --wood-700: #5c3620;
     --wood-900: #3a2114;
 
+    /* Alto de la barra de solapas ADMIN/PEDIDOS/ENCARGOS. Las pantallas que
+       ocupan el viewport completo restan este valor (h-pantalla-solapas). */
+    --solapas-h: 44px;
+
+    /* Acero — identidad del PANEL ADMIN (celeste opaco, sobrio). Desaturado a
+       propósito para convivir con el verde teresita y el marrón de encargos:
+       misma "temperatura" apagada, distinto tono. */
+    --steel-50: #eef3f6;
+    --steel-100: #dde7ed;
+    --steel-200: #c2d3dd;
+    --steel-300: #9db4c3;
+    --steel-500: #5b7d92;
+    --steel-600: #486577;
+    --steel-700: #37505f;
+    --steel-900: #22323c;
+
     /* Crema */
     --cream-50: #fdfbf7;
     --cream-100: #faf6ee;
@@ -84,6 +100,7 @@
     --surface-app: var(--cream-50);
     --surface-app-vendedor: var(--cream-100);
     --surface-app-encargos: var(--wood-50);
+    --surface-app-admin: var(--steel-50);
     --surface-card: #ffffff;
     --surface-elevated: #ffffff;
     --surface-sunken: var(--cream-100);

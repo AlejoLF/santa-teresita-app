@@ -12,7 +12,7 @@ import type { EncargoNuevo } from '@sta/shared';
 import { subtotalItem } from '@sta/shared';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
 import { recordAudit } from './audit.js';
-import { encolarComandaEncargo } from './impresion.js';
+import { encolarComandaEncargo, esDestinoImpresion } from './impresion.js';
 
 /**
  * Crea un ENCARGO (pedido para un día futuro) reutilizando la tabla `ventas`.
@@ -165,6 +165,9 @@ export async function crearEncargo(args: {
         franjaEntrega: data.franjaEntrega ?? null,
         tipoEntregaEncargo: data.tipoEntrega,
         estadoCobroEncargo: 'A_PAGAR',
+        // Se recuerda para que la comanda del cobro diferido salga por la misma
+        // comandera que eligió la caja al cargar el encargo.
+        destinoImpresionEncargo: data.destinoImpresion,
         items: { create: itemsToCreate },
       },
     });
@@ -202,8 +205,10 @@ export async function crearEncargo(args: {
 
     // Si es "cargar" (A_PAGAR), imprimimos ya la comanda ENCARGO con "A PAGAR".
     // Si es "cobrar", la comanda "COBRADO" sale al finalizar el cobro (no acá).
+    // El destino lo elige la caja: los encargos también se toman desde PCs que
+    // no son la del mostrador.
     if (data.accion === 'cargar') {
-      await encolarComandaEncargo(venta.id, 'A_PAGAR', tx);
+      await encolarComandaEncargo(venta.id, 'A_PAGAR', tx, data.destinoImpresion);
     }
 
     return venta;
@@ -240,6 +245,11 @@ export async function crearAdicionEncargo(args: {
     ? await prisma.venta.findUnique({ where: { id: rootId } })
     : padre;
   if (!root) throw new Error('Encargo no encontrado');
+  // La comanda fusionada sale por la comandera que se eligió al cargar el
+  // encargo raíz (encargos viejos, sin el campo, siguen saliendo a Mostrador).
+  const destinoRaiz = esDestinoImpresion(root.destinoImpresionEncargo)
+    ? root.destinoImpresionEncargo
+    : 'MOSTRADOR';
 
   const sesion = await getOrCreateSesionActual(usuarioId);
   const numeroOrden = await siguienteNumeroOrdenTurno(sesion.id);
@@ -321,6 +331,7 @@ export async function crearAdicionEncargo(args: {
         franjaEntrega: root.franjaEntrega,
         tipoEntregaEncargo: root.tipoEntregaEncargo,
         estadoCobroEncargo: 'A_PAGAR',
+        destinoImpresionEncargo: root.destinoImpresionEncargo,
         items: { create: itemsToCreate },
       },
     });
@@ -341,9 +352,10 @@ export async function crearAdicionEncargo(args: {
 
     // Si queda a pagar, re-imprimimos YA la comanda fusionada (saldrá con
     // PAGO PARCIAL si el padre estaba cobrado). Si es 'cobrar', la comanda
-    // fusionada sale al finalizar el cobro.
+    // fusionada sale al finalizar el cobro. Sale por la comandera del encargo
+    // raíz (la que eligió la caja al cargarlo).
     if (accion === 'cargar') {
-      await encolarComandaEncargo(venta.id, 'A_PAGAR', tx);
+      await encolarComandaEncargo(venta.id, 'A_PAGAR', tx, destinoRaiz);
     }
     return venta;
   });

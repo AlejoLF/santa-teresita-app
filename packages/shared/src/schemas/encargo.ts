@@ -7,6 +7,10 @@ export type FranjaEntrega = z.infer<typeof FranjaEntregaEnum>;
 export const TipoEntregaEncargoEnum = z.enum(['RETIRO', 'ENVIO']);
 export type TipoEntregaEncargo = z.infer<typeof TipoEntregaEncargoEnum>;
 
+/** Comanderas disponibles para imprimir la comanda de un encargo. */
+export const DestinoImpresionEnum = z.enum(['MOSTRADOR', 'DELIVERY', 'COCINA']);
+export type DestinoImpresionEncargo = z.infer<typeof DestinoImpresionEnum>;
+
 /**
  * Alta de un encargo (pedido para un día futuro).
  *
@@ -35,6 +39,12 @@ export const EncargoNuevoSchema = z.object({
   indicacionesEntrega: z.string().max(300).optional(),
   observaciones: z.string().max(500).optional(),
   accion: z.enum(['cargar', 'cobrar']).default('cargar'),
+  /**
+   * Comandera por la que sale la comanda del encargo. Los encargos se toman
+   * también desde PCs que no son la del mostrador, así que la caja elige el
+   * destino al cargar (no solo al re-imprimir).
+   */
+  destinoImpresion: DestinoImpresionEnum.default('MOSTRADOR'),
 });
 export type EncargoNuevo = z.infer<typeof EncargoNuevoSchema>;
 

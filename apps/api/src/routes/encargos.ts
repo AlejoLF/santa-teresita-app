@@ -5,7 +5,7 @@ import { crearEncargo, crearAdicionEncargo, listarEncargos } from '../services/e
 import { getVentaCompleta } from '../services/venta.js';
 import { FueraDeHorarioError } from '../services/sesion-caja.js';
 import { recordAudit } from '../services/audit.js';
-import { encolarComandaEncargo } from '../services/impresion.js';
+import { encolarComandaEncargo, esDestinoImpresion } from '../services/impresion.js';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta } from '@sta/db';
 
@@ -187,8 +187,16 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
         });
 
         // Toda modificación re-imprime la comanda del encargo (fusionada, con
-        // el estado real: A PAGAR / COBRADO / PAGO PARCIAL).
-        await encolarComandaEncargo(venta.id, 'A_PAGAR', tx);
+        // el estado real: A PAGAR / COBRADO / PAGO PARCIAL), por la comandera
+        // con la que se cargó el encargo.
+        await encolarComandaEncargo(
+          venta.id,
+          'A_PAGAR',
+          tx,
+          esDestinoImpresion(venta.destinoImpresionEncargo)
+            ? venta.destinoImpresionEncargo
+            : 'MOSTRADOR',
+        );
       });
 
       return reply.send(await getVentaCompleta(venta.id));
@@ -266,12 +274,9 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
     },
     async (req, reply) => {
       const params = req.params as { id: string };
-      const destino =
-        (req.body as { destino?: 'MOSTRADOR' | 'DELIVERY' | 'COCINA' } | undefined)?.destino ??
-        'MOSTRADOR';
       const venta = await prisma.venta.findUnique({
         where: { id: params.id },
-        select: { id: true, esEncargo: true, estado: true },
+        select: { id: true, esEncargo: true, estado: true, destinoImpresionEncargo: true },
       });
       if (!venta || !venta.esEncargo) {
         return reply.code(404).send({ error: 'Encargo no encontrado' });
@@ -279,6 +284,12 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
       if (venta.estado === EstadoVenta.ANULADA) {
         return reply.code(400).send({ error: 'El encargo está anulado.' });
       }
+      // Sin destino explícito, re-imprime por la comandera con la que se cargó.
+      const destino =
+        (req.body as { destino?: 'MOSTRADOR' | 'DELIVERY' | 'COCINA' } | undefined)?.destino ??
+        (esDestinoImpresion(venta.destinoImpresionEncargo)
+          ? venta.destinoImpresionEncargo
+          : 'MOSTRADOR');
       await encolarComandaEncargo(venta.id, 'A_PAGAR', undefined, destino);
       await recordAudit({
         tabla: 'ventas',

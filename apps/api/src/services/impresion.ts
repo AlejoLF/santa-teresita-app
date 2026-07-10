@@ -35,6 +35,14 @@ type DbClient = Prisma.TransactionClient | typeof prisma;
 export type DestinoImpresion = 'MOSTRADOR' | 'DELIVERY' | 'COCINA';
 
 /**
+ * Type guard del destino guardado en `ventas.destino_impresion_encargo`
+ * (VARCHAR: los encargos anteriores a este cambio lo tienen en NULL → Mostrador).
+ */
+export function esDestinoImpresion(v: unknown): v is DestinoImpresion {
+  return v === 'MOSTRADOR' || v === 'DELIVERY' || v === 'COCINA';
+}
+
+/**
  * Cómo se imprime un modificador en los tickets (línea hija "> ..." debajo del
  * producto). Los grupos CLÁSICOS imprimen solo la opción, como siempre:
  *   - sabores ("Sabor — Ravioles")            → "> Carne"
@@ -255,17 +263,35 @@ export async function buildComandaPayload(
         (it.modificadoresAplicados as Array<{
           opcionNombre?: string;
           grupoNombre?: string | null;
+          deltaPrecio?: string | number | null;
         }> | null) ?? [];
       return {
         cantidad: String(it.cantidad),
         nombre: it.nombreSnapshot,
         modificadores: mods
-          .map(nombreModParaTicket)
+          .map((m) => {
+            const nombre = nombreModParaTicket(m);
+            if (typeof nombre !== 'string') return nombre;
+            // Los adicionales con cargo se imprimen discriminados: la cocinera
+            // usa la comanda como referencia de lo que hay que cobrar.
+            const delta = Number(m.deltaPrecio ?? 0);
+            if (!(delta > 0)) return nombre;
+            const monto = delta.toLocaleString('es-AR', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            });
+            return `${nombre} (+$${monto})`;
+          })
           .filter((x): x is string => typeof x === 'string'),
         observacion: it.observacion ?? undefined,
         parteDeCombo: it.combo?.nombre,
+        // Importes por línea — la comanda de cocina se usa como referencia de
+        // cobro cuando el pedido se despacha en el local o sale al reparto.
+        precioUnitario: it.precioUnitario.toFixed(2),
+        subtotal: it.subtotal.toFixed(2),
       };
     }),
+    total: venta.total.toFixed(2),
     pcOrigen: venta.pcOrigen,
     delivery,
   };

@@ -56,6 +56,21 @@ function lineTotal(l: CartLine): number {
 const PCORIGEN =
   typeof window !== 'undefined' ? localStorage.getItem('sta-pc-origen') || 'PC1' : 'PC1';
 
+/** Comanderas donde puede salir la comanda del encargo. */
+type DestinoImpresion = 'MOSTRADOR' | 'DELIVERY' | 'COCINA';
+const DESTINOS_IMPRESION: Array<{ valor: DestinoImpresion; label: string }> = [
+  { valor: 'MOSTRADOR', label: '🧾 Mostrador' },
+  { valor: 'DELIVERY', label: '🛵 Delivery' },
+  { valor: 'COCINA', label: '🍳 Cocina' },
+];
+/** Cada PC recuerda su comandera: la del fondo no imprime en el mostrador. */
+const DESTINO_KEY = 'sta-encargos-destino';
+function destinoGuardado(): DestinoImpresion {
+  if (typeof window === 'undefined') return 'MOSTRADOR';
+  const v = localStorage.getItem(DESTINO_KEY);
+  return v === 'DELIVERY' || v === 'COCINA' ? v : 'MOSTRADOR';
+}
+
 export default function NuevoEncargoPage() {
   // useSearchParams necesita Suspense en Next 15 (CSR bailout).
   return (
@@ -81,6 +96,14 @@ function NuevoEncargoInner() {
   const [configProd, setConfigProd] = useState<Producto | null>(null);
   const [enviando, setEnviando] = useState<null | 'cargar' | 'cobrar'>(null);
   const [error, setError] = useState<string | null>(null);
+  // Arranca en MOSTRADOR y se corrige tras montar: leer localStorage durante el
+  // render rompe la hidratación (el server no lo tiene).
+  const [destinoImpresion, setDestinoImpresion] = useState<DestinoImpresion>('MOSTRADOR');
+  useEffect(() => setDestinoImpresion(destinoGuardado()), []);
+  function elegirDestino(d: DestinoImpresion) {
+    setDestinoImpresion(d);
+    localStorage.setItem(DESTINO_KEY, d);
+  }
 
   // Campos del encargo (todos obligatorios salvo indicaciones/observaciones).
   const [fechaEntrega, setFechaEntrega] = useState(isoMasDias(hoy, 1));
@@ -192,6 +215,7 @@ function NuevoEncargoInner() {
         ...(tipoEntrega === 'ENVIO' && { direccionEntrega: direccion.trim() }),
         ...(indicaciones.trim() && { indicacionesEntrega: indicaciones.trim() }),
         ...(observaciones.trim() && { observaciones: observaciones.trim() }),
+        destinoImpresion,
       };
       const res = await api.post<{ id: string }>('/encargos', body);
       if (accion === 'cobrar') {
@@ -495,6 +519,34 @@ function NuevoEncargoInner() {
 
             {!valido && (
               <p className="text-2xs text-pomodoro-600">Falta completar: {faltantes.join(', ')}.</p>
+            )}
+
+            {/* Comandera destino — los encargos también se toman desde PCs que
+                no son la del mostrador. La elección queda recordada en esta PC.
+                En una adición no se pregunta: sale por la del encargo original. */}
+            {!adicionDe && (
+              <div className="pt-1">
+                <label className="text-2xs uppercase tracking-wide text-wood-700 font-semibold">
+                  Imprimir comanda en
+                </label>
+                <div className="grid grid-cols-3 gap-1.5 mt-1">
+                  {DESTINOS_IMPRESION.map((d) => (
+                    <button
+                      key={d.valor}
+                      type="button"
+                      onClick={() => elegirDestino(d.valor)}
+                      className={cn(
+                        'px-2 py-2 rounded-md border text-xs font-medium transition-colors',
+                        destinoImpresion === d.valor
+                          ? 'bg-wood-700 text-wood-50 border-wood-700'
+                          : 'bg-white text-wood-700 border-wood-300 hover:bg-wood-50',
+                      )}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
 
             <div className="grid grid-cols-2 gap-2 pt-1">

@@ -37,6 +37,17 @@ const config: Config = {
           700: 'var(--wood-700)',
           900: 'var(--wood-900)',
         },
+        // Acero — identidad del panel ADMIN (celeste opaco, sobrio).
+        steel: {
+          50: 'var(--steel-50)',
+          100: 'var(--steel-100)',
+          200: 'var(--steel-200)',
+          300: 'var(--steel-300)',
+          500: 'var(--steel-500)',
+          600: 'var(--steel-600)',
+          700: 'var(--steel-700)',
+          900: 'var(--steel-900)',
+        },
         ink: {
           900: 'var(--ink-900)',
           700: 'var(--ink-700)',
@@ -64,6 +75,7 @@ const config: Config = {
           app: 'var(--surface-app)',
           'app-vendedor': 'var(--surface-app-vendedor)',
           'app-encargos': 'var(--surface-app-encargos)',
+          'app-admin': 'var(--surface-app-admin)',
           card: 'var(--surface-card)',
           elevated: 'var(--surface-elevated)',
           sunken: 'var(--surface-sunken)',
@@ -89,6 +101,16 @@ const config: Config = {
       },
       spacing: {
         '4.5': '18px',
+      },
+      height: {
+        // Barra de solapas ADMIN/PEDIDOS/ENCARGOS.
+        solapas: 'var(--solapas-h)',
+        // Viewport menos la barra de solapas — para las pantallas full-screen
+        // del vendedor (cargar pedido, cobro), que no scrollean.
+        'pantalla-solapas': 'calc(100vh - var(--solapas-h))',
+      },
+      minHeight: {
+        'pantalla-solapas': 'calc(100vh - var(--solapas-h))',
       },
       borderRadius: {
         sm: '4px',

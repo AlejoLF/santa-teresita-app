@@ -998,6 +998,10 @@ model Venta {
   /// encargo raíz. La comanda se imprime SIEMPRE fusionada desde la raíz
   /// (rótulo PAGO PARCIAL cuando hay mezcla de pagado/no pagado).
   encargoPadreId        String?               @map("encargo_padre_id") @db.Uuid
+  /// Comandera elegida al cargar el encargo (MOSTRADOR/DELIVERY/COCINA). Los
+  /// encargos también se toman desde PCs que no son la del mostrador. La usan
+  /// la comanda del cobro diferido y el default de la re-impresión.
+  destinoImpresionEncargo String?             @map("destino_impresion_encargo") @db.VarChar(20)
 
   cliente             Cliente?     @relation(fields: [clienteId], references: [id])
   listaPrecios        ListaPrecios @relation(fields: [listaPreciosId], references: [id])

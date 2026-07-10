@@ -119,7 +119,12 @@ export interface ComandaPayload {
     modificadores: string[];
     observacion?: string;
     parteDeCombo?: string;
+    /** Importes por línea. Opcionales: comandas viejas encoladas no los traen. */
+    precioUnitario?: string;
+    subtotal?: string;
   }>;
+  /** Total del pedido — se imprime GRANDE al pie de la comanda. */
+  total?: string;
   pcOrigen: string;
   esCancelada?: boolean;
   esReimpresion?: boolean;
@@ -152,6 +157,12 @@ export async function imprimirComanda(
   destino: DestinoImpresora = 'COCINA',
 ): Promise<void> {
   const printer = makePrinter(destino);
+  const width = getPrinterConfig(destino).width;
+  /** "  2 x $1.500,00          $3.000,00" — importe pegado al margen derecho. */
+  const dosColumnas = (izq: string, der: string): string => {
+    const hueco = Math.max(1, width - izq.length - der.length);
+    return `${izq}${' '.repeat(hueco)}${der}`;
+  };
 
   printer.alignCenter();
   printer.setTextDoubleHeight();
@@ -201,6 +212,15 @@ export async function imprimirComanda(
     for (const m of item.modificadores) {
       printer.println(`           > ${limpiar(m)}`);
     }
+    // Importe de la línea. La cocinera usa esta comanda como referencia para el
+    // envío o para un pedido que se entrega en el local, así que necesita ver
+    // el unitario y el total por cantidad.
+    if (item.subtotal) {
+      const izq = item.precioUnitario
+        ? `   ${item.cantidad} x $${formatARS(item.precioUnitario)}`
+        : '   Importe';
+      printer.println(dosColumnas(izq, `$${formatARS(item.subtotal)}`));
+    }
     if (item.observacion) {
       // Observación GRANDE en la comanda — la cocinera tiene que verla a metros.
       printer.newLine();
@@ -216,6 +236,20 @@ export async function imprimirComanda(
     if (item.parteDeCombo) {
       printer.println(`           > [COMBO: ${item.parteDeCombo}]`);
     }
+    printer.newLine();
+  }
+
+  // Total del pedido, grande y contra el margen derecho. Va debajo de los
+  // productos para que sirva de referencia de cobro al despachar.
+  if (payload.total) {
+    printer.drawLine();
+    printer.alignRight();
+    printer.bold(true);
+    printer.setTextDoubleHeight();
+    printer.println(`TOTAL: $${formatARS(payload.total)}`);
+    printer.setTextNormal();
+    printer.bold(false);
+    printer.alignLeft();
     printer.newLine();
   }
 

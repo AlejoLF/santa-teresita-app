@@ -26,6 +26,7 @@ import {
   encolarTicketClienteParaVenta,
   encolarTicketDeliveryParaVenta,
   encolarComandaEncargo,
+  esDestinoImpresion,
   ventaYaEnviadaACocina,
 } from '../services/impresion.js';
 import { prisma } from '@sta/db/client';
@@ -747,9 +748,17 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
         // ya había salido. Los tickets cliente/delivery salen acá porque necesitan
         // el pago real ya registrado.
         if (venta.esEncargo) {
-          // Encargo: una sola comanda ENCARGO → mostrador, ahora con "COBRADO"
-          // (no los tickets normales de cliente/delivery).
-          await encolarComandaEncargo(venta.id, 'COBRADO', tx);
+          // Encargo: una sola comanda ENCARGO con "COBRADO" (no los tickets
+          // normales de cliente/delivery). Sale por la comandera que eligió la
+          // caja al cargarlo; los encargos viejos (campo NULL) van a Mostrador.
+          await encolarComandaEncargo(
+            venta.id,
+            'COBRADO',
+            tx,
+            esDestinoImpresion(venta.destinoImpresionEncargo)
+              ? venta.destinoImpresionEncargo
+              : 'MOSTRADOR',
+          );
         } else {
           if (!(await ventaYaEnviadaACocina(venta.id, tx))) {
             await encolarComandasParaVenta(venta.id, tx);

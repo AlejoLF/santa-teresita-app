@@ -852,7 +852,8 @@ export default function CargarPedidoPage() {
   }
 
   return (
-    <div className="flex flex-col min-h-screen lg:grid lg:grid-rows-[56px_1fr_48px] lg:h-screen">
+    // h-pantalla-solapas = 100vh menos la barra de solapas del layout.
+    <div className="flex flex-col min-h-pantalla-solapas lg:grid lg:grid-rows-[56px_1fr_48px] lg:h-pantalla-solapas">
       {/* Header */}
       <header className="bg-teresita-700 text-cream-50 px-3 lg:px-6 py-2 lg:py-0 flex flex-wrap lg:flex-nowrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex items-center gap-4">

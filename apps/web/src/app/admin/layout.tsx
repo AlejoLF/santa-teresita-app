@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { SyncStatusBadge } from '@/components/admin/SyncStatusBadge';
+import { SolapasPrincipales } from '@/components/nav/SolapasPrincipales';
 
 interface NavItem {
   label: string;
@@ -168,8 +169,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               className={cn(
                 'px-5 py-2 flex items-center gap-2 text-sm transition-colors',
                 active
-                  ? 'bg-teresita-50 text-teresita-700 font-medium border-r-2 border-teresita-700'
-                  : 'text-ink-700 hover:bg-cream-100',
+                  ? 'bg-steel-50 text-steel-700 font-medium border-r-2 border-steel-700'
+                  : 'text-ink-700 hover:bg-steel-50',
               )}
             >
               <span>{item.icon}</span>
@@ -181,14 +182,18 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     ));
 
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[240px_1fr] bg-surface-app">
+    // Identidad ADMIN: celeste acero (steel). Convive con el verde de PEDIDOS
+    // y el marrón de ENCARGOS — misma saturación baja, distinto tono.
+    <div className="min-h-screen flex flex-col bg-surface-app-admin">
+      <SolapasPrincipales activa="admin" />
+      <div className="flex-1 min-h-0 lg:grid lg:grid-cols-[240px_1fr]">
       {/* Sidebar — solo desktop */}
-      <aside className="hidden lg:flex bg-white border-r border-cream-300 flex-col">
-        <div className="px-5 py-4 border-b border-cream-300">
+      <aside className="hidden lg:flex bg-white border-r border-steel-200 flex-col">
+        <div className="px-5 py-4 border-b border-steel-200">
           <Link href="/admin" className="flex items-center gap-2">
             <span className="text-2xl">🍝</span>
             <div>
-              <div className="font-display text-md text-teresita-700 leading-tight">
+              <div className="font-display text-md text-steel-700 leading-tight">
                 Santa Teresita
               </div>
               <div className="text-2xs text-ink-500">panel admin</div>
@@ -198,7 +203,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
         <nav className="flex-1 overflow-y-auto py-3">{renderNavGroups()}</nav>
 
-        <div className="px-5 py-3 border-t border-cream-300 text-xs text-ink-500">
+        <div className="px-5 py-3 border-t border-steel-200 text-xs text-ink-500">
           {appVersion ? `v${appVersion}` : 'v?'} · {usuario?.nombre}
         </div>
       </aside>
@@ -206,7 +211,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       {/* Main */}
       <div className="flex flex-col min-w-0">
         {/* Header — desktop */}
-        <header className="hidden lg:flex bg-white border-b border-cream-300 px-6 py-3 items-center justify-between">
+        <header className="hidden lg:flex bg-white border-b border-steel-200 px-6 py-3 items-center justify-between">
           <div className="text-sm text-ink-500">
             Sesión Admin · <span className="text-ink-700 font-medium">{usuario?.nombre}</span>
           </div>
@@ -222,7 +227,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </button>
             <button
               onClick={() => router.push('/admin')}
-              className="relative text-ink-700 hover:text-teresita-700"
+              className="relative text-ink-700 hover:text-steel-700"
               title="Notificaciones"
             >
               🔔
@@ -245,10 +250,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </header>
 
         {/* Header — mobile (Wireframe 09) */}
-        <header className="lg:hidden bg-teresita-700 text-cream-50 px-4 py-3 flex items-center justify-between sticky top-0 z-30">
+        <header className="lg:hidden bg-steel-700 text-white px-4 py-3 flex items-center justify-between sticky top-0 z-30">
           <button
             onClick={() => setSheetOpen(true)}
-            className="text-cream-50 text-xl leading-none"
+            className="text-white text-xl leading-none"
             aria-label="Abrir menú"
           >
             ☰
@@ -260,7 +265,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <div className="flex items-center gap-3">
             <button
               onClick={() => router.push('/cargar-pedido')}
-              className="text-cream-50 text-xl leading-none"
+              className="text-white text-xl leading-none"
               aria-label="Cargar pedido"
               title="Cargar pedido"
             >
@@ -268,7 +273,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </button>
             <button
               onClick={() => router.push('/admin')}
-              className="relative text-cream-50"
+              className="relative text-white"
               aria-label="Notificaciones"
             >
               🔔
@@ -286,7 +291,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </main>
 
         {/* Bottom tabs — solo mobile */}
-        <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-cream-300 grid grid-cols-4 z-30">
+        <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-steel-200 grid grid-cols-4 z-30">
           {MOBILE_TABS.map((tab) => {
             const active =
               pathname === tab.href ||
@@ -297,7 +302,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 href={tab.href}
                 className={cn(
                   'flex flex-col items-center gap-0.5 py-2 text-2xs',
-                  active ? 'text-teresita-700 font-medium' : 'text-ink-500',
+                  active ? 'text-steel-700 font-medium' : 'text-ink-500',
                 )}
               >
                 <span className="text-lg">{tab.icon}</span>
@@ -307,7 +312,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           })}
           <button
             onClick={() => setSheetOpen(true)}
-            className="flex flex-col items-center gap-0.5 py-2 text-2xs text-ink-500 hover:text-teresita-700"
+            className="flex flex-col items-center gap-0.5 py-2 text-2xs text-ink-500 hover:text-steel-700"
           >
             <span className="text-lg">☰</span>
             Más
@@ -324,9 +329,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               className="absolute bottom-0 inset-x-0 bg-white rounded-t-xl shadow-modal max-h-[85vh] flex flex-col"
               onClick={(e) => e.stopPropagation()}
             >
-              <header className="px-5 py-4 border-b border-cream-300 flex items-center justify-between">
+              <header className="px-5 py-4 border-b border-steel-200 flex items-center justify-between">
                 <div>
-                  <div className="font-display text-md text-teresita-700">Más opciones</div>
+                  <div className="font-display text-md text-steel-700">Más opciones</div>
                   <div className="text-2xs text-ink-500">{usuario?.nombre}</div>
                 </div>
                 <button
@@ -338,7 +343,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 </button>
               </header>
               <nav className="flex-1 overflow-y-auto py-3">{renderNavGroups()}</nav>
-              <footer className="px-5 py-3 border-t border-cream-300">
+              <footer className="px-5 py-3 border-t border-steel-200">
                 <button
                   onClick={async () => {
                     await api.post('/auth/logout', {});
@@ -352,6 +357,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </aside>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

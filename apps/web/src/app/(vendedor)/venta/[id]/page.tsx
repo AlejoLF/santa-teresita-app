@@ -302,7 +302,12 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
   }[venta.estado];
 
   return (
-    <div className={cn('min-h-screen flex flex-col', venta.esEncargo && 'bg-surface-app-encargos')}>
+    <div
+      className={cn(
+        'min-h-pantalla-solapas flex flex-col',
+        venta.esEncargo && 'bg-surface-app-encargos',
+      )}
+    >
       <header
         className={cn(
           'px-6 py-3 flex items-center justify-between',
