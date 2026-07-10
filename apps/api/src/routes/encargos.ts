@@ -254,10 +254,21 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
     '/encargos/:id/reimprimir',
     {
       preHandler: fastify.requireAuth(),
-      schema: { params: z.object({ id: z.string().uuid() }) },
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        // Comandera elegida por el usuario al re-imprimir (default Mostrador).
+        body: z
+          .object({
+            destino: z.enum(['MOSTRADOR', 'DELIVERY', 'COCINA']).default('MOSTRADOR'),
+          })
+          .optional(),
+      },
     },
     async (req, reply) => {
       const params = req.params as { id: string };
+      const destino =
+        (req.body as { destino?: 'MOSTRADOR' | 'DELIVERY' | 'COCINA' } | undefined)?.destino ??
+        'MOSTRADOR';
       const venta = await prisma.venta.findUnique({
         where: { id: params.id },
         select: { id: true, esEncargo: true, estado: true },
@@ -268,15 +279,15 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
       if (venta.estado === EstadoVenta.ANULADA) {
         return reply.code(400).send({ error: 'El encargo está anulado.' });
       }
-      await encolarComandaEncargo(venta.id, 'A_PAGAR');
+      await encolarComandaEncargo(venta.id, 'A_PAGAR', undefined, destino);
       await recordAudit({
         tabla: 'ventas',
         registroId: venta.id,
         accion: 'REIMPRESION',
         usuarioId: req.usuario!.id,
-        valorNuevo: { comandaEncargo: true },
+        valorNuevo: { comandaEncargo: true, destino },
       });
-      return { ok: true };
+      return { ok: true, destino };
     },
   );
 }

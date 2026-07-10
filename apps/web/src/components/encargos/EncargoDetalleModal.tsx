@@ -124,16 +124,27 @@ export function EncargoDetalleModal({
   const editable = v?.estado !== 'ANULADA';
   const puedeAnular = v?.estado === 'PROCESADA' && v?.estadoCobroEncargo === 'A_PAGAR' && adiciones.length === 0;
   const [reimprimiendo, setReimprimiendo] = useState(false);
-  const [reimprimioOk, setReimprimioOk] = useState(false);
+  // Al tocar "Re-imprimir" se abre el selector de comandera (Mostrador /
+  // Delivery / Cocina) y recién al elegir una se manda a imprimir.
+  const [pickerImpresion, setPickerImpresion] = useState(false);
+  const [reimprimioOk, setReimprimioOk] = useState<string | null>(null);
 
-  async function reimprimir() {
+  const DESTINOS_IMPRESION = [
+    { valor: 'MOSTRADOR', label: '🧾 Mostrador' },
+    { valor: 'DELIVERY', label: '🛵 Delivery' },
+    { valor: 'COCINA', label: '🍳 Cocina' },
+  ] as const;
+
+  async function reimprimir(destino: 'MOSTRADOR' | 'DELIVERY' | 'COCINA') {
     if (!v) return;
     setReimprimiendo(true);
-    setReimprimioOk(false);
+    setReimprimioOk(null);
     try {
-      await api.post(`/encargos/${v.id}/reimprimir`, {});
-      setReimprimioOk(true);
-      setTimeout(() => setReimprimioOk(false), 3000);
+      await api.post(`/encargos/${v.id}/reimprimir`, { destino });
+      setPickerImpresion(false);
+      const label = DESTINOS_IMPRESION.find((d) => d.valor === destino)?.label ?? destino;
+      setReimprimioOk(label);
+      setTimeout(() => setReimprimioOk(null), 4000);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo re-imprimir.');
     } finally {
@@ -378,17 +389,40 @@ export function EncargoDetalleModal({
           <footer className="px-5 py-3 border-t border-cream-300 bg-wood-50 flex flex-wrap justify-end gap-2 shrink-0">
             {reimprimioOk && (
               <span className="text-2xs text-basil-600 self-center mr-auto">
-                ✓ Comanda enviada a la impresora
+                ✓ Comanda enviada a {reimprimioOk}
               </span>
             )}
-            <button
-              onClick={() => void reimprimir()}
-              disabled={reimprimiendo}
-              className="px-3 py-2 text-sm rounded-md border border-cream-300 text-ink-700 hover:bg-cream-200 transition-colors disabled:opacity-50"
-              title="Vuelve a imprimir la comanda del encargo (con adiciones y estado de pago)"
-            >
-              {reimprimiendo ? '…' : '🖨 Re-imprimir'}
-            </button>
+            {pickerImpresion ? (
+              <span className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-2xs text-ink-500 mr-0.5">Imprimir en:</span>
+                {DESTINOS_IMPRESION.map((d) => (
+                  <button
+                    key={d.valor}
+                    onClick={() => void reimprimir(d.valor)}
+                    disabled={reimprimiendo}
+                    className="px-2.5 py-2 text-sm rounded-md border border-wood-300 bg-wood-100 text-wood-900 font-medium hover:bg-wood-200 transition-colors disabled:opacity-50"
+                  >
+                    {reimprimiendo ? '…' : d.label}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setPickerImpresion(false)}
+                  disabled={reimprimiendo}
+                  className="text-ink-500 hover:text-ink-900 text-lg leading-none px-1"
+                  title="Cancelar"
+                >
+                  ✕
+                </button>
+              </span>
+            ) : (
+              <button
+                onClick={() => setPickerImpresion(true)}
+                className="px-3 py-2 text-sm rounded-md border border-cream-300 text-ink-700 hover:bg-cream-200 transition-colors"
+                title="Vuelve a imprimir la comanda del encargo — elegí la comandera"
+              >
+                🖨 Re-imprimir…
+              </button>
+            )}
             {editable && (
               <>
                 <button

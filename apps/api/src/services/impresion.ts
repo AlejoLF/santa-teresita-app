@@ -776,6 +776,9 @@ export async function encolarComandaEncargo(
   ventaId: string,
   _estadoHint: 'A_PAGAR' | 'COBRADO',
   tx?: Prisma.TransactionClient,
+  // Comandera destino. Default MOSTRADOR (decisión original del dueño para la
+  // impresión automática); la RE-impresión deja elegir cualquiera.
+  destino: DestinoImpresion = 'MOSTRADOR',
 ): Promise<void> {
   const client: DbClient = tx ?? prisma;
   // Resolver la RAÍZ: si ventaId es una adición ("modificación adicional"), la
@@ -879,7 +882,7 @@ export async function encolarComandaEncargo(
 
   await encolarTrabajo({
     tipo: TipoTrabajoImpresion.COMANDA_ENCARGO,
-    destino: 'MOSTRADOR',
+    destino,
     payload,
     ventaId: rootId,
     tx,

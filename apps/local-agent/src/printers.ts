@@ -693,6 +693,11 @@ export async function imprimirComandaEncargo(
   destino: DestinoImpresora = 'MOSTRADOR',
 ): Promise<void> {
   const printer = makePrinter(destino);
+  // La comandera de DELIVERY tiene activa una code page multibyte: cada byte
+  // alto (acentos, ñ, ·) se interpreta como lead byte y se COME el carácter
+  // siguiente. Si la comanda del encargo sale por esa impresora mandamos ASCII
+  // puro; en Mostrador/Cocina van los acentos normales.
+  const txt = destino === 'DELIVERY' ? ascii : limpiar;
 
   // ── Header ──
   printer.alignCenter();
@@ -731,10 +736,12 @@ export async function imprimirComandaEncargo(
     : payload.franja
       ? FRANJA_LABEL[payload.franja] ?? payload.franja
       : '';
-  if (cuando) printer.println(`Horario: ${cuando}`);
+  if (cuando) printer.println(txt(`Horario: ${cuando}`)); // "Mañana" lleva ñ
   printer.setTextNormal();
   printer.bold(false);
-  printer.println(`Modo:    ${payload.tipoEntrega === 'ENVIO' ? 'ENVÍO a domicilio' : 'RETIRA en local'}`);
+  printer.println(
+    txt(`Modo:    ${payload.tipoEntrega === 'ENVIO' ? 'ENVÍO a domicilio' : 'RETIRA en local'}`),
+  );
   printer.println(`Pedido:  ${payload.hora}`);
   printer.drawLine();
   printer.newLine();
@@ -747,11 +754,11 @@ export async function imprimirComandaEncargo(
     printer.setTextDoubleHeight();
     printer.bold(true);
     const tagAdicion = item.adicion ? ` [ADIC.${item.adicion}]` : '';
-    printer.println(`## ${item.cantidad}  ${limpiar(item.nombre)}${tagAdicion}`);
+    printer.println(`## ${item.cantidad}  ${txt(item.nombre)}${tagAdicion}`);
     printer.bold(false);
     printer.setTextNormal();
     for (const m of item.modificadores) {
-      printer.println(`           > ${limpiar(m)}`);
+      printer.println(`           > ${txt(m)}`);
     }
     if (item.observacion) {
       printer.newLine();
@@ -759,7 +766,7 @@ export async function imprimirComandaEncargo(
       printer.invert(true);
       printer.setTextDoubleHeight();
       printer.setTextSize(2, 2);
-      printer.println(`>> ${limpiar(item.observacion).toUpperCase()}`);
+      printer.println(`>> ${txt(item.observacion).toUpperCase()}`);
       printer.setTextNormal();
       printer.invert(false);
       printer.bold(false);
@@ -798,7 +805,7 @@ export async function imprimirComandaEncargo(
     printer.bold(true);
     printer.invert(true);
     printer.setTextDoubleHeight();
-    printer.println(` OBS: ${limpiar(payload.observaciones).toUpperCase()} `);
+    printer.println(` OBS: ${txt(payload.observaciones).toUpperCase()} `);
     printer.setTextNormal();
     printer.invert(false);
     printer.bold(false);
@@ -808,20 +815,20 @@ export async function imprimirComandaEncargo(
   // ── Datos del cliente ──
   printer.drawLine();
   printer.bold(true);
-  printer.println(`Cliente: ${limpiar(payload.cliente.nombre)}`);
+  printer.println(`Cliente: ${txt(payload.cliente.nombre)}`);
   printer.bold(false);
   if (payload.cliente.telefono) {
-    printer.println(`Tel:     ${limpiar(payload.cliente.telefono)}`);
+    printer.println(`Tel:     ${txt(payload.cliente.telefono)}`);
   }
   if (payload.tipoEntrega === 'ENVIO' && payload.cliente.direccion) {
     printer.bold(true);
     printer.setTextDoubleHeight();
-    printer.println(limpiar(payload.cliente.direccion));
+    printer.println(txt(payload.cliente.direccion));
     printer.setTextNormal();
     printer.bold(false);
   }
   if (payload.cliente.indicaciones) {
-    printer.println(`Ref: ${limpiar(payload.cliente.indicaciones)}`);
+    printer.println(`Ref: ${txt(payload.cliente.indicaciones)}`);
   }
   printer.newLine();
 
@@ -854,7 +861,7 @@ export async function imprimirComandaEncargo(
   // ── Pie ──
   printer.drawLine();
   printer.alignLeft();
-  printer.println(`${payload.pcOrigen}  ·  ${payload.hora}`);
+  printer.println(txt(`${payload.pcOrigen}  ·  ${payload.hora}`));
   if (payload.numeroVenta != null) {
     printer.alignCenter();
     printer.println(`Encargo #${payload.numeroVenta} en el programa`);
