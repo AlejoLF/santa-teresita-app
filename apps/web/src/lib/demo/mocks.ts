@@ -64,6 +64,8 @@ function buildEncargosDemo(): any[] {
     fechaApertura: addDays(-1),
     esEncargo: true,
     pagos: [],
+    // Entrega: null = pendiente de retiro (ortogonal al cobro).
+    retiradoAt: null,
     ...o,
   });
   return [
@@ -101,6 +103,17 @@ function buildEncargosDemo(): any[] {
       subtotal: '21000', total: '21000',
       items: [{ id: 'ei4', productoId: 'p-enc-4', nombreSnapshot: 'Canelones de verdura', cantidad: '14', unidad: 'UNIDAD', precioUnitario: '1500', totalLinea: '21000', cocinaInterviene: true, modificadoresAplicados: null }],
       deliveryInfo: { direccionSnapshot: { clienteNombre: 'Cumple Sofía', clienteTelefono: '221-555-2200', direccion: 'Av. 7 nº 880', _retiro: false } },
+    }),
+    // Cobrado Y retirado — muestra que las dos dimensiones son independientes.
+    enc({
+      id: 'enc-5', numero: 4105, numeroOrdenTurno: 8, estado: 'FINALIZADA',
+      estadoCobroEncargo: 'COBRADO', tipoEntregaEncargo: 'RETIRO',
+      fechaEntregaPromesa: dia(0), horaEntregaExacta: null, franjaEntrega: 'MANANA',
+      subtotal: '7500', total: '7500', fechaFinalizacion: addDays(-1),
+      retiradoAt: addDays(0),
+      items: [{ id: 'ei5', productoId: 'p-enc-5', nombreSnapshot: 'Empanadas', cantidad: '12', unidad: 'UNIDAD', precioUnitario: '625', totalLinea: '7500', cocinaInterviene: true, modificadoresAplicados: null }],
+      pagos: [{ id: 'pg-enc-5', metodo: 'EFECTIVO', monto: '7500' }],
+      deliveryInfo: { direccionSnapshot: { clienteNombre: 'Ana Ruiz', clienteTelefono: '221-555-6060', direccion: null, _retiro: true } },
     }),
   ];
 }
@@ -803,6 +816,33 @@ function buildCierres() {
   });
 }
 
+/**
+ * Match de producto por texto libre — espeja `buscarProductoWhere` del backend:
+ * nombre, marca, presentación, código, descripción y el nombre de la
+ * sub-categoría / categoría. `q` ya viene en minúsculas y trim.
+ */
+function matchProductoBusqueda(
+  p: {
+    nombre: string;
+    marca?: string | null;
+    presentacion?: string | null;
+    codigo?: string | null;
+    descripcion?: string | null;
+    tipoProducto?: { nombre?: string; categoria?: { nombre?: string } };
+  },
+  q: string,
+): boolean {
+  return (
+    p.nombre.toLowerCase().includes(q) ||
+    (p.marca ?? '').toLowerCase().includes(q) ||
+    (p.presentacion ?? '').toLowerCase().includes(q) ||
+    (p.codigo ?? '').toLowerCase().includes(q) ||
+    (p.descripcion ?? '').toLowerCase().includes(q) ||
+    (p.tipoProducto?.nombre ?? '').toLowerCase().includes(q) ||
+    (p.tipoProducto?.categoria?.nombre ?? '').toLowerCase().includes(q)
+  );
+}
+
 // ─── Precios — lista, historial, aprobaciones ─────────────────────────
 
 function buildPreciosLista(search: URLSearchParams) {
@@ -811,12 +851,7 @@ function buildPreciosLista(search: URLSearchParams) {
 
   let prods = productosFull();
   if (q) {
-    prods = prods.filter(
-      (p) =>
-        p.nombre.toLowerCase().includes(q) ||
-        (p.codigo ?? '').includes(q) ||
-        (p.marca ?? '').toLowerCase().includes(q),
-    );
+    prods = prods.filter((p) => matchProductoBusqueda(p, q));
   }
   if (categoriaId) {
     prods = prods.filter((p) => p.tipoProducto.categoria.id === categoriaId);
@@ -961,12 +996,7 @@ function buildProductosListado(search: URLSearchParams) {
   let prods = productosFull();
   if (!incluirInactivos) prods = prods.filter((p) => p.activo);
   if (q) {
-    prods = prods.filter(
-      (p) =>
-        p.nombre.toLowerCase().includes(q) ||
-        (p.codigo ?? '').includes(q) ||
-        (p.marca ?? '').toLowerCase().includes(q),
-    );
+    prods = prods.filter((p) => matchProductoBusqueda(p, q));
   }
   if (categoriaId) {
     prods = prods.filter((p) => p.tipoProducto.categoria.id === categoriaId);
@@ -1316,12 +1346,23 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
           horaEntregaExacta: e.horaEntregaExacta,
           franjaEntrega: e.franjaEntrega,
           estadoCobro: e.estadoCobroEncargo,
+          retiradoAt: e.retiradoAt ?? null,
           cliente: snap.clienteNombre ?? null,
           telefono: snap.clienteTelefono ?? null,
           itemsCount: e.items?.length ?? 0,
         };
       });
     return ok({ encargos });
+  }
+  // Marcar / desmarcar retiro (no toca la caja ni el estado de cobro).
+  m = p.match(/^\/encargos\/([^/]+)\/retirar$/);
+  if (m && method === 'POST') {
+    const e = state.encargos.find((x) => x.id === m![1]);
+    if (!e) return { status: 404, body: { error: 'Encargo no encontrado' } };
+    const retirar = (body as { retirado?: boolean })?.retirado ?? true;
+    e.retiradoAt = retirar ? new Date().toISOString() : null;
+    saveState(state);
+    return ok(e);
   }
   if (p === '/encargos' && method === 'POST') {
     const b = body as any;

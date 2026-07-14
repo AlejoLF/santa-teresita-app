@@ -201,6 +201,58 @@ export async function encolarTrabajo(args: EncolarArgs) {
 }
 
 /**
+ * Include de Prisma para traer la ficha del producto de cada item del ticket.
+ *
+ * `ItemVenta` solo snapshotea el NOMBRE, así que la marca / presentación / rubro
+ * se leen del producto vivo al momento de imprimir. Ventaja: las re-impresiones
+ * de ventas y encargos viejos también salen con la info completa.
+ */
+const INCLUDE_FICHA_PRODUCTO = {
+  producto: {
+    select: {
+      marca: true,
+      presentacion: true,
+      tipoProducto: {
+        select: { nombre: true, categoria: { select: { nombre: true } } },
+      },
+    },
+  },
+} as const;
+
+type ProductoFicha = {
+  marca: string | null;
+  presentacion: string | null;
+  tipoProducto: { nombre: string; categoria: { nombre: string } };
+};
+
+/**
+ * Datos descriptivos del producto que van impresos junto al nombre del item:
+ * marca, presentación y el flag SIN TACC.
+ *
+ * "Sin TACC" NO es un campo del producto: es una CATEGORÍA del catálogo (con
+ * subcategorías como "La Pastelera" o "Manjar"). Se detecta por el nombre de la
+ * categoría o de la subcategoría — misma idea que `incluyeSalsa`, que se deriva
+ * del nombre del tipo. Es información crítica en cocina (contaminación cruzada)
+ * y útil en el mostrador, así que sale en los cuatro tickets.
+ */
+function fichaProductoItem(producto: ProductoFicha | null | undefined): {
+  marca?: string;
+  presentacion?: string;
+  sinTacc?: boolean;
+} {
+  if (!producto) return {};
+  const esSinTacc = (s: string | undefined | null) => /sin\s*tacc/i.test(s ?? '');
+  const sinTacc =
+    esSinTacc(producto.tipoProducto?.categoria?.nombre) ||
+    esSinTacc(producto.tipoProducto?.nombre);
+  return {
+    ...(producto.marca ? { marca: producto.marca } : {}),
+    ...(producto.presentacion ? { presentacion: producto.presentacion } : {}),
+    ...(sinTacc ? { sinTacc: true } : {}),
+  };
+}
+
+/**
  * Construye el ComandaPayload completo a partir de la venta y sus items.
  *
  * Incluye los datos de delivery (cliente, dirección, teléfono, indicaciones)
@@ -216,7 +268,7 @@ export async function buildComandaPayload(
     include: {
       items: {
         orderBy: { orden: 'asc' },
-        include: { combo: true },
+        include: { combo: true, ...INCLUDE_FICHA_PRODUCTO },
       },
       deliveryInfo: true,
     },
@@ -285,6 +337,8 @@ export async function buildComandaPayload(
           .filter((x): x is string => typeof x === 'string'),
         observacion: it.observacion ?? undefined,
         parteDeCombo: it.combo?.nombre,
+        // Ficha del producto: marca, presentación y SIN TACC.
+        ...fichaProductoItem(it.producto),
         // Importes por línea — la comanda de cocina se usa como referencia de
         // cobro cuando el pedido se despacha en el local o sale al reparto.
         precioUnitario: it.precioUnitario.toFixed(2),
@@ -431,7 +485,7 @@ async function buildTicketDeliveryPayload(
   const venta = await client.venta.findUnique({
     where: { id: ventaId },
     include: {
-      items: { orderBy: { orden: 'asc' } },
+      items: { orderBy: { orden: 'asc' }, include: INCLUDE_FICHA_PRODUCTO },
       pagos: { orderBy: { fecha: 'asc' } },
       cliente: true,
       usuarioApertura: true,
@@ -553,6 +607,7 @@ async function buildTicketDeliveryPayload(
           .map(nombreModParaTicket)
           .filter((x): x is string => typeof x === 'string'),
         observacion: it.observacion ?? undefined,
+        ...fichaProductoItem(it.producto),
         precioUnitario: Number(it.precioUnitario).toFixed(2),
         subtotal: Number(it.totalLinea).toFixed(2),
       };
@@ -633,7 +688,7 @@ export async function encolarTicketClienteParaVenta(
   const venta = await tx.venta.findUnique({
     where: { id: ventaId },
     include: {
-      items: { orderBy: { orden: 'asc' } },
+      items: { orderBy: { orden: 'asc' }, include: INCLUDE_FICHA_PRODUCTO },
       pagos: { orderBy: { fecha: 'asc' } },
       cliente: true,
       usuarioCierre: true,
@@ -703,6 +758,7 @@ export async function encolarTicketClienteParaVenta(
           .map(nombreModParaTicket)
           .filter((x): x is string => typeof x === 'string'),
         observacion: it.observacion ?? undefined,
+        ...fichaProductoItem(it.producto),
         precio: Number(it.precioUnitario).toFixed(2),
         subtotal: Number(it.totalLinea).toFixed(2),
       };
@@ -821,12 +877,14 @@ export async function encolarComandaEncargo(
   const venta = await client.venta.findUnique({
     where: { id: rootId },
     include: {
-      items: { orderBy: { orden: 'asc' } },
+      items: { orderBy: { orden: 'asc' }, include: INCLUDE_FICHA_PRODUCTO },
       deliveryInfo: true,
       adicionesEncargo: {
         where: { estado: { not: 'ANULADA' } },
         orderBy: { fechaApertura: 'asc' },
-        include: { items: { orderBy: { orden: 'asc' } } },
+        include: {
+          items: { orderBy: { orden: 'asc' }, include: INCLUDE_FICHA_PRODUCTO },
+        },
       },
     },
   });
@@ -858,6 +916,7 @@ export async function encolarComandaEncargo(
           .map(nombreModParaTicket)
           .filter((x): x is string => typeof x === 'string'),
         observacion: it.observacion ?? undefined,
+        ...fichaProductoItem(it.producto),
         pagado,
         ...(adicionDe !== undefined && { adicion: adicionDe }),
       };

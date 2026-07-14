@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { ListasPreciosManager } from '@/components/admin/ListasPreciosManager';
 import { cn } from '@/lib/cn';
+import { coincideBusqueda } from '@/lib/busqueda';
 
 interface Categoria {
   id: string;
@@ -310,7 +311,7 @@ function ProductosTab() {
       <section className="card p-4 flex flex-wrap items-center gap-3">
         <input
           type="search"
-          placeholder="🔍 Buscar producto por nombre..."
+          placeholder="🔍 Buscar por nombre, marca, código, categoría..."
           value={search}
           onChange={(e) => {
             setSearch(e.target.value);
@@ -1647,6 +1648,8 @@ interface ProductoLite {
   nombre: string;
   codigo: string | null;
   precioBase: string;
+  marca?: string | null;
+  presentacion?: string | null;
 }
 
 function ComboFormModal({
@@ -1690,12 +1693,9 @@ function ComboFormModal({
   }, []);
 
   const productosFiltrados = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return productos;
-    return productos.filter(
-      (p) =>
-        p.nombre.toLowerCase().includes(q) ||
-        (p.codigo ?? '').toLowerCase().includes(q),
+    if (!search.trim()) return productos;
+    return productos.filter((p) =>
+      coincideBusqueda(search, p.nombre, p.codigo, p.marca, p.presentacion),
     );
   }, [productos, search]);
 

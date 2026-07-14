@@ -184,7 +184,7 @@ function ProveedoresTab() {
       <section className="card p-3">
         <input
           type="search"
-          placeholder="🔍 Buscar proveedor..."
+          placeholder="🔍 Buscar por nombre, CUIT, rubro, localidad..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="input"
@@ -757,7 +757,7 @@ function InsumosTab() {
       <section className="card p-3 flex flex-wrap gap-3 items-center">
         <input
           type="search"
-          placeholder="🔍 Buscar insumo (ej: harina, mozzarella, huevos)..."
+          placeholder="🔍 Buscar por nombre, presentación o proveedor..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="input flex-1 min-w-[260px]"

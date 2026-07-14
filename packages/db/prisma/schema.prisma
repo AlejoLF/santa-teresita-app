@@ -1002,6 +1002,12 @@ model Venta {
   /// encargos también se toman desde PCs que no son la del mostrador. La usan
   /// la comanda del cobro diferido y el default de la re-impresión.
   destinoImpresionEncargo String?             @map("destino_impresion_encargo") @db.VarChar(20)
+  /// Entrega del encargo: cuándo se lo llevó el cliente (o salió al reparto).
+  /// ORTOGONAL al cobro — un encargo puede retirarse pagado o impago. null =
+  /// todavía no retirado. Es el filtro operativo principal de /encargos.
+  retiradoAt            DateTime?             @map("retirado_at")
+  /// Quién marcó el retiro (sin relación, igual que usuarioCobroEncargoId).
+  usuarioRetiroEncargoId String?              @map("usuario_retiro_encargo_id") @db.Uuid
 
   cliente             Cliente?     @relation(fields: [clienteId], references: [id])
   listaPrecios        ListaPrecios @relation(fields: [listaPreciosId], references: [id])
@@ -1030,6 +1036,7 @@ model Venta {
   // Encargos: el calendario lista por día de entrega.
   @@index([esEncargo, fechaEntregaPromesa])
   @@index([encargoPadreId])
+  @@index([esEncargo, retiradoAt])
   @@map("ventas")
 }
 

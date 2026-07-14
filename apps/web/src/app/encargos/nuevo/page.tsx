@@ -6,6 +6,7 @@ import { api, ApiError } from '@/lib/api';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { cn } from '@/lib/cn';
 import { hoyISO, isoMasDias, type FranjaEntrega, type TipoEntrega } from '@/lib/encargos';
+import { coincideBusqueda } from '@/lib/busqueda';
 
 interface Sabor {
   opcionId: string;
@@ -18,11 +19,14 @@ interface Producto {
   id: string;
   nombre: string;
   marca?: string | null;
+  presentacion?: string | null;
+  codigo?: string | null;
   precioBase: string;
   unidadPrecio: string;
   formaVenta: string;
-  tipoProducto: { categoria: { id: string; nombre: string } };
+  tipoProducto: { nombre?: string; categoria: { id: string; nombre: string } };
   sabores?: Sabor[];
+  saboresResumen?: string[];
   incluyeSalsa?: 'SIMPLE' | 'ESPECIAL' | null;
 }
 interface Categoria {
@@ -133,10 +137,22 @@ function NuevoEncargoInner() {
   }, []);
 
   const filtrados = useMemo(() => {
-    const q = busqueda.trim().toLowerCase();
     return productos
       .filter((p) => (catSel ? p.tipoProducto.categoria.id === catSel : true))
-      .filter((p) => (q ? p.nombre.toLowerCase().includes(q) : true))
+      .filter((p) =>
+        // Multi-campo, igual que el POS: nombre, marca, presentación, código,
+        // sabores y sub-categoría/categoría.
+        coincideBusqueda(
+          busqueda,
+          p.nombre,
+          p.marca,
+          p.presentacion,
+          p.codigo,
+          p.saboresResumen,
+          p.tipoProducto.nombre,
+          p.tipoProducto.categoria.nombre,
+        ),
+      )
       .slice(0, 80);
   }, [productos, busqueda, catSel]);
 
@@ -251,7 +267,7 @@ function NuevoEncargoInner() {
             type="text"
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            placeholder="Buscar producto…"
+            placeholder="Buscar por nombre, marca, código…"
             className="input mb-2"
             autoFocus
           />

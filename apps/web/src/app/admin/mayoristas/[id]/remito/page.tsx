@@ -6,11 +6,14 @@ import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
+import { coincideBusqueda } from '@/lib/busqueda';
 
 interface ProductoCat {
   id: string;
   nombre: string;
   marca: string | null;
+  codigo?: string | null;
+  presentacion?: string | null;
   unidadPrecio: string;
   unidadPrecioLabel: string | null;
   precioUnitario: string;
@@ -62,9 +65,10 @@ export default function NuevoRemitoPage({
 
   const filtrados = useMemo(() => {
     if (!cat) return [];
-    const q = busqueda.trim().toLowerCase();
-    const base = q
-      ? cat.productos.filter((p) => p.nombre.toLowerCase().includes(q))
+    const base = busqueda.trim()
+      ? cat.productos.filter((p) =>
+          coincideBusqueda(busqueda, p.nombre, p.marca, p.codigo, p.presentacion),
+        )
       : cat.productos;
     return base.slice(0, 60);
   }, [cat, busqueda]);
@@ -149,7 +153,7 @@ export default function NuevoRemitoPage({
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
             className="input mb-3"
-            placeholder="Buscar producto..."
+            placeholder="Buscar por nombre, marca, código..."
             autoFocus
           />
           {!cat ? (

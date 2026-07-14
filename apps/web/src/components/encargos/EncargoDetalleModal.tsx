@@ -22,6 +22,8 @@ interface VentaEncargo {
   total: string;
   subtotal: string;
   estadoCobroEncargo: EstadoCobro;
+  /** Entrega: cuándo se lo llevó el cliente. null = pendiente de retiro. */
+  retiradoAt: string | null;
   tipoEntregaEncargo: 'RETIRO' | 'ENVIO' | null;
   fechaEntregaPromesa: string | null;
   horaEntregaExacta: string | null;
@@ -135,6 +137,30 @@ export function EncargoDetalleModal({
     { valor: 'COCINA', label: '🍳 Cocina' },
   ] as const;
 
+  const [marcandoRetiro, setMarcandoRetiro] = useState(false);
+
+  /**
+   * Marca (o desmarca) el retiro. No toca la caja ni el estado de cobro: un
+   * encargo se puede retirar impago, y en ese caso sigue figurando como "a pagar".
+   */
+  async function toggleRetirado() {
+    if (!v) return;
+    const retirar = !v.retiradoAt;
+    if (!retirar && !confirm('¿Desmarcar el retiro de este encargo?')) return;
+    setMarcandoRetiro(true);
+    try {
+      const actualizado = await api.post<VentaEncargo>(`/encargos/${v.id}/retirar`, {
+        retirado: retirar,
+      });
+      setV(actualizado);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo marcar el retiro.');
+    } finally {
+      setMarcandoRetiro(false);
+    }
+  }
+
   async function reimprimir(destino: 'MOSTRADOR' | 'DELIVERY' | 'COCINA') {
     if (!v) return;
     setReimprimiendo(true);
@@ -193,6 +219,12 @@ export function EncargoDetalleModal({
                 )}
               >
                 {cobrado ? 'COBRADO' : parcial ? 'PAGO PARCIAL' : 'A PAGAR'}
+              </span>
+            )}
+            {/* El retiro es independiente del cobro: puede estar retirado e impago. */}
+            {v?.retiradoAt && (
+              <span className="px-2 py-0.5 rounded text-2xs font-bold uppercase tracking-wide bg-basil-100 text-basil-600 whitespace-nowrap">
+                ✅ RETIRADO
               </span>
             )}
           </div>
@@ -423,6 +455,25 @@ export function EncargoDetalleModal({
                 🖨 Re-imprimir…
               </button>
             )}
+            {/* Retiro: disponible pagado o impago (son cosas distintas). El
+                footer ya no se renderiza para encargos anulados. */}
+            <button
+              onClick={() => void toggleRetirado()}
+              disabled={marcandoRetiro}
+              className={cn(
+                'px-3 py-2 text-sm rounded-md font-medium transition-colors disabled:opacity-50',
+                v.retiradoAt
+                  ? 'border border-cream-300 text-ink-700 hover:bg-cream-200'
+                  : 'bg-basil-600 text-white hover:bg-basil-600/85',
+              )}
+              title={
+                v.retiradoAt
+                  ? 'Desmarcar el retiro (volver a pendiente)'
+                  : 'El cliente ya se llevó el encargo'
+              }
+            >
+              {marcandoRetiro ? '…' : v.retiradoAt ? '↩️ Sin retirar' : '✅ Marcar retirado'}
+            </button>
             {editable && (
               <>
                 <button

@@ -30,6 +30,31 @@ import {
 } from '../services/sesion-caja.js';
 
 /**
+ * Filtro `where` para búsqueda de productos por texto libre. Matchea cualquiera
+ * de los campos visibles (nombre, marca, presentación, código, descripción) y
+ * también el nombre de su sub-categoría y categoría — así buscar una MARCA trae
+ * todos sus productos, no solo los que la tienen en el nombre. Devuelve `{}`
+ * cuando el término está vacío (no filtra). Reusado por el catálogo y la lista
+ * de precios para que ambos buscadores se comporten igual.
+ */
+function buscarProductoWhere(termino: string | undefined) {
+  const t = termino?.trim();
+  if (!t) return {};
+  const contains = { contains: t, mode: 'insensitive' as const };
+  return {
+    OR: [
+      { nombre: contains },
+      { marca: contains },
+      { presentacion: contains },
+      { codigo: contains },
+      { descripcion: contains },
+      { tipoProducto: { nombre: contains } },
+      { tipoProducto: { categoria: { nombre: contains } } },
+    ],
+  };
+}
+
+/**
  * Auto-envío del email del cierre al cerrar la sesión. Helper standalone
  * (fuera de fastify) para que el handler del cierre dispare fire-and-forget
  * sin bloquear el response.
@@ -689,8 +714,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         page: number;
         pageSize: number;
       };
+      // Búsqueda multi-campo (nombre, marca, código, categoría, etc.): la
+      // encargada buscaba por MARCA y no salía nada porque solo se filtraba por
+      // nombre. Ver buscarProductoWhere. Múltiples coincidencias = varios
+      // resultados (ej. todos los productos de una marca).
       const where = {
-        ...(q.q && { nombre: { contains: q.q, mode: 'insensitive' as const } }),
+        ...buscarProductoWhere(q.q),
         ...(q.tipoProductoId && { tipoProductoId: q.tipoProductoId }),
         ...(q.categoriaId && { tipoProducto: { categoriaId: q.categoriaId } }),
         ...(q.incluirInactivos ? {} : { activo: true }),
@@ -3544,7 +3573,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const productos = await prisma.producto.findMany({
         where: {
           activo: true,
-          ...(q.q && { nombre: { contains: q.q, mode: 'insensitive' as const } }),
+          // Mismo buscador multi-campo que el catálogo (nombre, marca, código…).
+          ...buscarProductoWhere(q.q),
           ...(q.categoriaId && { tipoProducto: { categoriaId: q.categoriaId } }),
         },
         include: {

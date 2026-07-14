@@ -390,6 +390,7 @@ export async function listarEncargos(args: { desde: string; hasta: string }) {
       horaEntregaExacta: true,
       franjaEntrega: true,
       estadoCobroEncargo: true,
+      retiradoAt: true,
       cliente: { select: { nombre: true, apellido: true, telefono: true } },
       deliveryInfo: { select: { direccionSnapshot: true } },
       _count: { select: { items: true } },
@@ -434,6 +435,8 @@ export async function listarEncargos(args: { desde: string; hasta: string }) {
       horaEntregaExacta: e.horaEntregaExacta,
       franjaEntrega: e.franjaEntrega,
       estadoCobro: estadoCobroMerged,
+      // Entrega: ortogonal al cobro (se puede retirar pagado o impago).
+      retiradoAt: e.retiradoAt,
       cliente: clienteNombre || null,
       telefono: (telSnap || e.cliente?.telefono) ?? null,
       itemsCount: e._count.items,

@@ -109,7 +109,7 @@ export default function EmpleadosListPage() {
       <section className="card p-3 flex items-center gap-3">
         <input
           type="search"
-          placeholder="🔍 Buscar empleado..."
+          placeholder="🔍 Buscar por nombre, DNI, teléfono..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="input flex-1"

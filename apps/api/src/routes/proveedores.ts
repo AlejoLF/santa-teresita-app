@@ -37,7 +37,20 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       const q = req.query as { q?: string; incluirInactivos: boolean };
       const proveedores = await prisma.proveedor.findMany({
         where: {
-          ...(q.q && { nombre: { contains: q.q, mode: 'insensitive' as const } }),
+          // Multi-campo: nombre, razón social, CUIT, contacto, rubro, localidad,
+          // teléfono y email — así se encuentra al proveedor por cualquier dato.
+          ...(q.q && {
+            OR: [
+              { nombre: { contains: q.q, mode: 'insensitive' as const } },
+              { razonSocial: { contains: q.q, mode: 'insensitive' as const } },
+              { cuit: { contains: q.q, mode: 'insensitive' as const } },
+              { personaContacto: { contains: q.q, mode: 'insensitive' as const } },
+              { categoriaPrincipal: { contains: q.q, mode: 'insensitive' as const } },
+              { localidad: { contains: q.q, mode: 'insensitive' as const } },
+              { telefono: { contains: q.q, mode: 'insensitive' as const } },
+              { email: { contains: q.q, mode: 'insensitive' as const } },
+            ],
+          }),
           ...(q.incluirInactivos ? {} : { activo: true }),
         },
         orderBy: { nombre: 'asc' },
@@ -758,7 +771,22 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       const insumos = await prisma.insumo.findMany({
         where: {
           activo: true,
-          ...(q.q && { nombre: { contains: q.q, mode: 'insensitive' as const } }),
+          // Multi-campo: nombre, presentación, observaciones y el nombre del
+          // proveedor que lo vende (así "buscar por proveedor" trae sus insumos).
+          ...(q.q && {
+            OR: [
+              { nombre: { contains: q.q, mode: 'insensitive' as const } },
+              { presentacion: { contains: q.q, mode: 'insensitive' as const } },
+              { observaciones: { contains: q.q, mode: 'insensitive' as const } },
+              {
+                proveedoresVinculo: {
+                  some: {
+                    proveedor: { nombre: { contains: q.q, mode: 'insensitive' as const } },
+                  },
+                },
+              },
+            ],
+          }),
           ...(q.categoria && { categoria: q.categoria as never }),
           ...(q.proveedorId && {
             proveedoresVinculo: { some: { proveedorId: q.proveedorId } },

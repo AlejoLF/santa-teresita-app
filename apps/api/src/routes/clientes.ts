@@ -41,6 +41,7 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
             { apellido: { contains: q.q, mode: 'insensitive' as const } },
             { telefono: { contains: q.q } },
             { cuitCuil: { contains: q.q } },
+            { email: { contains: q.q, mode: 'insensitive' as const } },
           ],
         }),
         ...(q.tipo && { tipo: q.tipo }),
@@ -434,6 +435,8 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
             OR: [
               { nombre: { contains: q.nombre!, mode: 'insensitive' as const } },
               { apellido: { contains: q.nombre!, mode: 'insensitive' as const } },
+              { cuitCuil: { contains: q.nombre! } },
+              { email: { contains: q.nombre!, mode: 'insensitive' as const } },
             ],
           };
 

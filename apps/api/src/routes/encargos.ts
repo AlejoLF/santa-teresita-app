@@ -256,6 +256,56 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // POST /encargos/:id/retirar — marca (o desmarca) el encargo como RETIRADO.
+  // Es ortogonal al cobro: un encargo se puede retirar pagado o impago, así que
+  // no toca `estadoCobroEncargo` ni la caja — solo registra la entrega.
+  fastify.post(
+    '/encargos/:id/retirar',
+    {
+      preHandler: fastify.requireAuth(),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({ retirado: z.boolean().default(true) }).optional(),
+      },
+    },
+    async (req, reply) => {
+      const params = req.params as { id: string };
+      const retirado = (req.body as { retirado?: boolean } | undefined)?.retirado ?? true;
+
+      const venta = await prisma.venta.findUnique({
+        where: { id: params.id },
+        select: { id: true, esEncargo: true, estado: true, encargoPadreId: true },
+      });
+      if (!venta || !venta.esEncargo) {
+        return reply.code(404).send({ error: 'Encargo no encontrado' });
+      }
+      if (venta.estado === EstadoVenta.ANULADA) {
+        return reply.code(400).send({ error: 'El encargo está anulado.' });
+      }
+      if (venta.encargoPadreId) {
+        return reply.code(400).send({
+          error: 'El retiro se marca sobre el encargo principal.',
+        });
+      }
+
+      await prisma.venta.update({
+        where: { id: venta.id },
+        data: {
+          retiradoAt: retirado ? new Date() : null,
+          usuarioRetiroEncargoId: retirado ? req.usuario!.id : null,
+        },
+      });
+      await recordAudit({
+        tabla: 'ventas',
+        registroId: venta.id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { encargoRetirado: retirado },
+      });
+      return reply.send(await getVentaCompleta(venta.id));
+    },
+  );
+
   // POST /encargos/:id/reimprimir — re-encola la comanda del encargo (fusionada
   // con sus adiciones, estado real). Disponible en cualquier estado no anulado.
   fastify.post(

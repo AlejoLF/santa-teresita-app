@@ -337,6 +337,10 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
             id: p.id,
             nombre: p.nombre,
             marca: p.marca,
+            // código y presentación: para que el buscador del remito filtre por
+            // ellos además del nombre/marca.
+            codigo: p.codigo,
+            presentacion: p.presentacion,
             unidadPrecio: p.unidadPrecio,
             unidadPrecioLabel: p.unidadPrecioLabel,
             formaVenta: p.formaVenta,

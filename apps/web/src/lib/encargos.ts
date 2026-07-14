@@ -18,6 +18,8 @@ export interface EncargoListItem {
   horaEntregaExacta: string | null;
   franjaEntrega: FranjaEntrega | null;
   estadoCobro: EstadoCobro;
+  /** Entrega: cuándo se lo llevó el cliente. null = pendiente de retiro. */
+  retiradoAt: string | null;
   cliente: string | null;
   telefono: string | null;
   itemsCount: number;
@@ -28,6 +30,90 @@ export const FRANJA_LABEL: Record<FranjaEntrega, string> = {
   TARDE: 'Tarde',
   NOCHE: 'Noche',
 };
+
+// ─── Filtros del HUD de encargos ──────────────────────────────────────
+//
+// El retiro es ORTOGONAL al cobro (se puede retirar un encargo impago), así que
+// los chips mezclan las dos dimensiones a propósito: son atajos operativos, no
+// un enum de estados. Selección única.
+
+export type FiltroEncargo =
+  | 'todos'
+  | 'pendiente_retiro'
+  | 'retirado'
+  | 'impago'
+  | 'cobrado'
+  | 'atrasado';
+
+export const FILTROS_ENCARGO: Array<{ valor: FiltroEncargo; label: string; icono: string }> = [
+  { valor: 'todos', label: 'Todos', icono: '📋' },
+  { valor: 'pendiente_retiro', label: 'Sin retirar', icono: '📦' },
+  { valor: 'retirado', label: 'Retirados', icono: '✅' },
+  { valor: 'impago', label: 'Pago pendiente', icono: '💰' },
+  { valor: 'cobrado', label: 'Cobrados', icono: '💵' },
+  { valor: 'atrasado', label: 'Atrasados', icono: '⚠️' },
+];
+
+/** Hora de corte de cada franja, en minutos desde medianoche. */
+const FIN_FRANJA: Record<FranjaEntrega, number> = {
+  MANANA: 13 * 60,
+  TARDE: 20 * 60,
+  NOCHE: 23 * 60 + 59,
+};
+
+/** Minutos transcurridos hoy, en hora de Argentina. */
+export function minutosAhoraAR(): number {
+  const hhmm = new Date().toLocaleTimeString('en-GB', {
+    timeZone: TZ_AR,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const [h, m] = hhmm.split(':').map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+/**
+ * Encargo atrasado: pasó su horario de entrega y todavía nadie lo retiró.
+ * Los ya retirados nunca están atrasados, sin importar la hora.
+ */
+export function estaAtrasado(e: EncargoListItem, hoy: string, minutosAhora: number): boolean {
+  if (e.retiradoAt || !e.fechaEntrega) return false;
+  if (e.fechaEntrega < hoy) return true; // día ya pasado
+  if (e.fechaEntrega > hoy) return false; // todavía falta
+  const limite = e.horaEntregaExacta
+    ? (() => {
+        const [h, m] = e.horaEntregaExacta.split(':').map(Number);
+        return (h ?? 0) * 60 + (m ?? 0);
+      })()
+    : e.franjaEntrega
+      ? FIN_FRANJA[e.franjaEntrega]
+      : null;
+  return limite !== null && minutosAhora > limite;
+}
+
+/** ¿El encargo entra en el filtro elegido? */
+export function coincideFiltro(
+  e: EncargoListItem,
+  filtro: FiltroEncargo,
+  hoy: string,
+  minutosAhora: number,
+): boolean {
+  switch (filtro) {
+    case 'todos':
+      return true;
+    case 'pendiente_retiro':
+      return !e.retiradoAt;
+    case 'retirado':
+      return !!e.retiradoAt;
+    case 'impago':
+      return e.estadoCobro !== 'COBRADO'; // A_PAGAR o PARCIAL
+    case 'cobrado':
+      return e.estadoCobro === 'COBRADO';
+    case 'atrasado':
+      return estaAtrasado(e, hoy, minutosAhora);
+  }
+}
 
 /** Texto del horario de entrega: hora exacta o franja. */
 export function cuandoLabel(e: {

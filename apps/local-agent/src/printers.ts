@@ -102,6 +102,50 @@ export function makePrinter(destino: DestinoImpresora): ThermalPrinter {
   });
 }
 
+/**
+ * Ficha del producto que acompaña a cada item impreso. La arma la API
+ * (`fichaProductoItem` en services/impresion.ts) leyendo el producto vivo.
+ */
+interface FichaItem {
+  /** Marca del producto (ej. "La Pastelera"). */
+  marca?: string;
+  /** Presentación (ej. "3 unidades", "12 unidades", "500 g"). */
+  presentacion?: string;
+  /** El producto es apto celíacos (categoría "Sin TACC" del catálogo). */
+  sinTacc?: boolean;
+}
+
+/**
+ * Imprime la ficha del producto justo debajo del nombre del item:
+ *
+ *     ## 2  Empanadas
+ *           La Pastelera · 3 unidades
+ *           ** SIN TACC **
+ *
+ * SIN TACC va destacado (bold + invertido) porque es información de seguridad
+ * alimentaria: en cocina evita la contaminación cruzada y en el mostrador le
+ * confirma al cliente celíaco que se lleva lo correcto.
+ *
+ * @param txt      saneador según destino (`limpiar` normal, `ascii` en DELIVERY).
+ * @param sangria  indentación, para alinearla con los modificadores del ticket.
+ */
+function imprimirFichaItem(
+  printer: ThermalPrinter,
+  item: FichaItem,
+  txt: (s: string) => string,
+  sangria: string,
+): void {
+  const detalle = [item.marca, item.presentacion].filter(Boolean).join(' · ');
+  if (detalle) printer.println(txt(`${sangria}${detalle}`));
+  if (item.sinTacc) {
+    printer.bold(true);
+    printer.invert(true);
+    printer.println(txt(`${sangria}** SIN TACC **`));
+    printer.invert(false);
+    printer.bold(false);
+  }
+}
+
 export interface ComandaPayload {
   numeroOrden: number;
   /**
@@ -122,6 +166,10 @@ export interface ComandaPayload {
     /** Importes por línea. Opcionales: comandas viejas encoladas no los traen. */
     precioUnitario?: string;
     subtotal?: string;
+    /** Ficha del producto — ver FichaItem. */
+    marca?: string;
+    presentacion?: string;
+    sinTacc?: boolean;
   }>;
   /** Total del pedido — se imprime GRANDE al pie de la comanda. */
   total?: string;
@@ -209,6 +257,7 @@ export async function imprimirComanda(
     printer.println(`## ${item.cantidad}  ${limpiar(item.nombre)}`);
     printer.bold(false);
     printer.setTextNormal();
+    imprimirFichaItem(printer, item, limpiar, '      ');
     for (const m of item.modificadores) {
       printer.println(`           > ${limpiar(m)}`);
     }
@@ -322,6 +371,9 @@ export interface TicketClientePayload {
     observacion?: string;
     precio: string;
     subtotal: string;
+    marca?: string;
+    presentacion?: string;
+    sinTacc?: boolean;
   }>;
   subtotal: string;
   descuento?: { pct: number; monto: string } | null;
@@ -425,6 +477,7 @@ export async function imprimirTicketCliente(payload: TicketClientePayload): Prom
       formatARS(it.subtotal),
     );
     for (const linea of lineas) printer.println(linea);
+    imprimirFichaItem(printer, it, limpiar, '      ');
     // Sabor/tipo elegido — debajo del item, indentado ("  > Carne").
     for (const m of it.modificadores ?? []) {
       printer.println(`      > ${limpiar(m)}`);
@@ -518,6 +571,9 @@ export interface TicketDeliveryPayload {
     observacion?: string;
     precioUnitario: string;
     subtotal: string;
+    marca?: string;
+    presentacion?: string;
+    sinTacc?: boolean;
   }>;
   /** Costo de envío. Si > 0, sale como una línea ENVIO al final de los items. */
   envio?: string | null;
@@ -597,6 +653,8 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
       width,
     );
     for (const linea of lineas) PL(linea);
+    // ascii(): esta comandera tiene code page multibyte (ver imprimirTicketDelivery).
+    imprimirFichaItem(printer, it, ascii, '      ');
     // Sabor/tipo elegido — debajo del item, indentado ("  > Carne").
     for (const m of it.modificadores ?? []) {
       PL(`      > ${m}`);
@@ -693,6 +751,9 @@ export interface ComandaEncargoPayload {
     nombre: string;
     modificadores: string[];
     observacion?: string;
+    marca?: string;
+    presentacion?: string;
+    sinTacc?: boolean;
     /** ¿Este item pertenece a una parte ya cobrada? (PAGO PARCIAL). */
     pagado?: boolean;
     /** Nº de adición ("modificación adicional") a la que pertenece, si aplica. */
@@ -791,6 +852,7 @@ export async function imprimirComandaEncargo(
     printer.println(`## ${item.cantidad}  ${txt(item.nombre)}${tagAdicion}`);
     printer.bold(false);
     printer.setTextNormal();
+    imprimirFichaItem(printer, item, txt, '      ');
     for (const m of item.modificadores) {
       printer.println(`           > ${txt(m)}`);
     }

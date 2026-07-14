@@ -30,9 +30,15 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
         where: {
           ...(q.incluirInactivos ? {} : { activo: true }),
           ...(q.q && {
+            // Multi-campo: además de nombre/apellido, por DNI, CUIL, teléfono
+            // y email — para poder encontrar a alguien por cualquiera de sus datos.
             OR: [
               { nombre: { contains: q.q, mode: 'insensitive' as const } },
               { apellido: { contains: q.q, mode: 'insensitive' as const } },
+              { dni: { contains: q.q, mode: 'insensitive' as const } },
+              { cuil: { contains: q.q, mode: 'insensitive' as const } },
+              { telefono: { contains: q.q, mode: 'insensitive' as const } },
+              { email: { contains: q.q, mode: 'insensitive' as const } },
             ],
           }),
         },
