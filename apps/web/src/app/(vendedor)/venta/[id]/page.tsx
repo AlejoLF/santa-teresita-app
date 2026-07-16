@@ -553,7 +553,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
             <div className="text-sm text-ink-500 uppercase tracking-wide mb-1">
               {venta.estado === 'PROCESADA' ? 'Total a cobrar' : 'Total'}
             </div>
-            <MoneyAmount value={totalNum} hero className="text-3xl text-teresita-900" />
+            <MoneyAmount value={totalNum} hero fit className="text-3xl text-teresita-900" />
             {habilitaDescuentoEfectivo && editable && (
               <div className="text-xs text-basil-600 mt-2">
                 Si paga en efectivo: <MoneyAmount value={conDescuentoSimple.total} className="font-semibold" /> ·

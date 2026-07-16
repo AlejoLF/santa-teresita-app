@@ -199,19 +199,20 @@ export default function AdminMovimientosPage() {
 
       {/* Sumas */}
       {data && (
-        <section className="grid grid-cols-3 gap-4">
-          <div className="card p-4">
+        <section className="grid grid-cols-3 gap-2 sm:gap-4">
+          <div className="card p-3 sm:p-4 min-w-0">
             <div className="text-xs text-ink-500 uppercase tracking-wide">Ingresos</div>
-            <MoneyAmount value={data.sumas.ingresos} className="text-lg text-basil-600" />
+            <MoneyAmount value={data.sumas.ingresos} fit className="text-lg text-basil-600" />
           </div>
-          <div className="card p-4">
+          <div className="card p-3 sm:p-4 min-w-0">
             <div className="text-xs text-ink-500 uppercase tracking-wide">Egresos</div>
-            <MoneyAmount value={data.sumas.egresos} className="text-lg text-pomodoro-600" />
+            <MoneyAmount value={data.sumas.egresos} fit className="text-lg text-pomodoro-600" />
           </div>
-          <div className="card p-4">
+          <div className="card p-3 sm:p-4 min-w-0">
             <div className="text-xs text-ink-500 uppercase tracking-wide">Neto</div>
             <MoneyAmount
               value={data.sumas.neto}
+              fit
               className={cn(
                 'text-lg',
                 Number(data.sumas.neto) >= 0 ? 'text-teresita-700' : 'text-pomodoro-600',

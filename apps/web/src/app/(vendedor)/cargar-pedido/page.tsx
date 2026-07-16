@@ -1342,11 +1342,13 @@ export default function CargarPedidoPage() {
                     />
                   </div>
                   <hr className="border-cream-300 my-1" />
-                  <div className="flex justify-between items-baseline">
-                    <span className="text-base text-ink-900 font-medium">NUEVO TOTAL:</span>
+                  <div className="flex justify-between items-baseline gap-2">
+                    <span className="text-base text-ink-900 font-medium shrink-0">NUEVO TOTAL:</span>
                     <MoneyAmount
                       value={(Number(totalPrevioVenta) + Number(subtotal)).toFixed(2)}
                       hero
+                      fit
+                      align="right"
                       className="text-2xl text-teresita-900"
                     />
                   </div>
@@ -1357,9 +1359,15 @@ export default function CargarPedidoPage() {
                     <span className="text-ink-500">Subtotal:</span>
                     <MoneyAmount value={subtotal} />
                   </div>
-                  <div className="flex justify-between items-baseline">
-                    <span className="text-base text-ink-700">TOTAL:</span>
-                    <MoneyAmount value={subtotal} hero className="text-2xl text-teresita-900" />
+                  <div className="flex justify-between items-baseline gap-2">
+                    <span className="text-base text-ink-700 shrink-0">TOTAL:</span>
+                    <MoneyAmount
+                      value={subtotal}
+                      hero
+                      fit
+                      align="right"
+                      className="text-2xl text-teresita-900"
+                    />
                   </div>
                 </>
               )}

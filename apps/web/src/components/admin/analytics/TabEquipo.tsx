@@ -2,6 +2,7 @@
 
 import { useAnalytics, Card, Cargando, ErrorBanner, fmtPesos, fmtNum, TablaSimple, type TabProps } from './_shared';
 import { InfoTooltip } from './InfoTooltip';
+import { FitText } from '@/components/ui/FitText';
 
 interface EquipoData {
   vendedores: Array<{
@@ -83,17 +84,17 @@ export function TabEquipo(props: TabProps) {
           }
         >
           <div className="grid grid-cols-2 gap-3">
-            <div className="bg-saffron-100 p-4 rounded-md text-center">
+            <div className="bg-saffron-100 p-4 rounded-md text-center min-w-0">
               <p className="text-xs text-saffron-600 uppercase font-medium">Con cocina</p>
-              <p className="text-2xl font-bold text-saffron-600">
+              <FitText align="center" className="text-2xl font-bold text-saffron-600">
                 {fmtNum(data.cocina.pedidos_con_cocina)}
-              </p>
+              </FitText>
             </div>
-            <div className="bg-cream-200 p-4 rounded-md text-center">
+            <div className="bg-cream-200 p-4 rounded-md text-center min-w-0">
               <p className="text-xs text-ink-500 uppercase font-medium">Sin cocina</p>
-              <p className="text-2xl font-bold text-ink-700">
+              <FitText align="center" className="text-2xl font-bold text-ink-700">
                 {fmtNum(data.cocina.pedidos_sin_cocina)}
-              </p>
+              </FitText>
             </div>
           </div>
         </Card>
@@ -117,9 +118,9 @@ export function TabEquipo(props: TabProps) {
           }
         >
           <p className="text-xs text-ink-500 uppercase tracking-wide font-medium">Total regalado</p>
-          <p className="text-2xl font-bold text-pomodoro-600 mb-2">
-            −{fmtPesos(data.descuentoEfectivo.monto_total)}
-          </p>
+          <FitText className="text-2xl font-bold text-pomodoro-600 mb-2 block">
+            {`−${fmtPesos(data.descuentoEfectivo.monto_total)}`}
+          </FitText>
           <p className="text-xs text-ink-500">
             {fmtNum(data.descuentoEfectivo.cantidad_ventas)} ventas con descuento de{' '}
             {fmtNum(data.descuentoEfectivo.ventas_total)} totales (

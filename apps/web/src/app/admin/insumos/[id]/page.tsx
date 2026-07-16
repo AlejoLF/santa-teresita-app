@@ -852,18 +852,18 @@ function FormNuevaFactura({
           </section>
 
           {/* Totales */}
-          <section className="bg-surface-sunken rounded-md p-3 grid grid-cols-3 gap-3 text-sm font-mono">
-            <div>
+          <section className="bg-surface-sunken rounded-md p-3 grid grid-cols-3 gap-2 sm:gap-3 text-sm font-mono">
+            <div className="min-w-0">
               <div className="text-2xs text-ink-500 uppercase">Neto</div>
-              <MoneyAmount value={neto} />
+              <MoneyAmount value={neto} fit />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="text-2xs text-ink-500 uppercase">IVA</div>
-              <MoneyAmount value={iva} />
+              <MoneyAmount value={iva} fit />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="text-2xs text-ink-500 uppercase">Total</div>
-              <MoneyAmount value={total} className="text-md text-teresita-700 font-semibold" />
+              <MoneyAmount value={total} fit className="text-md text-teresita-700 font-semibold" />
             </div>
           </section>
 

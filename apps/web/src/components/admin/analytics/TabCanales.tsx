@@ -2,6 +2,7 @@
 
 import { useAnalytics, Card, Cargando, ErrorBanner, fmtPesos, fmtNum, TablaSimple, type TabProps } from './_shared';
 import { InfoTooltip } from './InfoTooltip';
+import { FitText } from '@/components/ui/FitText';
 
 interface CanalesData {
   canales: Array<{
@@ -56,11 +57,11 @@ export function TabCanales(props: TabProps) {
   return (
     <>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        <div className="card p-3">
+        <div className="card p-3 min-w-0">
           <p className="text-xs text-ink-500 uppercase tracking-wide font-medium">Bruto facturado</p>
-          <p className="text-xl font-semibold text-ink-900">{fmtPesos(totalBruto)}</p>
+          <FitText className="text-xl font-semibold text-ink-900">{fmtPesos(totalBruto)}</FitText>
         </div>
-        <div className="card p-3">
+        <div className="card p-3 min-w-0">
           <div className="text-xs text-ink-500 uppercase tracking-wide font-medium flex items-center">
             Total comisiones de plataformas
             <InfoTooltip>
@@ -74,11 +75,11 @@ export function TabCanales(props: TabProps) {
               configurables desde Configuración → Sistema).
             </InfoTooltip>
           </div>
-          <p className="text-xl font-semibold text-pomodoro-600">−{fmtPesos(totalComisiones)}</p>
+          <FitText className="text-xl font-semibold text-pomodoro-600">{`−${fmtPesos(totalComisiones)}`}</FitText>
         </div>
-        <div className="card p-3 bg-basil-100">
+        <div className="card p-3 bg-basil-100 min-w-0">
           <p className="text-xs text-basil-600 uppercase tracking-wide font-medium">Neto post-comisión</p>
-          <p className="text-xl font-semibold text-basil-600">{fmtPesos(totalNeto)}</p>
+          <FitText className="text-xl font-semibold text-basil-600">{fmtPesos(totalNeto)}</FitText>
         </div>
       </div>
 

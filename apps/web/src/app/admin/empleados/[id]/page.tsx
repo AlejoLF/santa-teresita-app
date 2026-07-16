@@ -154,26 +154,26 @@ export default function EmpleadoDetallePage({
 
       {/* KPIs del año */}
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Sueldo base</div>
           {e.sueldoBase ? (
-            <MoneyAmount value={e.sueldoBase} hero className="text-md text-ink-900" />
+            <MoneyAmount value={e.sueldoBase} hero fit className="text-md text-ink-900" />
           ) : (
             <span className="text-ink-300 text-md">—</span>
           )}
         </div>
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Sueldos pagados</div>
-          <MoneyAmount value={totales.sueldos} hero className="text-md text-basil-600" />
+          <MoneyAmount value={totales.sueldos} hero fit className="text-md text-basil-600" />
           <div className="text-2xs text-ink-500 mt-1">en el año</div>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Adelantos</div>
-          <MoneyAmount value={totales.adelantos} hero className="text-md text-saffron-600" />
+          <MoneyAmount value={totales.adelantos} hero fit className="text-md text-saffron-600" />
         </div>
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Comisiones</div>
-          <MoneyAmount value={totales.comisiones} hero className="text-md text-ocean-600" />
+          <MoneyAmount value={totales.comisiones} hero fit className="text-md text-ocean-600" />
         </div>
       </section>
 

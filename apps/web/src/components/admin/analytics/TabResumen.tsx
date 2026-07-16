@@ -2,6 +2,7 @@
 
 import { useAnalytics, Card, Cargando, ErrorBanner, fmtPesos, fmtPct, fmtNum, type TabProps } from './_shared';
 import { InfoTooltip } from './InfoTooltip';
+import { FitText } from '@/components/ui/FitText';
 import {
   LineChart,
   Line,
@@ -108,19 +109,19 @@ export function TabResumen(props: TabProps) {
           }
         >
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
+            <div className="min-w-0">
               <p className="text-xs text-ink-500">Acumulado</p>
-              <p className="text-lg font-semibold text-ink-900">{fmtPesos(proy.ventasHasta)}</p>
+              <FitText className="text-lg font-semibold text-ink-900">{fmtPesos(proy.ventasHasta)}</FitText>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="text-xs text-ink-500">Promedio diario</p>
-              <p className="text-lg font-semibold text-ink-900">{fmtPesos(proy.promedioPorDia)}</p>
+              <FitText className="text-lg font-semibold text-ink-900">{fmtPesos(proy.promedioPorDia)}</FitText>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="text-xs text-ink-500">Proyección al cierre</p>
-              <p className="text-lg font-semibold text-teresita-700">{fmtPesos(proy.proyeccionTotal)}</p>
+              <FitText className="text-lg font-semibold text-teresita-700">{fmtPesos(proy.proyeccionTotal)}</FitText>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="text-xs text-ink-500">Días</p>
               <p className="text-lg font-semibold text-ink-900">
                 {proy.diasTranscurridos} <span className="text-ink-500 text-sm font-normal">/ {proy.diasTotales}</span>
@@ -223,12 +224,12 @@ function KPIBox({
   const colorClass =
     color === 'basil' ? 'text-basil-600' : color === 'pomodoro' ? 'text-pomodoro-600' : 'text-teresita-700';
   return (
-    <div className="card p-3">
+    <div className="card p-3 min-w-0">
       <div className="flex items-center mb-1">
         <p className="text-xs text-ink-500 uppercase tracking-wide font-medium">{titulo}</p>
         {tooltip && <InfoTooltip>{tooltip}</InfoTooltip>}
       </div>
-      <p className={`text-xl font-semibold ${colorClass}`}>{valor}</p>
+      <FitText className={`text-xl font-semibold ${colorClass}`}>{valor}</FitText>
       {(subtitulo || delta != null) && (
         <p className="text-xs text-ink-500 mt-0.5">
           {subtitulo && <span>{subtitulo}</span>}

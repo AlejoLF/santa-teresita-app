@@ -245,23 +245,24 @@ export default function AdminCierresPage() {
               </div>
 
               <Link href={`/admin/cierres/${s.id}`} className="block">
-                <div className="grid grid-cols-4 gap-3 text-sm">
-                  <div>
+                <div className="grid grid-cols-4 gap-2 sm:gap-3 text-sm">
+                  <div className="min-w-0">
                     <div className="text-2xs text-ink-500 uppercase">Inicial</div>
-                    <MoneyAmount value={s.existenciaInicial} />
+                    <MoneyAmount value={s.existenciaInicial} fit />
                   </div>
-                  <div title="Lo que el sistema calculó que debería haber en la caja física">
+                  <div className="min-w-0" title="Lo que el sistema calculó que debería haber en la caja física">
                     <div className="text-2xs text-ink-500 uppercase">Esperado</div>
-                    <MoneyAmount value={s.recaudacionEsperada} />
+                    <MoneyAmount value={s.recaudacionEsperada} fit />
                   </div>
-                  <div title="Lo que la encargada contó físicamente al cerrar">
+                  <div className="min-w-0" title="Lo que la encargada contó físicamente al cerrar">
                     <div className="text-2xs text-ink-500 uppercase">Contado</div>
-                    <MoneyAmount value={s.existenciaFinal} className="text-teresita-700" />
+                    <MoneyAmount value={s.existenciaFinal} fit className="text-teresita-700" />
                   </div>
-                  <div title="Contado − Esperado">
+                  <div className="min-w-0" title="Contado − Esperado">
                     <div className="text-2xs text-ink-500 uppercase">Diferencia</div>
                     <MoneyAmount
                       value={s.diferencia}
+                      fit
                       className={cn(
                         Math.abs(dif) < 0.01 && 'text-basil-600',
                         dif < 0 && 'text-pomodoro-600 font-semibold',

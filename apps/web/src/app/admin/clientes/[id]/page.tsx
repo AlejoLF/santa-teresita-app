@@ -143,17 +143,17 @@ export default function ClienteDetallePage({
 
       {/* Stats */}
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Total comprado</div>
-          <MoneyAmount value={data.stats.totalComprado} hero className="text-md text-teresita-700" />
+          <MoneyAmount value={data.stats.totalComprado} hero fit className="text-md text-teresita-700" />
         </div>
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Ventas finalizadas</div>
           <span className="hero-number text-md text-ink-900">{data.stats.ventasFinalizadas}</span>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Ticket promedio</div>
-          <MoneyAmount value={data.stats.ticketPromedio} hero className="text-md text-ink-900" />
+          <MoneyAmount value={data.stats.ticketPromedio} hero fit className="text-md text-ink-900" />
         </div>
         <div className="card p-4">
           <div className="text-2xs text-ink-500 uppercase">Última venta</div>

@@ -1,4 +1,5 @@
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
+import { FitText } from '@/components/ui/FitText';
 import { cn } from '@/lib/cn';
 
 interface KpiCardProps {
@@ -28,19 +29,13 @@ export function KpiCard({
   return (
     <div className={cn('card p-5 flex flex-col gap-2 min-w-0', accentClass)}>
       <div className="text-xs text-ink-500 uppercase tracking-wide">{label}</div>
-      <div className="min-w-0 overflow-hidden">
-        {format === 'money' ? (
-          <MoneyAmount
-            value={value}
-            hero
-            className="text-lg text-teresita-900 tabular-nums whitespace-nowrap block"
-          />
-        ) : (
-          <span className="hero-number text-lg text-teresita-900 tabular-nums whitespace-nowrap block">
-            {value}
-          </span>
-        )}
-      </div>
+      {/* Auto-encoge en vez de recortar: antes el número se clippeaba (escondía
+          dígitos) en las grillas angostas (xl:grid-cols-5). Ahora siempre entra. */}
+      {format === 'money' ? (
+        <MoneyAmount value={value} hero fit className="text-lg text-teresita-900 tabular-nums" />
+      ) : (
+        <FitText className="hero-number text-lg text-teresita-900 tabular-nums">{value}</FitText>
+      )}
       {trend && (
         <div
           className={cn(

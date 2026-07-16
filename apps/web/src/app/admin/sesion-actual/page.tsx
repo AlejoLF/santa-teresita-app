@@ -276,7 +276,7 @@ export default function SesionActualPage() {
       </header>
 
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase tracking-wide">Ventas finalizadas</div>
           <div className="hero-number text-2xl text-ink-900">{data.ventasCount}</div>
           {data.ventasAbiertas > 0 && (
@@ -292,13 +292,13 @@ export default function SesionActualPage() {
             </div>
           )}
         </div>
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase tracking-wide">Cobrado total</div>
-          <MoneyAmount value={totalCobrado.toFixed(2)} hero className="text-2xl text-teresita-700" />
+          <MoneyAmount value={totalCobrado.toFixed(2)} hero fit className="text-2xl text-teresita-700" />
         </div>
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase tracking-wide">Egresos turno</div>
-          <MoneyAmount value={data.totalEgresos} hero className="text-2xl text-pomodoro-600" />
+          <MoneyAmount value={data.totalEgresos} hero fit className="text-2xl text-pomodoro-600" />
         </div>
       </section>
 

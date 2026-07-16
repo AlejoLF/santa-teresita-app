@@ -4,6 +4,7 @@ import { use, useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
+import { FitText } from '@/components/ui/FitText';
 import { cn } from '@/lib/cn';
 
 type Periodo = 'semana' | 'mes' | 'trimestre' | 'anio' | 'todo';
@@ -110,22 +111,18 @@ export default function ComprasProveedorPage({
       </nav>
 
       {/* KPIs */}
-      <section className="grid grid-cols-3 gap-4">
-        <div className="card p-4">
+      <section className="grid grid-cols-3 gap-2 sm:gap-4">
+        <div className="card p-3 sm:p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase tracking-wide">Total gastado</div>
-          <MoneyAmount
-            value={data.totalGastadoPeriodo}
-            hero
-            className="text-2xl text-teresita-700"
-          />
+          <MoneyAmount value={data.totalGastadoPeriodo} hero fit className="text-2xl text-teresita-700" />
         </div>
-        <div className="card p-4">
+        <div className="card p-3 sm:p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase tracking-wide">Insumos distintos</div>
-          <span className="hero-number text-2xl text-ink-900">{data.cantidadInsumos}</span>
+          <FitText className="hero-number text-2xl text-ink-900">{String(data.cantidadInsumos)}</FitText>
         </div>
-        <div className="card p-4">
+        <div className="card p-3 sm:p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase tracking-wide">Facturas</div>
-          <span className="hero-number text-2xl text-ink-900">{data.cantidadFacturas}</span>
+          <FitText className="hero-number text-2xl text-ink-900">{String(data.cantidadFacturas)}</FitText>
         </div>
       </section>
 

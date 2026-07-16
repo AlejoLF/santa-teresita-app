@@ -248,21 +248,22 @@ export default function MayoristaDetallePage({
 
       {/* KPIs cuenta corriente */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Saldo adeudado</div>
           <MoneyAmount
             value={data.saldo}
             hero
+            fit
             className={cn('text-lg', saldoNum > 0 ? 'text-pomodoro-600' : 'text-basil-600')}
           />
         </div>
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Total remitado</div>
-          <MoneyAmount value={data.totales.remitado} hero className="text-lg text-ink-900" />
+          <MoneyAmount value={data.totales.remitado} hero fit className="text-lg text-ink-900" />
         </div>
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Total cobrado</div>
-          <MoneyAmount value={data.totales.cobrado} hero className="text-lg text-basil-600" />
+          <MoneyAmount value={data.totales.cobrado} hero fit className="text-lg text-basil-600" />
         </div>
       </section>
 
