@@ -150,34 +150,38 @@ async function resolverRepartidor(args: {
 }
 
 /**
- * Devuelve la lista de destinos físicos donde tiene que imprimirse la
- * comanda de una venta, según las reglas operativas del local.
+ * Devuelve la lista de comanderas donde tiene que imprimirse la COMANDA de una
+ * venta, según la matriz configurable comandera × canal (config de impresoras).
  *
- * @param canal       Canal de la venta (MOSTRADOR / TELEFONO / WHATSAPP /
- *                    RAPPI / PEDIDOS_YA / MERCADO_LIBRE / DELIVERATE / WEB)
+ * Para cada comandera ACTIVA cuyo listado de `canales` incluye el canal de la
+ * venta, se imprime ahí. La COCINA además se limita a pedidos con cocción — es
+ * la impresora de la cocina, no tiene sentido mandarle un pedido frío (ej. una
+ * bolsa de pasta seca). El ticket del cliente en el mostrador es un flujo aparte
+ * (se imprime al finalizar) y no depende de esta matriz.
+ *
+ * Los defaults de la matriz replican el ruteo histórico (ver DEFAULT_CONFIG); la
+ * encargada puede cambiar qué canal sale en qué comandera desde Configuración.
+ *
+ * @param canal       Canal de la venta (MOSTRADOR / TELEFONO / RAPPI / ...)
  * @param tieneCocina true si al menos un item requiere preparación caliente
+ * @param config      Config de impresoras ya cargada (evita re-leerla en loops).
  */
-export function determinarDestinos(
+export async function determinarDestinos(
   canal: string,
   tieneCocina: boolean,
-): DestinoImpresion[] {
-  // Apps externas: solo cocina (la cocinera prepara y deja listo para que
-  // el motoquero de la app retire). DELIVERATE va acá también — empresa de
-  // delivery contratada que retira el pedido del local.
-  if (canal === 'RAPPI' || canal === 'PEDIDOS_YA' || canal === 'MERCADO_LIBRE' || canal === 'DELIVERATE') {
-    return ['COCINA'];
+  config?: Record<DestinoImpresion, PrinterDestinoConfig>,
+): Promise<DestinoImpresion[]> {
+  const cfg = config ?? (await getConfigImpresion());
+  const destinos: DestinoImpresion[] = [];
+  for (const destino of ['MOSTRADOR', 'DELIVERY', 'COCINA'] as DestinoImpresion[]) {
+    const c = cfg[destino];
+    if (!c.activa) continue;
+    if (!c.canales.includes(canal)) continue;
+    // La cocina solo imprime lo que hay que cocinar.
+    if (destino === 'COCINA' && !tieneCocina) continue;
+    destinos.push(destino);
   }
-
-  // Delivery propio (motoquero del local — Damián): Comandera 2.
-  // + Cocina si tiene items que cocinan.
-  if (canal === 'TELEFONO' || canal === 'WHATSAPP' || canal === 'WEB') {
-    return tieneCocina ? ['DELIVERY', 'COCINA'] : ['DELIVERY'];
-  }
-
-  // Mostrador: solo va a cocina si hay items calientes. La cajera ve el
-  // pedido en pantalla, no necesita comanda en papel — el TICKET_CLIENTE
-  // se imprime aparte al finalizar (con precios, totales, header del comercio).
-  return tieneCocina ? ['COCINA'] : [];
+  return destinos;
 }
 
 interface EncolarArgs {
@@ -380,7 +384,7 @@ export async function encolarComandasParaVenta(
   if (!venta) return [];
 
   // Sólo COCINA en este path. DELIVERY se mueve al cierre/finalización.
-  const destinos = determinarDestinos(venta.canal, venta.tieneCocina).filter(
+  const destinos = (await determinarDestinos(venta.canal, venta.tieneCocina)).filter(
     (d) => d === 'COCINA',
   );
   if (destinos.length === 0) return [];
@@ -647,7 +651,7 @@ export async function encolarComandasCanceladas(
   });
   if (!venta) return [];
 
-  let destinos = determinarDestinos(venta.canal, venta.tieneCocina);
+  let destinos = await determinarDestinos(venta.canal, venta.tieneCocina);
   if (!venta.fechaFinalizacion) {
     // No finalizada → sólo imprimió la comanda de cocina (al enviar).
     destinos = destinos.filter((d) => d === 'COCINA');
@@ -802,7 +806,7 @@ export async function reimprimirVenta(
   });
   if (!venta) throw new Error('Venta no encontrada');
 
-  const originales = determinarDestinos(venta.canal, venta.tieneCocina);
+  const originales = await determinarDestinos(venta.canal, venta.tieneCocina);
   const incluirMostrador = venta.canal === 'MOSTRADOR';
   const todosDisponibles = [
     ...originales,
@@ -998,12 +1002,48 @@ export interface PrinterDestinoConfig {
   port: number;
   width: number;
   activa: boolean;
+  /**
+   * Canales cuyos pedidos imprimen su COMANDA en esta comandera. Configurable
+   * por el admin (matriz comandera × canal): la encargada elige DÓNDE y CUÁLES
+   * tickets salen. COCINA además se limita a pedidos con cocción (ver
+   * `determinarDestinos`). El ticket del cliente en el mostrador es un flujo
+   * aparte y no depende de esta lista.
+   */
+  canales: string[];
 }
 
+/** Los 8 canales de venta enrutables (mismo orden que el enum CanalVenta). */
+export const CANALES_ENRUTABLES = [
+  'MOSTRADOR',
+  'TELEFONO',
+  'WHATSAPP',
+  'WEB',
+  'RAPPI',
+  'PEDIDOS_YA',
+  'MERCADO_LIBRE',
+  'DELIVERATE',
+] as const;
+
+// Los `canales` por defecto replican el ruteo histórico (hardcodeado antes en
+// `determinarDestinos`): delivery propio → Comandera 2; todo lo que tiene
+// cocción → Comandera 3. El mostrador imprime el ticket del cliente por otro
+// camino, así que su comandera no recibe comandas por defecto (canales: []).
 const DEFAULT_CONFIG: Record<DestinoImpresion, PrinterDestinoConfig> = {
-  MOSTRADOR: { host: '192.168.1.50', port: 9100, width: 42, activa: true },
-  DELIVERY: { host: '192.168.1.51', port: 9100, width: 42, activa: true },
-  COCINA: { host: '192.168.1.52', port: 9100, width: 42, activa: true },
+  MOSTRADOR: { host: '192.168.1.50', port: 9100, width: 42, activa: true, canales: [] },
+  DELIVERY: {
+    host: '192.168.1.51',
+    port: 9100,
+    width: 42,
+    activa: true,
+    canales: ['TELEFONO', 'WHATSAPP', 'WEB'],
+  },
+  COCINA: {
+    host: '192.168.1.52',
+    port: 9100,
+    width: 42,
+    activa: true,
+    canales: [...CANALES_ENRUTABLES],
+  },
 };
 
 export async function getConfigImpresion(): Promise<

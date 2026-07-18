@@ -13,6 +13,7 @@ import { subtotalItem } from '@sta/shared';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
 import { recordAudit } from './audit.js';
 import { encolarComandaEncargo, esDestinoImpresion } from './impresion.js';
+import { agregarItemsAVenta } from './venta.js';
 
 /**
  * Crea un ENCARGO (pedido para un día futuro) reutilizando la tabla `ventas`.
@@ -250,6 +251,25 @@ export async function crearAdicionEncargo(args: {
   const destinoRaiz = esDestinoImpresion(root.destinoImpresionEncargo)
     ? root.destinoImpresionEncargo
     : 'MOSTRADOR';
+
+  // ── Encargo TODAVÍA NO cobrado: sumar al MISMO encargo ────────────────────
+  // Si la persona viene a retirar un encargo impago y suma productos, esos van
+  // al mismo pedido: el total a pagar se ACTUALIZA y un solo cobro cubre todo.
+  // (Antes se creaba una venta-adición aparte con su propia secuencia de pago,
+  // así que el cobro mostraba solo el total viejo — incidente del encargo #022.)
+  // La venta-adición separada solo se necesita cuando el encargo YA fue cobrado:
+  // ahí sí es un cobro nuevo (PAGO PARCIAL). El root es editable mientras esté
+  // PROCESADA (no FINALIZADA/ANULADA).
+  if (root.estado === EstadoVenta.PROCESADA && root.estadoCobroEncargo !== 'COBRADO') {
+    const actualizado = await agregarItemsAVenta({ ventaId: root.id, items, usuarioId });
+    // Si queda a pagar, re-imprimimos la comanda del encargo con el total nuevo.
+    // Si es 'cobrar', la comanda sale al finalizar el cobro (con el total ya
+    // fusionado). Sale por la comandera con la que se cargó el encargo.
+    if (accion === 'cargar') {
+      await encolarComandaEncargo(root.id, 'A_PAGAR', undefined, destinoRaiz);
+    }
+    return actualizado;
+  }
 
   const sesion = await getOrCreateSesionActual(usuarioId);
   const numeroOrden = await siguienteNumeroOrdenTurno(sesion.id);

@@ -12,9 +12,23 @@ interface ConfigImpresora {
   port: number;
   width: number;
   activa: boolean;
+  /** Canales cuyos pedidos imprimen su comanda en esta comandera. */
+  canales: string[];
 }
 
 type ConfigPrinters = Record<Destino, ConfigImpresora>;
+
+// Canales enrutables con etiqueta legible (mismo orden que el enum del backend).
+const CANALES: Array<{ valor: string; label: string; icono: string }> = [
+  { valor: 'MOSTRADOR', label: 'Mostrador', icono: '🏪' },
+  { valor: 'TELEFONO', label: 'Teléfono', icono: '📞' },
+  { valor: 'WHATSAPP', label: 'WhatsApp', icono: '💬' },
+  { valor: 'WEB', label: 'Web', icono: '🌐' },
+  { valor: 'RAPPI', label: 'Rappi', icono: '🛵' },
+  { valor: 'PEDIDOS_YA', label: 'Pedidos Ya', icono: '🛵' },
+  { valor: 'MERCADO_LIBRE', label: 'Mercado Libre', icono: '📦' },
+  { valor: 'DELIVERATE', label: 'Deliverate', icono: '🛵' },
+];
 
 interface JobsListado {
   jobs: Array<{
@@ -119,6 +133,15 @@ export default function ImpresorasConfigPage() {
     setEdit({ ...edit, [d]: { ...edit[d], ...patch } });
   }
 
+  function toggleCanal(d: Destino, canal: string) {
+    if (!edit) return;
+    const actuales = edit[d].canales ?? [];
+    const canales = actuales.includes(canal)
+      ? actuales.filter((c) => c !== canal)
+      : [...actuales, canal];
+    setField(d, { canales });
+  }
+
   async function guardar() {
     if (!edit) return;
     setGuardando(true);
@@ -181,28 +204,24 @@ export default function ImpresorasConfigPage() {
           📋 ¿Qué pedido va a qué comandera?
         </summary>
         <div className="mt-3 text-xs text-ink-700 space-y-1.5">
-          <p>El sistema enruta cada venta automáticamente a una o más comanderas:</p>
+          <p>
+            Cada comandera imprime la comanda de los <strong>tipos de pedido que marques</strong>{' '}
+            abajo en su recuadro (Mostrador, Teléfono, WhatsApp, Rappi, Pedidos Ya, Deliverate…).
+            Un mismo pedido puede salir en varias comanderas a la vez.
+          </p>
           <ul className="ml-4 space-y-1 list-none">
             <li>
-              <strong>Pedido Mostrador (sin cocina):</strong> sólo Comandera 1 (Mostrador)
+              <strong>Comandera 3 (Cocina):</strong> además del canal, solo recibe pedidos{' '}
+              <strong>con cocción</strong> (al menos un producto cuya subcategoría tiene marcado
+              "Cocina interviene", ej. Porciones calientes).
             </li>
             <li>
-              <strong>Pedido Mostrador (con cocina):</strong> Comandera 1 + Comandera 3
-            </li>
-            <li>
-              <strong>Delivery propio (Teléfono/WhatsApp), sin cocina:</strong> sólo Comandera 2
-            </li>
-            <li>
-              <strong>Delivery propio (Teléfono/WhatsApp), con cocina:</strong> Comandera 2 + Comandera 3
-            </li>
-            <li>
-              <strong>Apps (RAPPI / Pedidos YA / MELI / DELIVERATE):</strong> sólo Comandera 3
+              <strong>Comandera 1 (Mostrador):</strong> el ticket del cliente (con precios y total)
+              se imprime siempre acá al cobrar en el mostrador — eso es aparte de esta matriz.
             </li>
           </ul>
           <p className="text-2xs text-ink-500 italic mt-2">
-            "Con cocina" = la venta tiene al menos un producto cuya subcategoría tiene marcado
-            "Cocina interviene" (ej. Porciones calientes). Para configurar qué subcategorías
-            requieren cocina, usá Admin → Catálogo → Productos → Nueva subcategoría.
+            Los encargos usan la comandera que elegís al cargarlos, no esta matriz.
           </p>
         </div>
       </details>
@@ -352,6 +371,46 @@ export default function ImpresorasConfigPage() {
               >
                 🖨️ Imprimir test
               </Button>
+
+              {/* Ruteo por tipo de pedido: qué canales imprimen su comanda acá.
+                  La encargada elige DÓNDE y CUÁLES tickets salen. */}
+              <div className="pt-2 border-t border-cream-200">
+                <div className="text-2xs font-medium text-ink-700 mb-1.5">
+                  Imprime la comanda de:
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  {CANALES.map((canal) => {
+                    const marcado = (cfg.canales ?? []).includes(canal.valor);
+                    return (
+                      <label
+                        key={canal.valor}
+                        className={cn(
+                          'flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer text-2xs transition-colors',
+                          !cfg.activa && 'opacity-50 cursor-not-allowed',
+                          marcado
+                            ? 'bg-teresita-50 text-teresita-700'
+                            : 'text-ink-500 hover:bg-cream-100',
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={marcado}
+                          disabled={!cfg.activa}
+                          onChange={() => toggleCanal(d, canal.valor)}
+                          className="w-3.5 h-3.5 shrink-0"
+                        />
+                        <span aria-hidden>{canal.icono}</span>
+                        <span className="truncate">{canal.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {d === 'COCINA' && (
+                  <p className="text-2xs text-ink-400 mt-1.5 italic">
+                    La cocina solo recibe pedidos con cocción, sin importar el canal.
+                  </p>
+                )}
+              </div>
             </section>
           );
         })}

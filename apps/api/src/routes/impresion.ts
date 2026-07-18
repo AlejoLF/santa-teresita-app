@@ -3,7 +3,24 @@ import { z } from 'zod';
 import { prisma } from '@sta/db/client';
 import { EstadoTrabajoImpresion, RolUsuario } from '@sta/db';
 import { recordAudit } from '../services/audit.js';
-import { encolarTrabajoTest, getConfigImpresion, reimprimirVenta } from '../services/impresion.js';
+import {
+  CANALES_ENRUTABLES,
+  encolarTrabajoTest,
+  getConfigImpresion,
+  reimprimirVenta,
+} from '../services/impresion.js';
+
+/** Config de una comandera en el PUT /admin/impresion/config. */
+const destinoConfigSchema = z.object({
+  host: z.string().min(1).max(80),
+  port: z.coerce.number().int().min(1).max(65535).default(9100),
+  width: z.coerce.number().int().min(20).max(80).default(42),
+  activa: z.boolean().default(true),
+  // Canales cuyos pedidos imprimen su comanda en esta comandera (matriz
+  // comandera × canal). El front siempre lo manda; si faltara, getConfigImpresion
+  // cae al default histórico.
+  canales: z.array(z.enum(CANALES_ENRUTABLES)).optional(),
+});
 
 /**
  * Endpoints de la cola de impresión.
@@ -338,30 +355,9 @@ export default async function impresionRoutes(fastify: FastifyInstance) {
       preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
       schema: {
         body: z.object({
-          MOSTRADOR: z
-            .object({
-              host: z.string().min(1).max(80),
-              port: z.coerce.number().int().min(1).max(65535).default(9100),
-              width: z.coerce.number().int().min(20).max(80).default(42),
-              activa: z.boolean().default(true),
-            })
-            .optional(),
-          DELIVERY: z
-            .object({
-              host: z.string().min(1).max(80),
-              port: z.coerce.number().int().min(1).max(65535).default(9100),
-              width: z.coerce.number().int().min(20).max(80).default(42),
-              activa: z.boolean().default(true),
-            })
-            .optional(),
-          COCINA: z
-            .object({
-              host: z.string().min(1).max(80),
-              port: z.coerce.number().int().min(1).max(65535).default(9100),
-              width: z.coerce.number().int().min(20).max(80).default(42),
-              activa: z.boolean().default(true),
-            })
-            .optional(),
+          MOSTRADOR: destinoConfigSchema.optional(),
+          DELIVERY: destinoConfigSchema.optional(),
+          COCINA: destinoConfigSchema.optional(),
         }),
       },
     },

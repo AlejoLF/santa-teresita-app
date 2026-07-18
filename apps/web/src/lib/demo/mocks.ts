@@ -31,6 +31,8 @@ interface DemoState {
   movimientos: typeof movimientosSeed;
   rolActivo: 'VENDEDOR' | 'ADMIN';
   usuarioActivo: { id: string; nombre: string; rol: 'VENDEDOR' | 'ADMIN' };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  impresorasConfig?: Record<string, any>;
 }
 
 function defaultState(): DemoState {
@@ -1139,6 +1141,25 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
   if (p === '/auth/cambiar-pin' && method === 'POST') return ok({});
 
   // ─── Catálogo ──────────────────────────────────────────────────────
+  // Config de impresoras (demo): incluye la matriz de canales por comandera.
+  if (p === '/admin/impresion/config' && method === 'GET') {
+    return ok(
+      state.impresorasConfig ?? {
+        MOSTRADOR: { host: '192.168.1.50', port: 9100, width: 42, activa: true, canales: [] },
+        DELIVERY: { host: '192.168.1.51', port: 9100, width: 42, activa: true, canales: ['TELEFONO', 'WHATSAPP', 'WEB'] },
+        COCINA: { host: '192.168.1.52', port: 9100, width: 42, activa: true, canales: ['MOSTRADOR', 'TELEFONO', 'WHATSAPP', 'WEB', 'RAPPI', 'PEDIDOS_YA', 'MERCADO_LIBRE', 'DELIVERATE'] },
+      },
+    );
+  }
+  if (p === '/admin/impresion/config' && method === 'PUT') {
+    state.impresorasConfig = body as Record<string, unknown>;
+    saveState(state);
+    return ok({ ok: true });
+  }
+  if (p === '/admin/impresion/status' && method === 'GET') return ok({});
+  if (p.startsWith('/admin/impresion/jobs') && method === 'GET') return ok({ jobs: [], counts: {} });
+  if (p === '/admin/impresion/test' && method === 'POST') return ok({ ok: true });
+
   if (p === '/catalogo/categorias' && method === 'GET') return ok({ categorias });
   if (p === '/catalogo/productos' && method === 'GET') return ok({ productos: productosFull() });
   {

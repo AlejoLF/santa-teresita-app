@@ -249,7 +249,7 @@ function NuevoEncargoInner() {
     <div className="max-w-6xl mx-auto p-3 lg:p-5">
       <div className="mb-3 flex items-center justify-between">
         <h1 className="font-display text-lg text-wood-900">
-          {adicionDe ? '➕ Adición al encargo (se cobra aparte)' : 'Nuevo encargo'}
+          {adicionDe ? '➕ Agregar productos al encargo' : 'Nuevo encargo'}
         </h1>
         <button onClick={() => router.push('/encargos')} className="text-sm text-ink-500 hover:underline">
           ← Volver
@@ -377,8 +377,9 @@ function NuevoEncargoInner() {
             {adicionDe && (
               <p className="text-2xs text-ink-500">
                 Los productos se suman al encargo original (misma entrega y cliente). Si el
-                encargo ya estaba pagado, la comanda sale con <b>PAGO PARCIAL</b> hasta cobrar
-                esta adición.
+                encargo <b>todavía no se cobró</b>, se agregan al mismo total y se paga todo
+                junto. Si <b>ya estaba pagado</b>, la comanda sale con <b>PAGO PARCIAL</b> hasta
+                cobrar lo agregado.
               </p>
             )}
 
