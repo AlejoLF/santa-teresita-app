@@ -1037,6 +1037,15 @@ model Venta {
   @@index([esEncargo, fechaEntregaPromesa])
   @@index([encargoPadreId])
   @@index([esEncargo, retiradoAt])
+  // Idempotencia de órdenes de canal: un índice ÚNICO PARCIAL, scopeado al
+  // usuario de sistema "Canales", garantiza que el puente automático
+  // (/channel/orders) cree UNA sola venta por (canal, idExternoCanal) aunque el
+  // webhook se reenvíe. NO se modela como @@unique acá porque Prisma no expresa
+  // índices parciales — se crea por SQL crudo en la migración
+  // 20260718120000_venta_canal_idempotencia. OJO: idExternoCanal es texto libre
+  // que la encargada tipea a mano en la carga MANUAL de pedidos de plataforma y
+  // NO es único (cargar→anular→recargar repite el número) → por eso el índice
+  // solo cubre las filas del bot. Ver services/venta-canal.ts.
   @@map("ventas")
 }
 

@@ -36,6 +36,7 @@ import mayoristasRoutes from './routes/mayoristas.js';
 import listasRoutes from './routes/listas.js';
 import impresionRoutes from './routes/impresion.js';
 import ingestRoutes from './routes/ingest.js';
+import channelRoutes from './routes/channel.js';
 import { invalidate as cacheInvalidate } from './lib/cache.js';
 
 const isProd = config.NODE_ENV === 'production';
@@ -207,6 +208,7 @@ export async function buildServer() {
       await api.register(listasRoutes);
       await api.register(impresionRoutes);
       await api.register(ingestRoutes);
+      await api.register(channelRoutes);
     },
     { prefix: '/api/v1' },
   );

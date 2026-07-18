@@ -89,10 +89,28 @@ async function seedUsuarios() {
     update: {},
   });
 
+  // Usuario de sistema para las órdenes de canal (RAPPI/PYA/MELI). Las ventas
+  // que entran por el endpoint /channel/orders se atribuyen a este usuario
+  // (crearVenta exige usuarioId para la sesión de caja + el audit). NO es un
+  // login humano: su PIN es un hash de un string largo NO numérico, así que
+  // ningún PIN de 4 dígitos puede autenticarse como él. Ver USUARIO_CANALES_ID
+  // en services/venta-canal.ts.
+  const canales = await prisma.usuario.upsert({
+    where: { id: '00000000-0000-0000-0000-000000000009' },
+    create: {
+      id: '00000000-0000-0000-0000-000000000009',
+      nombre: 'Canales (RAPPI / PedidosYa / MELI)',
+      rol: RolUsuario.VENDEDOR,
+      pinHash: await hashPin('canal-sistema-no-login-' + '0'.repeat(16)),
+    },
+    update: {},
+  });
+
   console.log(`  ✓ Vendedor (PIN ${PIN_VENDEDOR_DEFAULT})`);
   console.log(`  ✓ Encargada (PIN ${PIN_ENCARGADA_DEFAULT})`);
   console.log(`  ✓ Julio (PIN ${PIN_JULIO_DEFAULT})`);
-  return { vendedor, encargada, julio };
+  console.log(`  ✓ Canales (usuario de sistema, sin login)`);
+  return { vendedor, encargada, julio, canales };
 }
 
 // ────────────────────────────────────────────────────────────────────────

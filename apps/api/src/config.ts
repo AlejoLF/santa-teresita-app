@@ -60,6 +60,11 @@ const ConfigSchema = z.object({
   //   facturas OCR (n8n local en el server → POST /api/v1/ingest/facturas).
   //   Si falta, el endpoint responde 503 (deshabilitado). NO es el AUTH_SECRET.
   INGEST_API_TOKEN: z.string().min(24).optional(),
+  // CHANNEL_INGEST_TOKEN: Bearer token de máquina para la ingesta de ÓRDENES de
+  //   canal (integradores RAPPI/PYA/MELI → POST /api/v1/channel/orders). Crea la
+  //   venta en el POS (canal de plataforma). Token distinto del de facturas →
+  //   blast radius separado. Si falta, el endpoint responde 503 (deshabilitado).
+  CHANNEL_INGEST_TOKEN: z.string().min(24).optional(),
 });
 
 const parsed = ConfigSchema.safeParse(process.env);
