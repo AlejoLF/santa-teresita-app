@@ -164,14 +164,19 @@ async function resolverRepartidor(args: {
  *
  * @param canal       Canal de la venta (MOSTRADOR / TELEFONO / RAPPI / ...)
  * @param tieneCocina true si al menos un item requiere preparación caliente
- * @param config      Config de impresoras ya cargada (evita re-leerla en loops).
+ * @param client      Cliente Prisma. CRÍTICO: cuando se llama DENTRO de una
+ *   transacción (finalizar venta), hay que pasar `tx`. Contra el pooler de
+ *   Supabase con `connection_limit=1`, leer la config con el prisma GLOBAL
+ *   mientras la transacción retiene la única conexión deadlockea → 500. Usar
+ *   el mismo cliente reusa la conexión de la transacción. (Incidente: cobros
+ *   rotos en alpha.52 — encargos OK porque no pasan por acá.)
  */
 export async function determinarDestinos(
   canal: string,
   tieneCocina: boolean,
-  config?: Record<DestinoImpresion, PrinterDestinoConfig>,
+  client: DbClient = prisma,
 ): Promise<DestinoImpresion[]> {
-  const cfg = config ?? (await getConfigImpresion());
+  const cfg = await getConfigImpresion(client);
   const destinos: DestinoImpresion[] = [];
   for (const destino of ['MOSTRADOR', 'DELIVERY', 'COCINA'] as DestinoImpresion[]) {
     const c = cfg[destino];
@@ -384,7 +389,8 @@ export async function encolarComandasParaVenta(
   if (!venta) return [];
 
   // Sólo COCINA en este path. DELIVERY se mueve al cierre/finalización.
-  const destinos = (await determinarDestinos(venta.canal, venta.tieneCocina)).filter(
+  // `tx`: leer la config con el cliente de la transacción (connection_limit=1).
+  const destinos = (await determinarDestinos(venta.canal, venta.tieneCocina, tx)).filter(
     (d) => d === 'COCINA',
   );
   if (destinos.length === 0) return [];
@@ -651,7 +657,8 @@ export async function encolarComandasCanceladas(
   });
   if (!venta) return [];
 
-  let destinos = await determinarDestinos(venta.canal, venta.tieneCocina);
+  // `tx`: mismo cliente de la transacción (connection_limit=1 en el pooler).
+  let destinos = await determinarDestinos(venta.canal, venta.tieneCocina, tx);
   if (!venta.fechaFinalizacion) {
     // No finalizada → sólo imprimió la comanda de cocina (al enviar).
     destinos = destinos.filter((d) => d === 'COCINA');
@@ -1046,10 +1053,10 @@ const DEFAULT_CONFIG: Record<DestinoImpresion, PrinterDestinoConfig> = {
   },
 };
 
-export async function getConfigImpresion(): Promise<
-  Record<DestinoImpresion, PrinterDestinoConfig>
-> {
-  const rows = await prisma.configuracionSistema.findMany({
+export async function getConfigImpresion(
+  client: DbClient = prisma,
+): Promise<Record<DestinoImpresion, PrinterDestinoConfig>> {
+  const rows = await client.configuracionSistema.findMany({
     where: { categoria: 'impresoras' },
   });
   const byClave = new Map(rows.map((r) => [r.clave, r.valor]));
