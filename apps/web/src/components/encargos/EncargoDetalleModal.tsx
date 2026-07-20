@@ -123,8 +123,16 @@ export function EncargoDetalleModal({
   const adicionPendiente = adiciones.find((a) => a.estadoCobroEncargo === 'A_PAGAR');
   // Editable: cualquier encargo no anulado (los COBRADOS también — el cliente
   // cambia dirección/horario después de pagar; el server re-imprime la comanda).
-  const editable = v?.estado !== 'ANULADA';
-  const puedeAnular = v?.estado === 'PROCESADA' && v?.estadoCobroEncargo === 'A_PAGAR' && adiciones.length === 0;
+  // Encargo con día de entrega YA PASADO: read-only. Modificarlo tocaría cajas
+  // ya cerradas → la ÚNICA acción permitida es re-imprimir (sale como COPIA).
+  const esPasado =
+    !!v?.fechaEntregaPromesa && v.fechaEntregaPromesa.slice(0, 10) < hoyISO();
+  const editable = v?.estado !== 'ANULADA' && !esPasado;
+  const puedeAnular =
+    v?.estado === 'PROCESADA' &&
+    v?.estadoCobroEncargo === 'A_PAGAR' &&
+    adiciones.length === 0 &&
+    !esPasado;
   const [reimprimiendo, setReimprimiendo] = useState(false);
   // Al tocar "Re-imprimir" se abre el selector de comandera (Mostrador /
   // Delivery / Cocina) y recién al elegir una se manda a imprimir.
@@ -424,6 +432,11 @@ export function EncargoDetalleModal({
                 ✓ Comanda enviada a {reimprimioOk}
               </span>
             )}
+            {esPasado && !reimprimioOk && (
+              <span className="text-2xs text-wood-700 self-center mr-auto">
+                📅 Encargo ya entregado — solo re-impresión (sale como copia)
+              </span>
+            )}
             {pickerImpresion ? (
               <span className="flex items-center gap-1.5 flex-wrap">
                 <span className="text-2xs text-ink-500 mr-0.5">Imprimir en:</span>
@@ -456,24 +469,27 @@ export function EncargoDetalleModal({
               </button>
             )}
             {/* Retiro: disponible pagado o impago (son cosas distintas). El
-                footer ya no se renderiza para encargos anulados. */}
-            <button
-              onClick={() => void toggleRetirado()}
-              disabled={marcandoRetiro}
-              className={cn(
-                'px-3 py-2 text-sm rounded-md font-medium transition-colors disabled:opacity-50',
-                v.retiradoAt
-                  ? 'border border-cream-300 text-ink-700 hover:bg-cream-200'
-                  : 'bg-basil-600 text-white hover:bg-basil-600/85',
-              )}
-              title={
-                v.retiradoAt
-                  ? 'Desmarcar el retiro (volver a pendiente)'
-                  : 'El cliente ya se llevó el encargo'
-              }
-            >
-              {marcandoRetiro ? '…' : v.retiradoAt ? '↩️ Sin retirar' : '✅ Marcar retirado'}
-            </button>
+                footer ya no se renderiza para encargos anulados. Para encargos
+                pasados NO se muestra (read-only, solo re-impresión). */}
+            {!esPasado && (
+              <button
+                onClick={() => void toggleRetirado()}
+                disabled={marcandoRetiro}
+                className={cn(
+                  'px-3 py-2 text-sm rounded-md font-medium transition-colors disabled:opacity-50',
+                  v.retiradoAt
+                    ? 'border border-cream-300 text-ink-700 hover:bg-cream-200'
+                    : 'bg-basil-600 text-white hover:bg-basil-600/85',
+                )}
+                title={
+                  v.retiradoAt
+                    ? 'Desmarcar el retiro (volver a pendiente)'
+                    : 'El cliente ya se llevó el encargo'
+                }
+              >
+                {marcandoRetiro ? '…' : v.retiradoAt ? '↩️ Sin retirar' : '✅ Marcar retirado'}
+              </button>
+            )}
             {editable && (
               <>
                 <button
@@ -500,7 +516,7 @@ export function EncargoDetalleModal({
                 Anular
               </button>
             )}
-            {v.estadoCobroEncargo === 'A_PAGAR' && v.estado === 'PROCESADA' && (
+            {!esPasado && v.estadoCobroEncargo === 'A_PAGAR' && v.estado === 'PROCESADA' && (
               <button
                 onClick={() => router.push(`/venta/${v.id}?cobrar=1`)}
                 className="px-4 py-2 text-sm rounded-md bg-wood-700 text-wood-50 font-medium hover:bg-wood-900 transition-colors"
@@ -508,7 +524,7 @@ export function EncargoDetalleModal({
                 💵 Cobrar
               </button>
             )}
-            {v.estadoCobroEncargo === 'COBRADO' && adicionPendiente && (
+            {!esPasado && v.estadoCobroEncargo === 'COBRADO' && adicionPendiente && (
               <button
                 onClick={() => router.push(`/venta/${adicionPendiente.id}?cobrar=1`)}
                 className="px-4 py-2 text-sm rounded-md bg-wood-700 text-wood-50 font-medium hover:bg-wood-900 transition-colors"

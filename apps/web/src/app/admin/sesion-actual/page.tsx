@@ -484,9 +484,30 @@ function ModalCerrarSesion({
   const [observaciones, setObservaciones] = useState('');
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Resumen de cierre de ESTA sesión (esperado + desglose). Para cajas viejas
+  // "colgadas" el padre no lo conoce (pasa esperada=null), así que lo pedimos
+  // por sesionId → el modal muestra la MISMA info que un cierre normal.
+  const [resumen, setResumen] = useState<SesionData | null>(null);
+  useEffect(() => {
+    let vivo = true;
+    api
+      .get<SesionData>(`/admin/caja/sesion-actual?sesionId=${sesionId}`)
+      .then((r) => {
+        if (vivo) setResumen(r);
+      })
+      .catch(() => {
+        /* si falla, el server igual calcula el esperado al cerrar */
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [sesionId]);
 
+  // Esperado efectivo: el del resumen recién pedido gana; si aún no cargó, el
+  // que pasó el padre (cierre normal). Puede ser null (vieja, sin cargar aún).
+  const esperadaEfectiva = resumen?.recaudacionEsperadaEfectivo ?? esperada;
   const diferencia =
-    contado && esperada != null ? Number(contado) - Number(esperada) : null;
+    contado && esperadaEfectiva != null ? Number(contado) - Number(esperadaEfectiva) : null;
   const esAnticipado = modo === 'anticipado';
 
   async function submit() {
@@ -511,7 +532,7 @@ function ModalCerrarSesion({
 
   return (
     <div className="fixed inset-0 bg-ink-900/50 flex items-center justify-center z-40 p-4">
-      <div className="card w-full max-w-md p-5 shadow-modal">
+      <div className="card w-full max-w-md p-5 shadow-modal max-h-[88vh] overflow-y-auto">
         <h2 className="font-display text-lg text-teresita-700 mb-3">
           {esAnticipado ? '⏱ Cierre anticipado de turno' : 'Contar caja física'}
           {tituloExtra && (
@@ -528,16 +549,58 @@ function ModalCerrarSesion({
           </div>
         )}
         <p className="text-sm text-ink-500 mb-4">
-          {esperada != null ? (
+          {esperadaEfectiva != null ? (
             <>
               El sistema espera{' '}
-              <MoneyAmount value={esperada} className="font-medium text-ink-900" /> en efectivo.
-              Contá lo que hay en la caja y cargalo abajo.
+              <MoneyAmount value={esperadaEfectiva} className="font-medium text-ink-900" /> en
+              efectivo. Contá lo que hay en la caja y cargalo abajo.
             </>
           ) : (
             <>Contá lo que hay en la caja y cargalo abajo. El sistema calcula la diferencia al cerrar.</>
           )}
         </p>
+
+        {/* Desglose completo del cierre — la MISMA info que el cierre normal,
+            también para las cajas viejas colgadas (fix: antes no se veía el
+            esperado ni el desglose al cerrar una caja de un turno anterior). */}
+        {resumen?.sesion && (
+          <div className="mb-4 p-3 rounded bg-surface-sunken text-sm font-mono space-y-1">
+            <div className="flex justify-between">
+              <span className="text-ink-500">Existencia inicial</span>
+              <MoneyAmount value={resumen.sesion.existenciaInicial} />
+            </div>
+            <div className="flex justify-between">
+              <span className="text-ink-500">+ Cobros en efectivo</span>
+              <MoneyAmount value={resumen.totalEfectivo} />
+            </div>
+            <div className="flex justify-between">
+              <span className="text-ink-500">− Egresos del turno</span>
+              <MoneyAmount value={resumen.totalEgresos} className="text-pomodoro-600" />
+            </div>
+            <div className="flex justify-between border-t border-cream-300 pt-1 font-semibold">
+              <span>Total esperado</span>
+              <MoneyAmount value={resumen.recaudacionEsperadaEfectivo} className="text-teresita-700" />
+            </div>
+            <div className="pt-1 text-xs text-ink-500 font-sans">
+              {resumen.ventasCount} venta{resumen.ventasCount !== 1 ? 's' : ''} finalizada
+              {resumen.ventasCount !== 1 ? 's' : ''}
+              {resumen.movimientos.length > 0 &&
+                ` · ${resumen.movimientos.length} movimiento${resumen.movimientos.length !== 1 ? 's' : ''}`}
+            </div>
+            {resumen.cobrosPorMetodo.length > 0 && (
+              <div className="pt-2 border-t border-cream-300 space-y-0.5">
+                {resumen.cobrosPorMetodo.map((c) => (
+                  <div key={c.metodo} className="flex justify-between text-xs">
+                    <span className="text-ink-500 font-sans">
+                      {METODO_LABEL[c.metodo] ?? c.metodo} ({c.cantidad})
+                    </span>
+                    <MoneyAmount value={c.monto} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="space-y-3">
           <div>

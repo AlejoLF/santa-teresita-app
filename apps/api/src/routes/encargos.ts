@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { EncargoNuevoSchema, EncargoEditarSchema, ItemNuevoSchema } from '@sta/shared/schemas';
-import { crearEncargo, crearAdicionEncargo, listarEncargos } from '../services/encargo.js';
+import { crearEncargo, crearAdicionEncargo, listarEncargos, buscarEncargos } from '../services/encargo.js';
 import { getVentaCompleta } from '../services/venta.js';
 import { FueraDeHorarioError } from '../services/sesion-caja.js';
 import { recordAudit } from '../services/audit.js';
@@ -86,6 +86,27 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
       const desde = q.desde ?? hoyAR();
       const hasta = q.hasta ?? desde;
       const encargos = await listarEncargos({ desde, hasta });
+      return { encargos };
+    },
+  );
+
+  // GET /encargos/buscar?q=...&entrega=todos|entregados|pendientes — buscador
+  // AMPLIO sobre TODOS los encargos (futuros y pasados): nombre, teléfono, día
+  // de entrega, total exacto, nº de pedido/orden.
+  fastify.get(
+    '/encargos/buscar',
+    {
+      preHandler: fastify.requireAuth(),
+      schema: {
+        querystring: z.object({
+          q: z.string().min(1).max(80),
+          entrega: z.enum(['todos', 'entregados', 'pendientes']).optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const q = req.query as { q: string; entrega?: 'todos' | 'entregados' | 'pendientes' };
+      const encargos = await buscarEncargos({ q: q.q, entrega: q.entrega });
       return { encargos };
     },
   );
@@ -326,7 +347,13 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
       const params = req.params as { id: string };
       const venta = await prisma.venta.findUnique({
         where: { id: params.id },
-        select: { id: true, esEncargo: true, estado: true, destinoImpresionEncargo: true },
+        select: {
+          id: true,
+          esEncargo: true,
+          estado: true,
+          destinoImpresionEncargo: true,
+          fechaEntregaPromesa: true,
+        },
       });
       if (!venta || !venta.esEncargo) {
         return reply.code(404).send({ error: 'Encargo no encontrado' });
@@ -340,15 +367,22 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
         (esDestinoImpresion(venta.destinoImpresionEncargo)
           ? venta.destinoImpresionEncargo
           : 'MOSTRADOR');
-      await encolarComandaEncargo(venta.id, 'A_PAGAR', undefined, destino);
+      // Encargo con día de entrega YA PASADO: la única acción permitida es
+      // re-imprimir, y el ticket sale marcado como COPIA (no se puede modificar
+      // — tocaría la lógica de cajas ya cerradas). El rótulo lo agrega el
+      // renderer cuando `copia=true`.
+      const esPasado =
+        !!venta.fechaEntregaPromesa &&
+        venta.fechaEntregaPromesa.toISOString().slice(0, 10) < hoyAR();
+      await encolarComandaEncargo(venta.id, 'A_PAGAR', undefined, destino, esPasado);
       await recordAudit({
         tabla: 'ventas',
         registroId: venta.id,
         accion: 'REIMPRESION',
         usuarioId: req.usuario!.id,
-        valorNuevo: { comandaEncargo: true, destino },
+        valorNuevo: { comandaEncargo: true, destino, copia: esPasado },
       });
-      return { ok: true, destino };
+      return { ok: true, destino, copia: esPasado };
     },
   );
 }

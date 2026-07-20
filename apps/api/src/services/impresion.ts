@@ -280,6 +280,7 @@ export async function buildComandaPayload(
         include: { combo: true, ...INCLUDE_FICHA_PRODUCTO },
       },
       deliveryInfo: true,
+      pagos: true,
     },
   });
   if (!venta) throw new Error(`Venta ${ventaId} no encontrada`);
@@ -309,6 +310,22 @@ export async function buildComandaPayload(
       repartidor,
     };
   }
+
+  // Estado de pago — SIEMPRE en la comanda de cocina (mismo criterio que el
+  // ticket delivery): si hay pagos confirmados → PAGADO con el/los método(s);
+  // si no → A_COBRAR. La cocina/encargada ve de un vistazo si el pedido ya está
+  // cobrado o va a cobrar.
+  const pagosConfirmados = venta.pagos.filter((p) => p.estado === 'CONFIRMADO');
+  const pago =
+    pagosConfirmados.length > 0
+      ? {
+          estado: 'PAGADO' as const,
+          metodo:
+            pagosConfirmados.length === 1
+              ? pagosConfirmados[0]!.metodo
+              : pagosConfirmados.map((p) => p.metodo).join(' + '),
+        }
+      : { estado: 'A_COBRAR' as const };
 
   return {
     // numeroOrdenTurno = el "Pedido #017" grande arriba (correlativo del turno).
@@ -872,6 +889,9 @@ export async function encolarComandaEncargo(
   // Comandera destino. Default MOSTRADOR (decisión original del dueño para la
   // impresión automática); la RE-impresión deja elegir cualquiera.
   destino: DestinoImpresion = 'MOSTRADOR',
+  // COPIA de un encargo con día de entrega ya pasado: el ticket sale rotulado
+  // "COPIA · PEDIDO YA ENTREGADO" (única acción permitida sobre encargos viejos).
+  copia = false,
 ): Promise<void> {
   const client: DbClient = tx ?? prisma;
   // Resolver la RAÍZ: si ventaId es una adición ("modificación adicional"), la
@@ -974,6 +994,7 @@ export async function encolarComandaEncargo(
     // carga) — antes NO viajaban en el payload y no salían impresas.
     observaciones: venta.observaciones ?? undefined,
     pcOrigen: venta.pcOrigen,
+    copia,
   };
 
   await encolarTrabajo({

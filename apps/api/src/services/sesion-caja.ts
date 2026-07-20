@@ -109,20 +109,20 @@ export async function getSesionActualReadOnly(): Promise<{
   const config = await getConfigHorarios();
   const resolucion = resolverSlotActivo(config, ahora);
 
-  if (resolucion.tipo === 'CERRADO') {
-    // Devolver la última sesión abierta (de cualquier slot) para que el admin
-    // pueda cerrarla aunque el grace haya pasado.
-    const sesion = await prisma.sesionCaja.findFirst({
-      where: { estado: EstadoSesionCaja.ABIERTA },
-      orderBy: { horarioApertura: 'desc' },
-    });
-    return { sesion, resolucion };
-  }
-
-  const { fechaSesion, turno } = resolucion.slot;
-  const sesion = await prisma.sesionCaja.findFirst({
-    where: { fecha: fechaSesion, turno },
+  // "Sesión actual" = la sesión ABIERTA en curso (si hay una corriendo, gana
+  // sobre todo). Si NO hay ninguna abierta (turno ya cerrado / fuera de
+  // horario), la ÚLTIMA sesión —la recién cerrada— pasa a ser la "actual".
+  // Criterio ÚNICO para Dashboard y Ventas: antes, en la rama CERRADO esto
+  // devolvía la última ABIERTA o null, y el Dashboard (sin fallback) terminaba
+  // mostrando "todo el día" mientras Ventas mostraba la última sesión → los
+  // números no coincidían. Ahora ambos parten de la misma sesión.
+  const abierta = await prisma.sesionCaja.findFirst({
+    where: { estado: EstadoSesionCaja.ABIERTA },
+    orderBy: { horarioApertura: 'desc' },
   });
+  const sesion =
+    abierta ??
+    (await prisma.sesionCaja.findFirst({ orderBy: { horarioApertura: 'desc' } }));
   return { sesion, resolucion };
 }
 

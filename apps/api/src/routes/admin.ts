@@ -212,25 +212,34 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       let rangoDesde: Date = inicioHoy;
       let rangoHasta: Date = ahora;
       let rangoLabel = 'Hoy';
+      // Filtro por SESIÓN: cuando el período es una sesión, los KPIs de
+      // ventas/pagos/movimientos se cuentan por `sesionCajaId` (la fuente de
+      // verdad del turno) — IGUAL que la pantalla de Ventas y que Movimientos.
+      // Antes el Dashboard contaba por ventana de fechas [apertura, cierre] y
+      // los números NO coincidían con Ventas (misma sesión, poblaciones
+      // distintas: ventas abiertas en el turno pero finalizadas fuera de la
+      // ventana, etc.). El resolver de sesión ya está unificado (abierta en
+      // curso, o la última cerrada si no hay abierta).
+      let sesionFiltroId: string | null = null;
       if (q.periodo === 'sesion_actual') {
         const { sesion } = await getSesionActualReadOnly();
         if (sesion) {
+          sesionFiltroId = sesion.id;
           rangoDesde = sesion.horarioApertura;
-          rangoHasta = ahora;
+          rangoHasta = sesion.horarioCierre ?? ahora;
           rangoLabel = 'Sesión actual';
         } else {
-          rangoLabel = 'Hoy (sin sesión abierta)';
+          rangoLabel = 'Hoy (sin sesión)';
         }
       } else if (q.periodo === 'sesion_anterior') {
-        // Ventana [apertura, cierre] de la sesión inmediatamente previa a la
-        // actual — mismo criterio de ventana-por-fechas que sesion_actual.
         const { sesion } = await getSesionAnteriorReadOnly();
         if (sesion) {
+          sesionFiltroId = sesion.id;
           rangoDesde = sesion.horarioApertura;
           rangoHasta = sesion.horarioCierre ?? ahora;
           rangoLabel = 'Sesión anterior';
         } else {
-          rangoLabel = 'Hoy (sin sesión anterior)';
+          rangoLabel = 'Sin sesión anterior';
         }
       } else if (q.periodo === 'semana') {
         rangoDesde = new Date(inicioHoy);
@@ -267,7 +276,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           _count: { _all: true },
           where: {
             estado: EstadoVenta.FINALIZADA,
-            fechaFinalizacion: { gte: rangoDesde, lte: rangoHasta },
+            ...(sesionFiltroId
+              ? { sesionCajaId: sesionFiltroId }
+              : { fechaFinalizacion: { gte: rangoDesde, lte: rangoHasta } }),
           },
         }),
         prisma.venta.aggregate({
@@ -286,7 +297,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             estado: 'CONFIRMADO',
             venta: {
               estado: EstadoVenta.FINALIZADA,
-              fechaFinalizacion: { gte: rangoDesde, lte: rangoHasta },
+              ...(sesionFiltroId
+                ? { sesionCajaId: sesionFiltroId }
+                : { fechaFinalizacion: { gte: rangoDesde, lte: rangoHasta } }),
             },
           },
           select: {
@@ -302,7 +315,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           where: {
             tipo: 'INGRESO',
             estado: EstadoMovimiento.CONFIRMADO,
-            fechaComputo: { gte: rangoDesde, lte: rangoHasta },
+            ...(sesionFiltroId
+              ? { sesionCajaId: sesionFiltroId }
+              : { fechaComputo: { gte: rangoDesde, lte: rangoHasta } }),
           },
         }),
         prisma.movimiento.groupBy({
@@ -312,7 +327,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           where: {
             tipo: 'EGRESO',
             estado: EstadoMovimiento.CONFIRMADO,
-            fechaComputo: { gte: rangoDesde, lte: rangoHasta },
+            ...(sesionFiltroId
+              ? { sesionCajaId: sesionFiltroId }
+              : { fechaComputo: { gte: rangoDesde, lte: rangoHasta } }),
           },
         }),
         prisma.venta.groupBy({
@@ -321,7 +338,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           _count: { _all: true },
           where: {
             estado: EstadoVenta.FINALIZADA,
-            fechaFinalizacion: { gte: rangoDesde, lte: rangoHasta },
+            ...(sesionFiltroId
+              ? { sesionCajaId: sesionFiltroId }
+              : { fechaFinalizacion: { gte: rangoDesde, lte: rangoHasta } }),
           },
         }),
         prisma.liquidacionPendiente.groupBy({
@@ -1757,20 +1776,30 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   // GET /admin/caja/sesion-actual — datos de la sesión activa con resumen.
   fastify.get(
     '/admin/caja/sesion-actual',
-    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
-    async () => {
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { querystring: z.object({ sesionId: z.string().uuid().optional() }) },
+    },
+    async (req) => {
+      const { sesionId } = req.query as { sesionId?: string };
       // Resolver el slot vigente según la config de horarios (ver
       // services/horarios.ts). Si estamos fuera de horario, devuelve la
       // última sesión ABIERTA (cualquier slot) para que la encargada la
       // pueda cerrar incluso si el grace ya pasó.
-      const { sesion: sesionResolved, resolucion } = await getSesionActualReadOnly();
+      const { sesion: sesionActual, resolucion } = await getSesionActualReadOnly();
 
-      if (!sesionResolved) {
+      // Si viene `sesionId` (cierre de una caja VIEJA "colgada" desde
+      // /admin/cierres), el resumen se computa para ESA sesión — así muestra el
+      // total ESPERADO + el desglose completo de esa caja, igual que un cierre
+      // normal. Sin sesionId → la sesión actual. Todo el cálculo de abajo ya
+      // filtra por `sesion.id`, así que funciona para cualquier sesión.
+      const sesionResolvedId = sesionId ?? sesionActual?.id ?? null;
+      if (!sesionResolvedId) {
         return { sesion: null, resolucion };
       }
 
       const sesion = await prisma.sesionCaja.findUnique({
-        where: { id: sesionResolved.id },
+        where: { id: sesionResolvedId },
         include: {
           usuarioApertura: { select: { nombre: true } },
           usuarioCierre: { select: { nombre: true } },

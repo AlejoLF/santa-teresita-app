@@ -190,6 +190,12 @@ export interface ComandaPayload {
     /** Quién entrega el pedido: "Damián", "DELIVERATE", "PEDIDOS YA", etc. */
     repartidor?: string;
   };
+  /**
+   * Estado de pago del pedido — SIEMPRE en la comanda de cocina, debajo del
+   * repartidor. La cocina/encargada ve de un vistazo si el pedido ya está
+   * cobrado (`PAGADO: <método>`) o va a cobrar (`A COBRAR`).
+   */
+  pago?: { estado: 'PAGADO' | 'A_COBRAR'; metodo?: string };
 }
 
 /**
@@ -339,6 +345,21 @@ export async function imprimirComanda(
       printer.println(`Repartidor: ${limpiar(d.repartidor)}`);
       printer.bold(false);
     }
+    printer.newLine();
+  }
+
+  // Estado de pago — SIEMPRE (para delivery queda justo debajo del repartidor;
+  // para mostrador/take-away sale igual). La cocina ve si está cobrado o no.
+  if (payload.pago) {
+    printer.bold(true);
+    printer.setTextDoubleHeight();
+    if (payload.pago.estado === 'PAGADO') {
+      printer.println(`PAGADO: ${limpiar(payload.pago.metodo ?? '')}`);
+    } else {
+      printer.println('>> A COBRAR');
+    }
+    printer.setTextNormal();
+    printer.bold(false);
     printer.newLine();
   }
 
@@ -767,6 +788,9 @@ export interface ComandaEncargoPayload {
   /** Observaciones a nivel encargo (campo de la carga). */
   observaciones?: string;
   pcOrigen: string;
+  /** Re-impresión de un encargo con día de entrega ya pasado: sale rotulado
+   *  "COPIA · PEDIDO YA ENTREGADO" (no modifica nada, solo referencia). */
+  copia?: boolean;
 }
 
 const FRANJA_LABEL: Record<string, string> = {
@@ -812,6 +836,16 @@ export async function imprimirComandaEncargo(
   printer.invert(false);
   printer.bold(false);
   printer.newLine();
+
+  // ── COPIA (re-impresión de un encargo ya entregado / día pasado) ──
+  if (payload.copia) {
+    printer.bold(true);
+    printer.invert(true);
+    printer.println(' COPIA - PEDIDO YA ENTREGADO ');
+    printer.invert(false);
+    printer.bold(false);
+    printer.newLine();
+  }
 
   // ── Número de comanda grande ──
   printer.setTextSize(3, 3);

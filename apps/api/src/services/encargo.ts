@@ -386,10 +386,73 @@ export async function crearAdicionEncargo(args: {
  * YYYY-MM-DD). Excluye anulados. Devuelve lo necesario para el calendario y
  * las tarjetas (sin items, salvo el conteo).
  */
+// Select + mapping compartidos por listarEncargos (calendario) y buscarEncargos
+// (buscador amplio) — misma forma de tarjeta.
+const ENCARGO_LIST_SELECT = {
+  id: true,
+  numero: true,
+  numeroOrdenTurno: true,
+  estado: true,
+  total: true,
+  tipoEntregaEncargo: true,
+  fechaEntregaPromesa: true,
+  horaEntregaExacta: true,
+  franjaEntrega: true,
+  estadoCobroEncargo: true,
+  retiradoAt: true,
+  cliente: { select: { nombre: true, apellido: true, telefono: true } },
+  deliveryInfo: { select: { direccionSnapshot: true } },
+  _count: { select: { items: true } },
+  adicionesEncargo: {
+    where: { estado: { not: EstadoVenta.ANULADA } },
+    select: { total: true, estadoCobroEncargo: true },
+  },
+} satisfies Prisma.VentaSelect;
+
+type EncargoListRow = Prisma.VentaGetPayload<{ select: typeof ENCARGO_LIST_SELECT }>;
+
+function mapEncargoListItem(e: EncargoListRow) {
+  const snap = (e.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
+  const nombreSnap = typeof snap.clienteNombre === 'string' ? snap.clienteNombre.trim() : '';
+  const telSnap = typeof snap.clienteTelefono === 'string' ? snap.clienteTelefono : '';
+  const clienteNombre =
+    nombreSnap ||
+    (e.cliente ? `${e.cliente.nombre}${e.cliente.apellido ? ' ' + e.cliente.apellido : ''}`.trim() : '');
+  // Estado/total fusionados con las adiciones: todo cobrado → COBRADO, nada
+  // → A_PAGAR, mezcla → PARCIAL (la tarjeta lo muestra en naranja).
+  const partes = [
+    e.estadoCobroEncargo === 'COBRADO',
+    ...e.adicionesEncargo.map((a) => a.estadoCobroEncargo === 'COBRADO'),
+  ];
+  const estadoCobroMerged = partes.every(Boolean)
+    ? 'COBRADO'
+    : partes.every((p) => !p)
+      ? 'A_PAGAR'
+      : 'PARCIAL';
+  const totalMerged = Number(e.total) + e.adicionesEncargo.reduce((a, x) => a + Number(x.total), 0);
+  return {
+    id: e.id,
+    numero: e.numero,
+    numeroOrdenTurno: e.numeroOrdenTurno,
+    estado: e.estado,
+    total: totalMerged.toFixed(2),
+    tipoEntrega: e.tipoEntregaEncargo,
+    // YYYY-MM-DD (UTC, como se guardó).
+    fechaEntrega: e.fechaEntregaPromesa ? e.fechaEntregaPromesa.toISOString().slice(0, 10) : null,
+    horaEntregaExacta: e.horaEntregaExacta,
+    franjaEntrega: e.franjaEntrega,
+    estadoCobro: estadoCobroMerged,
+    // Entrega: ortogonal al cobro (se puede retirar pagado o impago).
+    retiradoAt: e.retiradoAt,
+    cliente: clienteNombre || null,
+    telefono: (telSnap || e.cliente?.telefono) ?? null,
+    itemsCount: e._count.items,
+  };
+}
+
 export async function listarEncargos(args: { desde: string; hasta: string }) {
   const desde = new Date(`${args.desde}T00:00:00.000Z`);
   const hasta = new Date(`${args.hasta}T00:00:00.000Z`);
-
   const encargos = await prisma.venta.findMany({
     where: {
       esEncargo: true,
@@ -399,67 +462,63 @@ export async function listarEncargos(args: { desde: string; hasta: string }) {
       encargoPadreId: null,
     },
     orderBy: [{ fechaEntregaPromesa: 'asc' }, { horaEntregaExacta: 'asc' }, { numeroOrdenTurno: 'asc' }],
-    select: {
-      id: true,
-      numero: true,
-      numeroOrdenTurno: true,
-      estado: true,
-      total: true,
-      tipoEntregaEncargo: true,
-      fechaEntregaPromesa: true,
-      horaEntregaExacta: true,
-      franjaEntrega: true,
-      estadoCobroEncargo: true,
-      retiradoAt: true,
-      cliente: { select: { nombre: true, apellido: true, telefono: true } },
-      deliveryInfo: { select: { direccionSnapshot: true } },
-      _count: { select: { items: true } },
-      adicionesEncargo: {
-        where: { estado: { not: EstadoVenta.ANULADA } },
-        select: { total: true, estadoCobroEncargo: true },
-      },
-    },
+    select: ENCARGO_LIST_SELECT,
   });
+  return encargos.map(mapEncargoListItem);
+}
 
-  return encargos.map((e) => {
-    const snap = (e.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
-    const nombreSnap = typeof snap.clienteNombre === 'string' ? snap.clienteNombre.trim() : '';
-    const telSnap = typeof snap.clienteTelefono === 'string' ? snap.clienteTelefono : '';
-    const clienteNombre =
-      nombreSnap ||
-      (e.cliente ? `${e.cliente.nombre}${e.cliente.apellido ? ' ' + e.cliente.apellido : ''}`.trim() : '');
-    // Estado/total fusionados con las adiciones: todo cobrado → COBRADO, nada
-    // → A_PAGAR, mezcla → PARCIAL (la tarjeta lo muestra en naranja).
-    const partes = [
-      e.estadoCobroEncargo === 'COBRADO',
-      ...e.adicionesEncargo.map((a) => a.estadoCobroEncargo === 'COBRADO'),
-    ];
-    const estadoCobroMerged = partes.every(Boolean)
-      ? 'COBRADO'
-      : partes.every((p) => !p)
-        ? 'A_PAGAR'
-        : 'PARCIAL';
-    const totalMerged =
-      Number(e.total) + e.adicionesEncargo.reduce((a, x) => a + Number(x.total), 0);
-    return {
-      id: e.id,
-      numero: e.numero,
-      numeroOrdenTurno: e.numeroOrdenTurno,
-      estado: e.estado,
-      total: totalMerged.toFixed(2),
-      tipoEntrega: e.tipoEntregaEncargo,
-      // YYYY-MM-DD (UTC, como se guardó).
-      fechaEntrega: e.fechaEntregaPromesa
-        ? e.fechaEntregaPromesa.toISOString().slice(0, 10)
-        : null,
-      horaEntregaExacta: e.horaEntregaExacta,
-      franjaEntrega: e.franjaEntrega,
-      estadoCobro: estadoCobroMerged,
-      // Entrega: ortogonal al cobro (se puede retirar pagado o impago).
-      retiradoAt: e.retiradoAt,
-      cliente: clienteNombre || null,
-      telefono: (telSnap || e.cliente?.telefono) ?? null,
-      itemsCount: e._count.items,
-    };
+/**
+ * Búsqueda AMPLIA de encargos (buscador del calendario): sin restricción de
+ * fecha, sobre TODOS los encargos (futuros y pasados ya entregados). Matchea por
+ * nombre de cliente, teléfono, día de entrega (YYYY-MM-DD), total exacto y nº de
+ * pedido / de orden. `entrega` filtra por retiro: todos | entregados | pendientes.
+ */
+export async function buscarEncargos(args: {
+  q: string;
+  entrega?: 'todos' | 'entregados' | 'pendientes';
+}) {
+  const q = args.q.trim();
+  if (!q) return [];
+  const entrega = args.entrega ?? 'todos';
+
+  const or: Prisma.VentaWhereInput[] = [
+    { cliente: { nombre: { contains: q, mode: 'insensitive' } } },
+    { cliente: { apellido: { contains: q, mode: 'insensitive' } } },
+    { cliente: { telefono: { contains: q } } },
+    { deliveryInfo: { is: { direccionSnapshot: { path: ['clienteNombre'], string_contains: q } } } },
+    { deliveryInfo: { is: { direccionSnapshot: { path: ['clienteTelefono'], string_contains: q } } } },
+  ];
+  // Nº de pedido / de orden — si el término es (o contiene) un entero.
+  const soloDigitos = q.replace(/\D/g, '');
+  if (soloDigitos && soloDigitos.length <= 9) {
+    const n = parseInt(soloDigitos, 10);
+    if (Number.isSafeInteger(n)) {
+      or.push({ numero: n }, { numeroOrdenTurno: n });
+    }
+  }
+  // Total exacto ("6000" o "6000.50").
+  if (/^\d+(\.\d{1,2})?$/.test(q)) {
+    or.push({ total: q });
+  }
+  // Día de entrega exacto (YYYY-MM-DD).
+  if (/^\d{4}-\d{2}-\d{2}$/.test(q)) {
+    or.push({ fechaEntregaPromesa: new Date(`${q}T00:00:00.000Z`) });
+  }
+
+  const where: Prisma.VentaWhereInput = {
+    esEncargo: true,
+    estado: { not: EstadoVenta.ANULADA },
+    encargoPadreId: null,
+    OR: or,
+  };
+  if (entrega === 'entregados') where.retiradoAt = { not: null };
+  else if (entrega === 'pendientes') where.retiradoAt = null;
+
+  const encargos = await prisma.venta.findMany({
+    where,
+    orderBy: [{ fechaEntregaPromesa: 'desc' }, { numeroOrdenTurno: 'desc' }],
+    take: 100,
+    select: ENCARGO_LIST_SELECT,
   });
+  return encargos.map(mapEncargoListItem);
 }
