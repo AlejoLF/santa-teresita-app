@@ -3225,6 +3225,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               numeroOrdenTurno: v.numeroOrdenTurno,
               canal: v.canal,
               modalidad: v.modalidad,
+              // Bucket (mostrador/delivery_propio/deliverate/plataforma) — lo usan
+              // los popups de detalle y el filtro por repartidor del front.
+              bucket: clasificarCanalBucket(v.canal, v.modalidad),
               fecha: v.fechaFinalizacion,
               cliente: nombreSnap || nombreCliente || null,
               total: v.total.toString(),
@@ -3233,6 +3236,55 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             };
           });
         })(),
+        // Anuladas del período (para el recuadro "Anulaciones" clickeable): con
+        // motivo, quién y cuándo. Antes solo se devolvía el contador.
+        anuladas: await prisma.venta
+          .findMany({
+            where: {
+              estado: EstadoVenta.ANULADA,
+              ...(sesionFiltroId
+                ? { sesionCajaId: sesionFiltroId }
+                : { fechaAnulacion: { gte: desde, lte: hasta } }),
+              ...(q.canal && { canal: q.canal as never }),
+            },
+            select: {
+              id: true,
+              numero: true,
+              numeroOrdenTurno: true,
+              canal: true,
+              total: true,
+              fechaApertura: true,
+              fechaAnulacion: true,
+              motivoAnulacion: true,
+              usuarioAnulacion: { select: { nombre: true } },
+              cliente: { select: { nombre: true, apellido: true } },
+              deliveryInfo: { select: { direccionSnapshot: true } },
+            },
+            orderBy: { fechaAnulacion: 'desc' },
+            take: 200,
+          })
+          .then((rows) =>
+            rows.map((v) => {
+              const snap =
+                (v.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
+              const nombreSnap =
+                typeof snap.clienteNombre === 'string' ? snap.clienteNombre.trim() : '';
+              const nombreCliente = v.cliente
+                ? `${v.cliente.nombre}${v.cliente.apellido ? ' ' + v.cliente.apellido : ''}`.trim()
+                : '';
+              return {
+                id: v.id,
+                numero: v.numero,
+                numeroOrdenTurno: v.numeroOrdenTurno,
+                canal: v.canal,
+                total: v.total.toString(),
+                fecha: v.fechaAnulacion ?? v.fechaApertura,
+                motivo: v.motivoAnulacion ?? null,
+                usuario: v.usuarioAnulacion?.nombre ?? null,
+                cliente: nombreSnap || nombreCliente || null,
+              };
+            }),
+          ),
       };
     },
   );

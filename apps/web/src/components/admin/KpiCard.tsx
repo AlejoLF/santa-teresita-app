@@ -9,6 +9,8 @@ interface KpiCardProps {
   hint?: string | React.ReactNode;
   trend?: { pct: number; direction: 'up' | 'down' | 'flat' } | null;
   accent?: 'default' | 'success' | 'warning' | 'danger';
+  /** Si se pasa, la tarjeta es clickeable (abre el detalle de ese recuadro). */
+  onClick?: () => void;
 }
 
 export function KpiCard({
@@ -18,6 +20,7 @@ export function KpiCard({
   hint,
   trend,
   accent = 'default',
+  onClick,
 }: KpiCardProps) {
   const accentClass = {
     default: '',
@@ -27,7 +30,17 @@ export function KpiCard({
   }[accent];
 
   return (
-    <div className={cn('card p-5 flex flex-col gap-2 min-w-0', accentClass)}>
+    <div
+      className={cn(
+        'card p-5 flex flex-col gap-2 min-w-0',
+        accentClass,
+        onClick && 'cursor-pointer hover:shadow-md hover:ring-1 hover:ring-teresita-700/20 transition-all',
+      )}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => (e.key === 'Enter' || e.key === ' ') && onClick() : undefined}
+    >
       <div className="text-xs text-ink-500 uppercase tracking-wide">{label}</div>
       {/* Auto-encoge en vez de recortar: antes el número se clippeaba (escondía
           dígitos) en las grillas angostas (xl:grid-cols-5). Ahora siempre entra. */}

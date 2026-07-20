@@ -559,6 +559,12 @@ function buildVentasAnalisis(state: DemoState, search: URLSearchParams) {
       numeroOrdenTurno: v.numeroOrdenTurno,
       canal: v.canal,
       modalidad: v.modalidad,
+      bucket:
+        v.canal === 'MOSTRADOR'
+          ? 'mostrador'
+          : ['RAPPI', 'PEDIDOS_YA', 'MERCADO_LIBRE'].includes(v.canal)
+            ? 'plataforma'
+            : 'delivery_propio',
       fecha: v.fechaFinalizacion ?? v.fechaApertura,
       // Cliente del pedido (en delivery/teléfono la cajera lo carga). Mostrador
       // no suele tenerlo. Demo-only: sintetizamos uno para los canales no-mostrador.
@@ -569,6 +575,17 @@ function buildVentasAnalisis(state: DemoState, search: URLSearchParams) {
       total: v.total,
       descuento: '0',
       metodos: v.pagos.map((p) => p.metodo),
+    })),
+    anuladas: anuladas.map((v) => ({
+      id: v.id,
+      numero: v.numero,
+      numeroOrdenTurno: v.numeroOrdenTurno,
+      canal: v.canal,
+      total: v.total,
+      fecha: v.fechaApertura ?? null,
+      motivo: null,
+      usuario: null,
+      cliente: null,
     })),
   };
 }

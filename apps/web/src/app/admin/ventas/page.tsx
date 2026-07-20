@@ -91,13 +91,27 @@ interface AnalisisVentas {
     numeroOrdenTurno: number;
     canal: string;
     modalidad: string;
+    bucket: string;
     fecha: string | null;
     cliente: string | null;
     total: string;
     descuento: string;
     metodos: string[];
   }>;
+  anuladas: Array<{
+    id: string;
+    numero: number;
+    numeroOrdenTurno: number;
+    canal: string;
+    total: string;
+    fecha: string | null;
+    motivo: string | null;
+    usuario: string | null;
+    cliente: string | null;
+  }>;
 }
+
+type VentaRow = AnalisisVentas['ventas'][number];
 
 const PERIODOS: Array<{ key: Periodo; label: string }> = [
   { key: 'hoy', label: 'Hoy' },
@@ -133,6 +147,22 @@ const CANALES = [
 const CANAL_LABEL: Record<string, string> = Object.fromEntries(
   CANALES.filter((c) => c.value).map((c) => [c.value, c.label]),
 );
+
+// Repartidores = buckets de canal/modalidad (ver clasificarCanalBucket en el
+// backend). Filtra la lista de ventas de abajo.
+const REPARTIDORES = [
+  { value: '', label: 'Todos los repartidores' },
+  { value: 'delivery_propio', label: '🛵 Damián (delivery propio)' },
+  { value: 'deliverate', label: '🛵 DELIVERATE' },
+  { value: 'plataforma', label: '🛵 Plataformas (Rappi/PYA/MELI)' },
+  { value: 'mostrador', label: '🏪 Mostrador (retira)' },
+];
+const BUCKET_LABEL: Record<string, string> = {
+  mostrador: 'Mostrador',
+  delivery_propio: 'Delivery · Damián',
+  deliverate: 'DELIVERATE',
+  plataforma: 'Plataformas',
+};
 
 const METODO_LABEL: Record<string, string> = Object.fromEntries(
   METODOS.filter((m) => m.value).map((m) => [m.value, m.label]),
@@ -186,6 +216,12 @@ export default function VentasPage() {
   const [reimprimirId, setReimprimirId] = useState<string | null>(null);
   // Pedido abierto en la tarjeta flotante de detalle (solo lectura).
   const [detalleId, setDetalleId] = useState<string | null>(null);
+  // Recuadros accionables: modal con la lista de ventas detrás de un recuadro.
+  const [detalle, setDetalle] = useState<{ titulo: string; ventas: VentaRow[] } | null>(null);
+  // Modal de anulaciones (motivo + quién + cuándo).
+  const [verAnuladas, setVerAnuladas] = useState(false);
+  // Filtro por repartidor (client-side, por bucket) — acota la tabla de abajo.
+  const [repartidor, setRepartidor] = useState<string>('');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -245,6 +281,13 @@ export default function VentasPage() {
   if (!data) return <div className="text-ink-500 p-6">Cargando ventas...</div>;
 
   const totalCobradoNum = Number(data.kpis.totalCobrado);
+  // Abre el modal de detalle con las ventas que caen en un recuadro.
+  const abrirDetalle = (titulo: string, filtro: (v: VentaRow) => boolean) =>
+    setDetalle({ titulo, ventas: data.ventas.filter(filtro) });
+  // La tabla de abajo respeta el filtro por repartidor (bucket), client-side.
+  const ventasTabla = repartidor
+    ? data.ventas.filter((v) => v.bucket === repartidor)
+    : data.ventas;
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -390,11 +433,24 @@ export default function VentasPage() {
               </option>
             ))}
           </select>
-          {(metodo || canal) && (
+          <select
+            value={repartidor}
+            onChange={(e) => setRepartidor(e.target.value)}
+            className="input text-xs py-1 w-auto"
+            title="Filtra la lista de ventas de abajo por repartidor"
+          >
+            {REPARTIDORES.map((r) => (
+              <option key={r.value} value={r.value}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+          {(metodo || canal || repartidor) && (
             <button
               onClick={() => {
                 setMetodo('');
                 setCanal('');
+                setRepartidor('');
               }}
               className="text-xs text-teresita-700 hover:underline"
             >
@@ -410,7 +466,8 @@ export default function VentasPage() {
           label="Total vendido"
           value={data.kpis.totalCobrado}
           accent="success"
-          hint={`${data.kpis.cantidadVentas} ventas`}
+          hint={`${data.kpis.cantidadVentas} ventas · tocá para ver`}
+          onClick={() => abrirDetalle('Todas las ventas del período', () => true)}
         />
         <KpiCard
           label="Ticket promedio"
@@ -420,24 +477,30 @@ export default function VentasPage() {
               ? 'sin ventas'
               : `sobre ${data.kpis.cantidadVentas} ventas`
           }
+          onClick={() => abrirDetalle('Ventas del período (ticket promedio)', () => true)}
         />
         <KpiCard
           label="Descuentos aplicados"
           value={data.kpis.totalDescuentos}
           accent="warning"
-          hint="suma de descuentos por efectivo"
+          hint="ventas con descuento · tocá para ver"
+          onClick={() =>
+            abrirDetalle('Ventas con descuento', (v) => Number(v.descuento) > 0)
+          }
         />
         <KpiCard
           label="Anulaciones"
           value={String(data.kpis.anuladasCantidad)}
           format="count"
           accent={data.kpis.anuladasCantidad > 0 ? 'danger' : 'default'}
-          hint="ventas anuladas en el período"
+          hint="tocá para ver el detalle"
+          onClick={() => setVerAnuladas(true)}
         />
         <KpiCard
           label="Cobrado / venta"
           value={data.kpis.cantidadVentas > 0 ? data.kpis.totalCobrado : '0'}
           hint={`${data.porCanal.length} canales activos`}
+          onClick={() => abrirDetalle('Todas las ventas del período', () => true)}
         />
       </section>
 
@@ -459,6 +522,7 @@ export default function VentasPage() {
               entry: data.cierreCajas.mostrador.creditoOtros,
             },
           ]}
+          onClick={() => abrirDetalle('Ventas · Mostrador', (v) => v.bucket === 'mostrador')}
         />
         <CategoriaBlock
           titulo="Delivery"
@@ -483,6 +547,12 @@ export default function VentasPage() {
               hint: 'rinde semanal neto de comisión · NO entra a caja del día',
             },
           ]}
+          onClick={() =>
+            abrirDetalle(
+              'Ventas · Delivery (Damián + DELIVERATE)',
+              (v) => v.bucket === 'delivery_propio' || v.bucket === 'deliverate',
+            )
+          }
         />
         <CategoriaBlock
           titulo="Plataformas"
@@ -498,6 +568,7 @@ export default function VentasPage() {
               sumaCaja: true,
             },
           ]}
+          onClick={() => abrirDetalle('Ventas · Plataformas', (v) => v.bucket === 'plataforma')}
         />
       </section>
 
@@ -510,7 +581,16 @@ export default function VentasPage() {
           ) : (
             <div className="space-y-2">
               {data.porMetodo.map((m) => (
-                <div key={m.metodo}>
+                <button
+                  key={m.metodo}
+                  onClick={() =>
+                    abrirDetalle(
+                      `Ventas · ${METODO_LABEL[m.metodo] ?? m.metodo}`,
+                      (v) => v.metodos.includes(m.metodo),
+                    )
+                  }
+                  className="w-full text-left block rounded p-1 -m-1 hover:bg-cream-100 transition-colors"
+                >
                   <div className="flex justify-between text-sm mb-0.5">
                     <span className="text-ink-700">
                       {METODO_LABEL[m.metodo] ?? m.metodo}
@@ -527,7 +607,7 @@ export default function VentasPage() {
                     />
                   </div>
                   <div className="text-2xs text-ink-500 mt-0.5">{m.cantidad} pagos</div>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -541,7 +621,13 @@ export default function VentasPage() {
           ) : (
             <div className="space-y-2">
               {data.porCanal.map((c) => (
-                <div key={c.canal}>
+                <button
+                  key={c.canal}
+                  onClick={() =>
+                    abrirDetalle(`Ventas · ${CANAL_LABEL[c.canal] ?? c.canal}`, (v) => v.canal === c.canal)
+                  }
+                  className="w-full text-left block rounded p-1 -m-1 hover:bg-cream-100 transition-colors"
+                >
                   <div className="flex justify-between text-sm mb-0.5">
                     <span className="text-ink-700">{CANAL_LABEL[c.canal] ?? c.canal}</span>
                     <span className="font-mono">
@@ -556,7 +642,7 @@ export default function VentasPage() {
                     />
                   </div>
                   <div className="text-2xs text-ink-500 mt-0.5">{c.cantidad} ventas</div>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -589,17 +675,37 @@ export default function VentasPage() {
         <VentaDetalleModal ventaId={detalleId} onClose={() => setDetalleId(null)} />
       )}
 
+      {/* Detalle de un recuadro accionable: la lista de ventas detrás del número. */}
+      {detalle && (
+        <DetalleVentasModal
+          titulo={detalle.titulo}
+          ventas={detalle.ventas}
+          onVer={(id) => setDetalleId(id)}
+          onClose={() => setDetalle(null)}
+        />
+      )}
+
+      {/* Detalle de anulaciones (con motivo, quién y cuándo). */}
+      {verAnuladas && (
+        <AnuladasModal
+          anuladas={data.anuladas}
+          onVer={(id) => setDetalleId(id)}
+          onClose={() => setVerAnuladas(false)}
+        />
+      )}
+
       {/* Listado de ventas */}
       <section className="card overflow-hidden">
         <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken flex items-center justify-between">
           <h2 className="font-display text-md text-ink-900">
-            Ventas del período ({data.ventas.length})
+            Ventas del período ({ventasTabla.length}
+            {repartidor ? ` · ${BUCKET_LABEL[repartidor] ?? repartidor}` : ''})
           </h2>
           <span className="text-2xs text-ink-500">
             {data.ventas.length === 200 ? 'mostrando últimas 200' : 'todas'}
           </span>
         </header>
-        {data.ventas.length === 0 ? (
+        {ventasTabla.length === 0 ? (
           <div className="px-4 py-8 text-center text-ink-500 text-sm">
             Sin ventas en el período seleccionado.
           </div>
@@ -621,7 +727,7 @@ export default function VentasPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-cream-200">
-              {data.ventas.map((v) => {
+              {ventasTabla.map((v) => {
                 const fecha = v.fecha ? new Date(v.fecha) : null;
                 return (
                   <tr key={v.id} className="hover:bg-cream-100 transition-colors">
@@ -850,6 +956,7 @@ function CategoriaBlock({
   total,
   tone,
   filas,
+  onClick,
 }: {
   titulo: string;
   subtitulo?: string;
@@ -863,6 +970,7 @@ function CategoriaBlock({
     informativo?: boolean;
     hint?: string;
   }>;
+  onClick?: () => void;
 }) {
   const borderTone = {
     teresita: 'border-teresita-700',
@@ -871,7 +979,15 @@ function CategoriaBlock({
   }[tone];
   const totalNum = Number(total);
   return (
-    <section className={cn('card p-4 border-t-4', borderTone)}>
+    <section
+      className={cn(
+        'card p-4 border-t-4',
+        borderTone,
+        onClick && 'cursor-pointer hover:shadow-md transition-shadow',
+      )}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+    >
       <header className="mb-3">
         <h3 className="font-display text-md text-ink-900 flex items-baseline gap-2">
           <span>{icono}</span>
@@ -1051,6 +1167,179 @@ function AnularVentaModal({
             {confirmando ? 'Anulando...' : 'Anular venta'}
           </button>
         </footer>
+      </div>
+    </div>
+  );
+}
+
+/** Modal genérico: la lista de ventas detrás de un recuadro accionable.
+ *  Cada fila abre el detalle de esa venta (VentaDetalleModal). */
+function DetalleVentasModal({
+  titulo,
+  ventas,
+  onVer,
+  onClose,
+}: {
+  titulo: string;
+  ventas: VentaRow[];
+  onVer: (id: string) => void;
+  onClose: () => void;
+}) {
+  const total = ventas.reduce((a, v) => a + Number(v.total), 0);
+  return (
+    <div
+      className="fixed inset-0 bg-ink-900/60 flex items-center justify-center z-50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="card w-full max-w-2xl shadow-modal max-h-[85vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="px-5 py-4 border-b border-cream-300 flex items-center justify-between shrink-0">
+          <div className="min-w-0">
+            <h2 className="font-display text-md text-ink-900 truncate">{titulo}</h2>
+            <p className="text-2xs text-ink-500">
+              {ventas.length} venta{ventas.length === 1 ? '' : 's'} · total{' '}
+              <MoneyAmount value={total.toFixed(2)} className="font-medium" />
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-ink-500 hover:text-ink-900 text-xl leading-none shrink-0"
+          >
+            ✕
+          </button>
+        </header>
+        <div className="overflow-y-auto">
+          {ventas.length === 0 ? (
+            <div className="px-4 py-8 text-center text-ink-500 text-sm">
+              No hay ventas en este recuadro.
+            </div>
+          ) : (
+            <ul className="divide-y divide-cream-200">
+              {ventas.map((v) => {
+                const fecha = v.fecha ? new Date(v.fecha) : null;
+                return (
+                  <li key={v.id}>
+                    <button
+                      onClick={() => onVer(v.id)}
+                      className="w-full text-left px-4 py-2.5 hover:bg-cream-100 transition-colors flex items-center justify-between gap-3"
+                    >
+                      <span className="min-w-0">
+                        <span className="font-mono text-sm text-teresita-700">#{v.numero}</span>
+                        <span className="text-sm text-ink-900 ml-2">{v.cliente ?? 'Sin nombre'}</span>
+                        <span className="block text-2xs text-ink-500 truncate">
+                          {CANAL_LABEL[v.canal] ?? v.canal}
+                          {fecha &&
+                            ` · ${fecha.toLocaleString('es-AR', {
+                              timeZone: TZ_AR,
+                              day: '2-digit',
+                              month: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}`}
+                          {v.metodos.length > 0 && ` · ${v.metodos.join(', ')}`}
+                        </span>
+                      </span>
+                      <MoneyAmount value={v.total} className="font-mono text-sm text-ink-900 shrink-0" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Modal de anulaciones: cada una con motivo, quién la anuló y cuándo. */
+function AnuladasModal({
+  anuladas,
+  onVer,
+  onClose,
+}: {
+  anuladas: AnalisisVentas['anuladas'];
+  onVer: (id: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 bg-ink-900/60 flex items-center justify-center z-50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="card w-full max-w-2xl shadow-modal max-h-[85vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="px-5 py-4 border-b border-cream-300 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">⚠️</span>
+            <div>
+              <h2 className="font-display text-md text-pomodoro-600">Anulaciones del período</h2>
+              <p className="text-2xs text-ink-500">
+                {anuladas.length} venta{anuladas.length === 1 ? '' : 's'} anulada
+                {anuladas.length === 1 ? '' : 's'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-ink-500 hover:text-ink-900 text-xl leading-none"
+          >
+            ✕
+          </button>
+        </header>
+        <div className="overflow-y-auto">
+          {anuladas.length === 0 ? (
+            <div className="px-4 py-8 text-center text-ink-500 text-sm">
+              No hubo anulaciones en el período. 🎉
+            </div>
+          ) : (
+            <ul className="divide-y divide-cream-200">
+              {anuladas.map((v) => {
+                const fecha = v.fecha ? new Date(v.fecha) : null;
+                return (
+                  <li key={v.id}>
+                    <button
+                      onClick={() => onVer(v.id)}
+                      className="w-full text-left px-4 py-2.5 hover:bg-cream-100 transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="min-w-0">
+                          <span className="font-mono text-sm text-pomodoro-600">#{v.numero}</span>
+                          <span className="text-sm text-ink-900 ml-2">{v.cliente ?? 'Sin nombre'}</span>
+                        </span>
+                        <MoneyAmount
+                          value={v.total}
+                          className="font-mono text-sm text-ink-500 line-through shrink-0"
+                        />
+                      </div>
+                      <div className="text-2xs text-ink-500 mt-0.5">
+                        {CANAL_LABEL[v.canal] ?? v.canal}
+                        {fecha &&
+                          ` · ${fecha.toLocaleString('es-AR', {
+                            timeZone: TZ_AR,
+                            day: '2-digit',
+                            month: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}`}
+                        {v.usuario && ` · anuló ${v.usuario}`}
+                      </div>
+                      {v.motivo && (
+                        <div className="text-xs text-ink-700 mt-1 bg-cream-100 rounded px-2 py-1">
+                          💬 {v.motivo}
+                        </div>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );
