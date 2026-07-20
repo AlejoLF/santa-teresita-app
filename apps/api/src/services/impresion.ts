@@ -997,9 +997,20 @@ export async function encolarComandaEncargo(
     copia,
   };
 
+  // Respetar la config "imprime tickets de encargo" por comandera. Si la
+  // comandera destino NO imprime encargos (COCINA por default), redirigimos a la
+  // primera comandera habilitada (prefiere Mostrador) — así el ticket no sale
+  // donde la encargada no quiere. tx-safe: getConfigImpresion(client) usa el
+  // cliente de la transacción (connection_limit=1, ver CLAUDE.md).
+  const cfgImpresion = await getConfigImpresion(client);
+  const destinoEfectivo: DestinoImpresion = cfgImpresion[destino]?.encargos
+    ? destino
+    : ((['MOSTRADOR', 'DELIVERY', 'COCINA'] as const).find((d) => cfgImpresion[d]?.encargos) ??
+      'MOSTRADOR');
+
   await encolarTrabajo({
     tipo: TipoTrabajoImpresion.COMANDA_ENCARGO,
-    destino,
+    destino: destinoEfectivo,
     payload,
     ventaId: rootId,
     tx,
@@ -1038,6 +1049,14 @@ export interface PrinterDestinoConfig {
    * aparte y no depende de esta lista.
    */
   canales: string[];
+  /**
+   * ¿Esta comandera imprime los tickets de ENCARGO? (panel dedicado, decisión
+   * del dueño). Por defecto COCINA = false: así el ticket de encargo NO sale en
+   * cocina (evita la confusión de la encargada al cobrar/re-imprimir). Si la
+   * comandera destino de un encargo tiene esto en false, `encolarComandaEncargo`
+   * redirige a la primera comandera habilitada (prefiere Mostrador).
+   */
+  encargos: boolean;
 }
 
 /** Los 8 canales de venta enrutables (mismo orden que el enum CanalVenta). */
@@ -1057,13 +1076,14 @@ export const CANALES_ENRUTABLES = [
 // cocción → Comandera 3. El mostrador imprime el ticket del cliente por otro
 // camino, así que su comandera no recibe comandas por defecto (canales: []).
 const DEFAULT_CONFIG: Record<DestinoImpresion, PrinterDestinoConfig> = {
-  MOSTRADOR: { host: '192.168.1.50', port: 9100, width: 42, activa: true, canales: [] },
+  MOSTRADOR: { host: '192.168.1.50', port: 9100, width: 42, activa: true, canales: [], encargos: true },
   DELIVERY: {
     host: '192.168.1.51',
     port: 9100,
     width: 42,
     activa: true,
     canales: ['TELEFONO', 'WHATSAPP', 'WEB'],
+    encargos: true,
   },
   COCINA: {
     host: '192.168.1.52',
@@ -1071,6 +1091,8 @@ const DEFAULT_CONFIG: Record<DestinoImpresion, PrinterDestinoConfig> = {
     width: 42,
     activa: true,
     canales: [...CANALES_ENRUTABLES],
+    // Por defecto la cocina NO imprime encargos (evita la confusión al cobrar).
+    encargos: false,
   },
 };
 

@@ -20,6 +20,8 @@ const destinoConfigSchema = z.object({
   // comandera × canal). El front siempre lo manda; si faltara, getConfigImpresion
   // cae al default histórico.
   canales: z.array(z.enum(CANALES_ENRUTABLES)).optional(),
+  // ¿Esta comandera imprime los tickets de ENCARGO? (panel dedicado).
+  encargos: z.boolean().optional(),
 });
 
 /**

@@ -14,6 +14,8 @@ interface ConfigImpresora {
   activa: boolean;
   /** Canales cuyos pedidos imprimen su comanda en esta comandera. */
   canales: string[];
+  /** ¿Esta comandera imprime los tickets de ENCARGO? (panel dedicado). */
+  encargos?: boolean;
 }
 
 type ConfigPrinters = Record<Destino, ConfigImpresora>;
@@ -221,7 +223,9 @@ export default function ImpresorasConfigPage() {
             </li>
           </ul>
           <p className="text-2xs text-ink-500 italic mt-2">
-            Los encargos usan la comandera que elegís al cargarlos, no esta matriz.
+            Los tickets de ENCARGO se configuran aparte: cada comandera tiene abajo
+            un check 📦. Si la comandera elegida al cargar un encargo no imprime
+            encargos, se redirige a una habilitada (por defecto, Mostrador).
           </p>
         </div>
       </details>
@@ -408,6 +412,34 @@ export default function ImpresorasConfigPage() {
                 {d === 'COCINA' && (
                   <p className="text-2xs text-ink-400 mt-1.5 italic">
                     La cocina solo recibe pedidos con cocción, sin importar el canal.
+                  </p>
+                )}
+              </div>
+
+              {/* Tickets de ENCARGO — panel dedicado: la encargada decide qué
+                  comanderas imprimen encargos (evita que salgan en cocina al
+                  cobrar / re-imprimir, que era lo que confundía). */}
+              <div className="pt-2 border-t border-cream-200">
+                <label
+                  className={cn(
+                    'flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs transition-colors',
+                    !cfg.activa && 'opacity-50 cursor-not-allowed',
+                    cfg.encargos ? 'bg-wood-100 text-wood-900' : 'text-ink-500 hover:bg-cream-100',
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={cfg.encargos ?? false}
+                    disabled={!cfg.activa}
+                    onChange={(e) => setField(d, { encargos: e.target.checked })}
+                    className="w-4 h-4 shrink-0"
+                  />
+                  <span aria-hidden>📦</span>
+                  <span className="font-medium">Imprime tickets de ENCARGO</span>
+                </label>
+                {d === 'COCINA' && (
+                  <p className="text-2xs text-ink-400 mt-1 italic px-2">
+                    Recomendado apagado: así el encargo no sale en cocina al cobrarlo.
                   </p>
                 )}
               </div>
