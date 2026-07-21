@@ -1162,9 +1162,9 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
   if (p === '/admin/impresion/config' && method === 'GET') {
     return ok(
       state.impresorasConfig ?? {
-        MOSTRADOR: { host: '192.168.1.50', port: 9100, width: 42, activa: true, canales: [] },
-        DELIVERY: { host: '192.168.1.51', port: 9100, width: 42, activa: true, canales: ['TELEFONO', 'WHATSAPP', 'WEB'] },
-        COCINA: { host: '192.168.1.52', port: 9100, width: 42, activa: true, canales: ['MOSTRADOR', 'TELEFONO', 'WHATSAPP', 'WEB', 'RAPPI', 'PEDIDOS_YA', 'MERCADO_LIBRE', 'DELIVERATE'] },
+        MOSTRADOR: { host: '192.168.1.50', port: 9100, width: 42, activa: true, canales: [], encargos: true },
+        DELIVERY: { host: '192.168.1.51', port: 9100, width: 42, activa: true, canales: ['TELEFONO', 'WHATSAPP', 'WEB'], encargos: true },
+        COCINA: { host: '192.168.1.52', port: 9100, width: 42, activa: true, canales: ['MOSTRADOR', 'TELEFONO', 'WHATSAPP', 'WEB', 'RAPPI', 'PEDIDOS_YA', 'MERCADO_LIBRE', 'DELIVERATE'], encargos: false },
       },
     );
   }
@@ -1370,6 +1370,52 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
       .filter((e) => {
         const f = (e.fechaEntregaPromesa ?? '').slice(0, 10);
         return f >= desde && f <= hasta;
+      })
+      .map((e) => {
+        const snap = e.deliveryInfo?.direccionSnapshot ?? {};
+        return {
+          id: e.id,
+          numero: e.numero,
+          numeroOrdenTurno: e.numeroOrdenTurno,
+          estado: e.estado,
+          total: e.total,
+          tipoEntrega: e.tipoEntregaEncargo,
+          fechaEntrega: (e.fechaEntregaPromesa ?? '').slice(0, 10),
+          horaEntregaExacta: e.horaEntregaExacta,
+          franjaEntrega: e.franjaEntrega,
+          estadoCobro: e.estadoCobroEncargo,
+          retiradoAt: e.retiradoAt ?? null,
+          cliente: snap.clienteNombre ?? null,
+          telefono: snap.clienteTelefono ?? null,
+          itemsCount: e.items?.length ?? 0,
+        };
+      });
+    return ok({ encargos });
+  }
+  // Buscador amplio (#6): filtra TODOS los encargos por nombre/teléfono/día/
+  // total/nº de pedido. Espeja `buscarEncargos` del backend para que el demo
+  // no quede inerte al buscar.
+  if (p === '/encargos/buscar' && method === 'GET') {
+    const q = (search.get('q') ?? '').trim().toLowerCase();
+    const entrega = search.get('entrega') ?? 'todos';
+    const encargos = state.encargos
+      .filter((e) => e.estado !== 'ANULADA')
+      .filter((e) => {
+        if (entrega === 'entregados') return !!e.retiradoAt;
+        if (entrega === 'pendientes') return !e.retiradoAt;
+        return true;
+      })
+      .filter((e) => {
+        if (!q) return true;
+        const snap = e.deliveryInfo?.direccionSnapshot ?? {};
+        return [
+          snap.clienteNombre,
+          snap.clienteTelefono,
+          String(e.numero),
+          String(e.numeroOrdenTurno),
+          String(e.total),
+          (e.fechaEntregaPromesa ?? '').slice(0, 10),
+        ].some((c) => (c ?? '').toString().toLowerCase().includes(q));
       })
       .map((e) => {
         const snap = e.deliveryInfo?.direccionSnapshot ?? {};
@@ -1661,6 +1707,8 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
 
   // ─── Admin: caja sesion / cierres ──────────────────────────────────
   if (p === '/admin/caja/sesion-actual' && method === 'GET') return ok(buildSesionActual(state));
+  // Sesiones viejas colgadas sin cerrar (fix #2). En demo no hay ninguna.
+  if (p === '/admin/caja/sesiones-abiertas' && method === 'GET') return ok({ sesiones: [] });
   if (p === '/admin/caja/sesion-actual/cerrar' && method === 'POST') return ok({});
   m = p.match(/^\/admin\/caja\/sesion\/([^/]+)\/aprobar$/);
   if (m && method === 'POST') return ok({});

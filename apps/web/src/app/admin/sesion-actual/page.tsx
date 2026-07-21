@@ -139,7 +139,10 @@ export default function SesionActualPage() {
       const ab = await api
         .get<{ sesiones: SesionAbierta[] }>('/admin/caja/sesiones-abiertas')
         .catch(() => ({ sesiones: [] as SesionAbierta[] }));
-      setAbiertas(ab.sesiones);
+      // `?? []`: el .catch solo cubre errores lanzados, no una respuesta 200
+      // con body vacío ({}); sin esto, `abiertas` quedaba undefined y la lista
+      // de sesiones viejas rompía con `.map` de undefined.
+      setAbiertas(ab.sesiones ?? []);
     } catch (e) {
       if (!(e instanceof ApiError) || e.status !== 401) {
         setError('No se pudo cargar la sesión');

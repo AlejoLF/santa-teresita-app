@@ -288,6 +288,10 @@ export default function VentasPage() {
   const ventasTabla = repartidor
     ? data.ventas.filter((v) => v.bucket === repartidor)
     : data.ventas;
+  // Total de la tabla filtrada por repartidor (filtro client-side sobre las
+  // ≤200 ventas cargadas). Sin filtro, el footer usa data.kpis (el total real
+  // del período, que puede superar las 200 cargadas).
+  const ventasTablaTotal = ventasTabla.reduce((a, v) => a + Number(v.total), 0);
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -802,11 +806,12 @@ export default function VentasPage() {
               <tfoot className="border-t-2 border-cream-300 bg-surface-sunken">
                 <tr>
                   <td colSpan={8} className="px-4 py-3 font-medium text-ink-700">
-                    TOTAL · {data.kpis.cantidadVentas} ventas
+                    TOTAL · {repartidor ? ventasTabla.length : data.kpis.cantidadVentas} ventas
+                    {repartidor ? ` · ${BUCKET_LABEL[repartidor] ?? repartidor}` : ''}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <MoneyAmount
-                      value={data.kpis.totalCobrado}
+                      value={repartidor ? ventasTablaTotal : data.kpis.totalCobrado}
                       className="font-mono text-md text-teresita-700 font-bold"
                     />
                   </td>
@@ -818,7 +823,7 @@ export default function VentasPage() {
 
           {/* Tarjetas (mobile) */}
           <div className="md:hidden divide-y divide-cream-200">
-            {data.ventas.map((v) => {
+            {ventasTabla.map((v) => {
               const fecha = v.fecha ? new Date(v.fecha) : null;
               return (
                 <div key={v.id} className="p-3">
