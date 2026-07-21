@@ -314,6 +314,35 @@ function leerMirrorSourceUrl() {
   return null;
 }
 
+/**
+ * Token de ingesta de ÓRDENES de canal (integradores RAPPI/PYA/MELI →
+ * POST /channel/orders). Si está presente, habilita el endpoint en la API
+ * embebida. Orden:
+ *   1. process.env.CHANNEL_INGEST_TOKEN (dev/test).
+ *   2. userData/config.json → `channelIngestToken` (SOLO la máquina designada
+ *      a recibir órdenes de canal).
+ * A propósito NO se lee del bundle cloud-config.json: así el token NO viaja en
+ * el instalador a TODAS las cajas. Una caja sin token deja el endpoint en 503
+ * (correcto: en producción el integrador le pega a la API cloud, no al .exe).
+ */
+function leerChannelIngestToken() {
+  if (typeof process.env.CHANNEL_INGEST_TOKEN === 'string' && process.env.CHANNEL_INGEST_TOKEN) {
+    return process.env.CHANNEL_INGEST_TOKEN;
+  }
+  const userConfigPath = path.join(app.getPath('userData'), 'config.json');
+  if (fs.existsSync(userConfigPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(userConfigPath, 'utf8'));
+      if (typeof cfg.channelIngestToken === 'string' && cfg.channelIngestToken) {
+        return cfg.channelIngestToken;
+      }
+    } catch (e) {
+      log('Error leyendo channelIngestToken de config.json: ' + (e?.message ?? e));
+    }
+  }
+  return null;
+}
+
 /** Agrega flags de pgbouncer si es el pooler de Supabase (idéntico a leerCloudDbUrl). */
 function aplicarFlagsPooler(raw) {
   const hasFlags = raw.includes('pgbouncer=') || raw.includes('connection_limit=');
@@ -412,11 +441,19 @@ async function startApi(cloudDbUrl) {
     log('Espejo nube → local ACTIVO (baja lo último al arrancar)');
   }
 
+  // Órdenes de canal (RAPPI/PYA/MELI): habilita POST /channel/orders si esta
+  // máquina está designada a recibirlas (token en env o userData/config.json).
+  const channelIngestToken = leerChannelIngestToken();
+  if (channelIngestToken) {
+    log('Ingesta de canal HABILITADA (CHANNEL_INGEST_TOKEN presente)');
+  }
+
   apiProcess = spawn(process.execPath, [apiEntry], {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       NODE_ENV: 'production',
+      ...(channelIngestToken ? { CHANNEL_INGEST_TOKEN: channelIngestToken } : {}),
       // Forzamos timezone Argentina para que `new Date()` y los buckets de KPIs
       // (inicio del día, agrupaciones por hora, "hoy/ayer") sean consistentes
       // independiente del locale regional de Windows. AR no observa DST desde
