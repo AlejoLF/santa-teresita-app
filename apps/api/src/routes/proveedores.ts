@@ -11,6 +11,15 @@ import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { calcSaldoFactura } from '../services/facturas.js';
 import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
+import {
+  periodoBusquedaSchema,
+  paginacionSchema,
+  resolverFiltroTemporal,
+  whereRangoFecha,
+  esBusquedaNumerica,
+  armarPaginacion,
+  type PeriodoBusqueda,
+} from '../services/filtro-temporal.js';
 
 /**
  * Endpoints para proveedores, facturas recibidas y el flujo de pago multi-cuenta
@@ -479,32 +488,83 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           estado: z
             .enum(['PENDIENTE_VALIDACION', 'PENDIENTE_PAGO', 'PAGADA_PARCIAL', 'PAGADA', 'ANULADA'])
             .optional(),
-          limit: z.coerce.number().int().min(1).max(200).default(50),
+          // Búsqueda libre: nº, punto de venta, proveedor, tipo y total exacto.
+          q: z.string().trim().min(1).max(80).optional(),
+          // Filtro temporal sobre fechaEmision. Default 'todo' = toda la base.
+          periodo: periodoBusquedaSchema.optional(),
+          desde: z.string().datetime().optional(),
+          hasta: z.string().datetime().optional(),
+          ...paginacionSchema,
+          // LEGACY: algunos llamadores viejos mandan `limit` sin paginar.
+          limit: z.coerce.number().int().min(1).max(200).optional(),
         }),
       },
     },
     async (req) => {
-      const q = req.query as { estado?: string; limit: number };
-      const facturas = await prisma.facturaRecibida.findMany({
-        where: q.estado ? { estado: q.estado as never } : undefined,
-        select: {
-          id: true,
-          numero: true,
-          puntoVenta: true,
-          tipoComprobante: true,
-          total: true,
-          estado: true,
-          origen: true,
-          ocrConfianza: true,
-          fechaEmision: true,
-          creadoAt: true,
-          proveedor: { select: { id: true, nombre: true } },
-          _count: { select: { items: true } },
-        },
-        // sin validar primero por más viejas (cola FIFO); el resto por carga.
-        orderBy: q.estado === 'PENDIENTE_VALIDACION' ? { creadoAt: 'asc' } : { creadoAt: 'desc' },
-        take: q.limit,
+      const q = req.query as {
+        estado?: string;
+        q?: string;
+        periodo?: PeriodoBusqueda;
+        desde?: string;
+        hasta?: string;
+        page: number;
+        pageSize: number;
+        limit?: number;
+      };
+
+      const ft = await resolverFiltroTemporal({
+        periodo: q.periodo,
+        desde: q.desde,
+        hasta: q.hasta,
       });
+
+      const texto = q.q?.trim();
+      const where = {
+        ...(q.estado ? { estado: q.estado as never } : {}),
+        // Las facturas NO tienen sesión de caja: si piden una sesión, caemos al
+        // rango [apertura, cierre] de esa sesión sería confuso — mejor ignorar
+        // el criterio de sesión y filtrar solo por fecha cuando hay rango.
+        ...whereRangoFecha('fechaEmision', ft),
+        ...(texto && {
+          OR: [
+            { numero: { contains: texto, mode: 'insensitive' as const } },
+            { puntoVenta: { contains: texto, mode: 'insensitive' as const } },
+            { proveedor: { nombre: { contains: texto, mode: 'insensitive' as const } } },
+            ...(esBusquedaNumerica(texto) ? [{ total: texto }] : []),
+          ],
+        }),
+      };
+
+      // `limit` legacy manda: si vino, no paginamos (compat con la bandeja OCR).
+      const pageSize = q.limit ?? q.pageSize;
+      const skip = q.limit ? 0 : (q.page - 1) * q.pageSize;
+
+      const [facturas, total] = await Promise.all([
+        prisma.facturaRecibida.findMany({
+          where,
+          select: {
+            id: true,
+            numero: true,
+            puntoVenta: true,
+            tipoComprobante: true,
+            total: true,
+            estado: true,
+            origen: true,
+            ocrConfianza: true,
+            fechaEmision: true,
+            creadoAt: true,
+            proveedor: { select: { id: true, nombre: true } },
+            _count: { select: { items: true } },
+          },
+          // sin validar primero por más viejas (cola FIFO); el resto por carga.
+          orderBy:
+            q.estado === 'PENDIENTE_VALIDACION' ? { creadoAt: 'asc' } : { creadoAt: 'desc' },
+          skip,
+          take: pageSize,
+        }),
+        prisma.facturaRecibida.count({ where }),
+      ]);
+
       return {
         facturas: facturas.map((f) => ({
           ...f,
@@ -513,6 +573,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           itemsCount: f._count.items,
           _count: undefined,
         })),
+        ...armarPaginacion(total, q.limit ? 1 : q.page, pageSize),
       };
     },
   );

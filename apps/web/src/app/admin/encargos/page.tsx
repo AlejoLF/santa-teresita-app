@@ -8,6 +8,11 @@ import { KpiCard } from '@/components/admin/KpiCard';
 import { cn } from '@/lib/cn';
 import { EncargoDetalleModal } from '@/components/encargos/EncargoDetalleModal';
 import {
+  useBusquedaPaginada,
+  BuscadorFiltros,
+  Paginacion,
+} from '@/components/admin/BusquedaTabla';
+import {
   type EncargoListItem,
   cuandoLabel,
   fechaLargaDia,
@@ -18,34 +23,46 @@ import {
 export default function AdminEncargosPage() {
   const router = useRouter();
   const hoy = useMemo(() => hoyISO(), []);
-  const [encargos, setEncargos] = useState<EncargoListItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [entrega, setEntrega] = useState<'todos' | 'pendientes' | 'entregados'>('todos');
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
+  // Los KPIs siguen calculándose sobre la ventana fija (últimos 7 días +
+  // próximos 30), NO sobre la tabla: si dependieran del listado paginado,
+  // mostrarían solo lo de la página actual, que sería un número equivocado.
+  const [kpiEncargos, setKpiEncargos] = useState<EncargoListItem[]>([]);
+  const fetchKpis = useCallback(async () => {
     try {
-      // Recientes (una semana atrás) + próximos 30 días.
       const desde = isoMasDias(hoy, -7);
       const hasta = isoMasDias(hoy, 30);
       const res = await api.get<{ encargos: EncargoListItem[] }>(
         `/encargos?desde=${desde}&hasta=${hasta}`,
       );
-      setEncargos(res.encargos ?? []);
+      setKpiEncargos(res.encargos ?? []);
     } catch (e) {
-      if (!(e instanceof ApiError) || e.status !== 401) setEncargos([]);
-    } finally {
-      setLoading(false);
+      if (!(e instanceof ApiError) || e.status !== 401) setKpiEncargos([]);
     }
   }, [hoy]);
 
   useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+    void fetchKpis();
+  }, [fetchKpis]);
 
-  const aPagar = encargos.filter((e) => e.estadoCobro === 'A_PAGAR');
+  // Objeto estable: si se recreara en cada render, el hook refetchearía en loop.
+  const paramsExtra = useMemo(() => ({ entrega }), [entrega]);
+  const b = useBusquedaPaginada<EncargoListItem>({
+    endpoint: '/encargos/buscar',
+    extraerItems: (res) => (res as { encargos?: EncargoListItem[] }).encargos ?? [],
+    paramsExtra,
+  });
+
+  const recargarTodo = useCallback(() => {
+    void b.refetch();
+    void fetchKpis();
+  }, [b, fetchKpis]);
+
+  const aPagar = kpiEncargos.filter((e) => e.estadoCobro === 'A_PAGAR');
   const totalAPagar = aPagar.reduce((a, e) => a + Number(e.total), 0);
-  const proximos = encargos.filter((e) => (e.fechaEntrega ?? '') >= hoy);
+  const proximos = kpiEncargos.filter((e) => (e.fechaEntrega ?? '') >= hoy);
 
   return (
     <div className="max-w-6xl mx-auto space-y-5">
@@ -68,14 +85,42 @@ export default function AdminEncargosPage() {
         <KpiCard label="Por cobrar ($)" value={totalAPagar.toFixed(2)} accent="warning" hint="total de los 'a pagar'" />
       </section>
 
+      <BuscadorFiltros
+        q={b.q}
+        onQ={b.setQ}
+        periodo={b.periodo}
+        onPeriodo={b.setPeriodo}
+        desde={b.desde}
+        onDesde={b.setDesde}
+        hasta={b.hasta}
+        onHasta={b.setHasta}
+        placeholder="🔎 Buscar: cliente, teléfono, día de entrega, total, N° de pedido…"
+        total={b.meta.total}
+        loading={b.loading}
+        onLimpiar={b.limpiar}
+        hayFiltro={b.hayFiltro}
+      >
+        <select
+          value={entrega}
+          onChange={(e) => setEntrega(e.target.value as typeof entrega)}
+          className="input w-auto"
+        >
+          <option value="todos">Todos</option>
+          <option value="pendientes">Sin retirar</option>
+          <option value="entregados">Retirados</option>
+        </select>
+      </BuscadorFiltros>
+
       <section className="card overflow-hidden">
         <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken">
-          <h2 className="font-display text-md text-ink-900">Listado ({encargos.length})</h2>
+          <h2 className="font-display text-md text-ink-900">Listado ({b.meta.total})</h2>
         </header>
-        {loading ? (
+        {b.loading && b.items.length === 0 ? (
           <div className="px-4 py-8 text-center text-ink-500 text-sm">Cargando…</div>
-        ) : encargos.length === 0 ? (
-          <div className="px-4 py-8 text-center text-ink-500 text-sm">Sin encargos en el período.</div>
+        ) : b.items.length === 0 ? (
+          <div className="px-4 py-8 text-center text-ink-500 text-sm">
+            {b.hayFiltro ? 'Ningún encargo coincide con la búsqueda.' : 'Sin encargos cargados.'}
+          </div>
         ) : (
           <>
             <table className="w-full text-sm hidden md:table">
@@ -92,7 +137,7 @@ export default function AdminEncargosPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-cream-200">
-                {encargos.map((e) => (
+                {b.items.map((e) => (
                   <tr
                     key={e.id}
                     className="hover:bg-cream-100 cursor-pointer"
@@ -131,7 +176,7 @@ export default function AdminEncargosPage() {
             </table>
 
             <div className="md:hidden divide-y divide-cream-200">
-              {encargos.map((e) => (
+              {b.items.map((e) => (
                 <button
                   key={e.id}
                   onClick={() => setDetailId(e.id)}
@@ -167,13 +212,21 @@ export default function AdminEncargosPage() {
             </div>
           </>
         )}
+        <Paginacion
+          page={b.meta.page}
+          totalPages={b.meta.totalPages}
+          total={b.meta.total}
+          pageSize={b.meta.pageSize}
+          onPage={b.setPage}
+          loading={b.loading}
+        />
       </section>
 
       {detailId && (
         <EncargoDetalleModal
           encargoId={detailId}
           onClose={() => setDetailId(null)}
-          onChanged={() => void fetchData()}
+          onChanged={recargarTodo}
         />
       )}
     </div>

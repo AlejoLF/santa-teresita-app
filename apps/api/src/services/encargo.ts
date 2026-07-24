@@ -10,6 +10,7 @@ import {
 } from '@sta/db';
 import type { EncargoNuevo } from '@sta/shared';
 import { subtotalItem } from '@sta/shared';
+import { whereRangoDiaUtc, type FiltroTemporal } from './filtro-temporal.js';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
 import { recordAudit } from './audit.js';
 import { encolarComandaEncargo, esDestinoImpresion } from './impresion.js';
@@ -474,12 +475,18 @@ export async function listarEncargos(args: { desde: string; hasta: string }) {
  * pedido / de orden. `entrega` filtra por retiro: todos | entregados | pendientes.
  */
 export async function buscarEncargos(args: {
-  q: string;
+  /** Vacío = no filtra por texto (se listan todos los del período). */
+  q?: string;
   entrega?: 'todos' | 'entregados' | 'pendientes';
+  /** Filtro temporal ya resuelto (ver services/filtro-temporal.ts). */
+  filtroTemporal?: FiltroTemporal;
+  page?: number;
+  pageSize?: number;
 }) {
-  const q = args.q.trim();
-  if (!q) return [];
+  const q = (args.q ?? '').trim();
   const entrega = args.entrega ?? 'todos';
+  const page = args.page ?? 1;
+  const pageSize = args.pageSize ?? 12;
 
   const or: Prisma.VentaWhereInput[] = [
     { cliente: { nombre: { contains: q, mode: 'insensitive' } } },
@@ -505,20 +512,32 @@ export async function buscarEncargos(args: {
     or.push({ fechaEntregaPromesa: new Date(`${q}T00:00:00.000Z`) });
   }
 
+  const ft = args.filtroTemporal;
   const where: Prisma.VentaWhereInput = {
     esEncargo: true,
     estado: { not: EstadoVenta.ANULADA },
     encargoPadreId: null,
-    OR: or,
+    // Sin texto no filtramos por OR (listamos todo el período).
+    ...(q ? { OR: or } : {}),
+    // Criterio temporal: por SESIÓN, el encargo pertenece al turno en que se
+    // cargó/cobró (sesionCajaId). Por RANGO DE FECHAS, lo que importa es
+    // cuándo se ENTREGA (fechaEntregaPromesa) — que es como el dueño piensa
+    // los encargos. `whereRangoDiaUtc` porque esa columna es @db.Date.
+    ...(ft?.sesionCajaId ? { sesionCajaId: ft.sesionCajaId } : {}),
+    ...(ft ? whereRangoDiaUtc('fechaEntregaPromesa', ft) : {}),
   };
   if (entrega === 'entregados') where.retiradoAt = { not: null };
   else if (entrega === 'pendientes') where.retiradoAt = null;
 
-  const encargos = await prisma.venta.findMany({
-    where,
-    orderBy: [{ fechaEntregaPromesa: 'desc' }, { numeroOrdenTurno: 'desc' }],
-    take: 100,
-    select: ENCARGO_LIST_SELECT,
-  });
-  return encargos.map(mapEncargoListItem);
+  const [encargos, total] = await Promise.all([
+    prisma.venta.findMany({
+      where,
+      orderBy: [{ fechaEntregaPromesa: 'desc' }, { numeroOrdenTurno: 'desc' }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: ENCARGO_LIST_SELECT,
+    }),
+    prisma.venta.count({ where }),
+  ]);
+  return { encargos: encargos.map(mapEncargoListItem), total, page, pageSize };
 }

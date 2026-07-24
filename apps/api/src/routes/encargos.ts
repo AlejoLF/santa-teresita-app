@@ -6,6 +6,13 @@ import { getVentaCompleta } from '../services/venta.js';
 import { FueraDeHorarioError } from '../services/sesion-caja.js';
 import { recordAudit } from '../services/audit.js';
 import { encolarComandaEncargo, esDestinoImpresion } from '../services/impresion.js';
+import {
+  periodoBusquedaSchema,
+  paginacionSchema,
+  resolverFiltroTemporal,
+  armarPaginacion,
+  type PeriodoBusqueda,
+} from '../services/filtro-temporal.js';
 import { prisma } from '@sta/db/client';
 import { EstadoVenta } from '@sta/db';
 
@@ -99,15 +106,42 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
       preHandler: fastify.requireAuth(),
       schema: {
         querystring: z.object({
-          q: z.string().min(1).max(80),
+          // Opcional: sin texto lista todos los del período elegido.
+          q: z.string().trim().min(1).max(80).optional(),
           entrega: z.enum(['todos', 'entregados', 'pendientes']).optional(),
+          periodo: periodoBusquedaSchema.optional(),
+          desde: z.string().datetime().optional(),
+          hasta: z.string().datetime().optional(),
+          ...paginacionSchema,
         }),
       },
     },
     async (req) => {
-      const q = req.query as { q: string; entrega?: 'todos' | 'entregados' | 'pendientes' };
-      const encargos = await buscarEncargos({ q: q.q, entrega: q.entrega });
-      return { encargos };
+      const q = req.query as {
+        q?: string;
+        entrega?: 'todos' | 'entregados' | 'pendientes';
+        periodo?: PeriodoBusqueda;
+        desde?: string;
+        hasta?: string;
+        page: number;
+        pageSize: number;
+      };
+      const filtroTemporal = await resolverFiltroTemporal({
+        periodo: q.periodo,
+        desde: q.desde,
+        hasta: q.hasta,
+      });
+      const res = await buscarEncargos({
+        q: q.q,
+        entrega: q.entrega,
+        filtroTemporal,
+        page: q.page,
+        pageSize: q.pageSize,
+      });
+      return {
+        encargos: res.encargos,
+        ...armarPaginacion(res.total, res.page, res.pageSize),
+      };
     },
   );
 

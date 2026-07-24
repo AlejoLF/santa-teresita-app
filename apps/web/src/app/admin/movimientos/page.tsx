@@ -6,6 +6,7 @@ import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { MovimientoDetailModal } from '@/components/admin/MovimientoDetailModal';
+import { Paginacion } from '@/components/admin/BusquedaTabla';
 import { cn } from '@/lib/cn';
 
 interface Cuenta {
@@ -45,11 +46,23 @@ interface Listado {
   sumas: { ingresos: string; egresos: string; neto: string };
 }
 
-const PAGE_SIZE = 50;
+// 12 por página: entra en pantalla sin scrollear y mantiene las queries
+// baratas contra el pooler (las cajas corren con connection_limit=1).
+const PAGE_SIZE = 12;
 
-type Periodo = 'sesion' | 'sesion_anterior' | 'hoy' | 'semana' | 'mes' | 'custom';
+type Periodo =
+  | 'todo'
+  | 'sesion'
+  | 'sesion_anterior'
+  | 'hoy'
+  | 'semana'
+  | 'mes'
+  | 'custom';
 
 const PERIODOS: Array<{ value: Periodo; label: string }> = [
+  // "Todo" = sin ventana temporal: busca sobre TODA la base. La paginación es
+  // la que acota, no un rango implícito.
+  { value: 'todo', label: 'Todo' },
   { value: 'sesion', label: 'Sesión actual' },
   { value: 'sesion_anterior', label: 'Sesión anterior' },
   { value: 'hoy', label: 'Hoy' },
@@ -103,6 +116,17 @@ export default function AdminMovimientosPage() {
   const [customDesde, setCustomDesde] = useState('');
   const [customHasta, setCustomHasta] = useState('');
   const [page, setPage] = useState(1);
+  // Buscador libre (observación, categoría, cuenta, usuario, monto exacto).
+  // Debounced para no disparar una query por tecla.
+  const [busqueda, setBusqueda] = useState('');
+  const [busquedaDebounced, setBusquedaDebounced] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setBusquedaDebounced(busqueda.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [busqueda]);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -121,7 +145,11 @@ export default function AdminMovimientosPage() {
       const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
       if (tipoFiltro) params.set('tipo', tipoFiltro);
       if (cuentaFiltro) params.set('cuentaId', cuentaFiltro);
-      if (periodo === 'sesion') {
+      if (busquedaDebounced) params.set('q', busquedaDebounced);
+      if (periodo === 'todo') {
+        // Sin ventana temporal: el server barre toda la base y pagina.
+        params.set('periodo', 'todo');
+      } else if (periodo === 'sesion') {
         params.set('sesion', 'actual');
       } else if (periodo === 'sesion_anterior') {
         params.set('sesion', 'anterior');
@@ -145,7 +173,7 @@ export default function AdminMovimientosPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, tipoFiltro, cuentaFiltro, periodo, customDesde, customHasta]);
+  }, [page, tipoFiltro, cuentaFiltro, periodo, customDesde, customHasta, busquedaDebounced]);
 
   // Mantener URL en sync con el filtro (para que se pueda compartir el link)
   function setCuentaFiltroSync(id: string) {
@@ -224,8 +252,37 @@ export default function AdminMovimientosPage() {
 
       {/* Filtros */}
       <section className="card p-3 space-y-3">
+        {/* Buscador libre */}
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="search"
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            placeholder="🔎 Buscar: descripción, categoría, cuenta, quién cargó, monto…"
+            className="input flex-1 min-w-[240px]"
+          />
+          {(busqueda || periodo !== 'sesion') && (
+            <button
+              onClick={() => {
+                setBusqueda('');
+                setPeriodo('sesion');
+                setPage(1);
+              }}
+              className="px-3 py-1.5 rounded-md text-xs font-medium bg-cream-200 text-ink-700 hover:bg-cream-300 transition-colors"
+            >
+              Limpiar
+            </button>
+          )}
+          {data && (
+            <span className="text-2xs text-ink-500 tabular-nums ml-auto">
+              {loading ? 'buscando…' : `${data.total} resultado${data.total === 1 ? '' : 's'}`}
+              {periodo === 'todo' && !loading && data.total > 0 && ' · base completa'}
+            </span>
+          )}
+        </div>
+
         {/* Período */}
-        <div className="flex flex-wrap gap-2 items-center">
+        <div className="flex flex-wrap gap-2 items-center border-t border-cream-200 pt-3">
           {PERIODOS.map((p) => (
             <button
               key={p.value}
@@ -553,28 +610,17 @@ export default function AdminMovimientosPage() {
         />
       )}
 
-      {totalPages > 1 && (
-        <nav className="flex items-center justify-center gap-2 text-sm">
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={page === 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-          >
-            ← Anterior
-          </Button>
-          <span className="text-ink-500 mx-2">
-            Página {page} de {totalPages}
-          </span>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={page === totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-          >
-            Siguiente →
-          </Button>
-        </nav>
+      {data && (
+        <div className="card overflow-hidden">
+          <Paginacion
+            page={page}
+            totalPages={totalPages}
+            total={data.total}
+            pageSize={PAGE_SIZE}
+            onPage={setPage}
+            loading={loading}
+          />
+        </div>
       )}
 
       {showForm && (

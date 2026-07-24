@@ -62,10 +62,10 @@ const PCORIGEN =
 
 /** Comanderas donde puede salir la comanda del encargo. */
 type DestinoImpresion = 'MOSTRADOR' | 'DELIVERY' | 'COCINA';
-const DESTINOS_IMPRESION: Array<{ valor: DestinoImpresion; label: string }> = [
-  { valor: 'MOSTRADOR', label: '🧾 Mostrador' },
-  { valor: 'DELIVERY', label: '🛵 Delivery' },
-  { valor: 'COCINA', label: '🍳 Cocina' },
+const DESTINOS_IMPRESION: Array<{ valor: DestinoImpresion; label: string; icono: string }> = [
+  { valor: 'MOSTRADOR', label: 'Mostrador', icono: '🧾' },
+  { valor: 'DELIVERY', label: 'Delivery', icono: '🛵' },
+  { valor: 'COCINA', label: 'Cocina', icono: '🍳' },
 ];
 /** Cada PC recuerda su comandera: la del fondo no imprime en el mostrador. */
 const DESTINO_KEY = 'sta-encargos-destino';
@@ -108,6 +108,20 @@ function NuevoEncargoInner() {
     setDestinoImpresion(d);
     localStorage.setItem(DESTINO_KEY, d);
   }
+
+  // Nombres editables de las comanderas (los pone el admin en configuración).
+  // Si el fetch falla, quedan los labels por defecto — no bloquea la carga.
+  const [nombresComandera, setNombresComandera] = useState<Record<string, string>>({});
+  useEffect(() => {
+    api
+      .get<{ destinos: Array<{ destino: string; nombre: string | null }> }>('/impresion/destinos')
+      .then((r) => {
+        const m: Record<string, string> = {};
+        for (const d of r.destinos ?? []) if (d.nombre) m[d.destino] = d.nombre;
+        setNombresComandera(m);
+      })
+      .catch(() => {});
+  }, []);
 
   // Campos del encargo (todos obligatorios salvo indicaciones/observaciones).
   const [fechaEntrega, setFechaEntrega] = useState(isoMasDias(hoy, 1));
@@ -559,7 +573,7 @@ function NuevoEncargoInner() {
                           : 'bg-white text-wood-700 border-wood-300 hover:bg-wood-50',
                       )}
                     >
-                      {d.label}
+                      {d.icono} {nombresComandera[d.valor] ?? d.label}
                     </button>
                   ))}
                 </div>

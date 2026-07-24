@@ -1,11 +1,16 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { KpiCard } from '@/components/admin/KpiCard';
 import { ReimprimirModal } from '@/components/admin/ReimprimirModal';
 import { VentaDetalleModal } from '@/components/admin/VentaDetalleModal';
+import {
+  useBusquedaPaginada,
+  BuscadorFiltros,
+  Paginacion,
+} from '@/components/admin/BusquedaTabla';
 import { cn } from '@/lib/cn';
 
 // Todas las fechas/horas se muestran en horario de Argentina, independiente de
@@ -220,8 +225,21 @@ export default function VentasPage() {
   const [detalle, setDetalle] = useState<{ titulo: string; ventas: VentaRow[] } | null>(null);
   // Modal de anulaciones (motivo + quién + cuándo).
   const [verAnuladas, setVerAnuladas] = useState(false);
-  // Filtro por repartidor (client-side, por bucket) — acota la tabla de abajo.
+  // Filtro por repartidor (bucket). Va al SERVER junto con la búsqueda.
   const [repartidor, setRepartidor] = useState<string>('');
+
+  // Buscador paginado de la tabla de abajo. Independiente del período de los
+  // recuadros de arriba: los KPIs no se tocan (decisión del dueño).
+  const paramsTabla = useMemo<Record<string, string>>(() => {
+    const p: Record<string, string> = {};
+    if (repartidor) p.bucket = repartidor;
+    return p;
+  }, [repartidor]);
+  const tabla = useBusquedaPaginada<VentaRow>({
+    endpoint: '/admin/ventas/buscar',
+    extraerItems: (res) => (res as { ventas?: VentaRow[] }).ventas ?? [],
+    paramsExtra: paramsTabla,
+  });
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -284,13 +302,12 @@ export default function VentasPage() {
   // Abre el modal de detalle con las ventas que caen en un recuadro.
   const abrirDetalle = (titulo: string, filtro: (v: VentaRow) => boolean) =>
     setDetalle({ titulo, ventas: data.ventas.filter(filtro) });
-  // La tabla de abajo respeta el filtro por repartidor (bucket), client-side.
-  const ventasTabla = repartidor
-    ? data.ventas.filter((v) => v.bucket === repartidor)
-    : data.ventas;
-  // Total de la tabla filtrada por repartidor (filtro client-side sobre las
-  // ≤200 ventas cargadas). Sin filtro, el footer usa data.kpis (el total real
-  // del período, que puede superar las 200 cargadas).
+  // La tabla ahora se sirve del buscador paginado (server-side): recorre TODA
+  // la base de a 12. El filtro por repartidor también va al server — filtrarlo
+  // en el cliente solo acotaría la página actual, no el resultado real.
+  const ventasTabla = tabla.items;
+  // Suma de la página visible. NO es el total del período (eso lo dan los KPIs
+  // de arriba): con paginación solo podemos sumar lo que trajimos.
   const ventasTablaTotal = ventasTabla.reduce((a, v) => a + Number(v.total), 0);
 
   return (
@@ -437,24 +454,13 @@ export default function VentasPage() {
               </option>
             ))}
           </select>
-          <select
-            value={repartidor}
-            onChange={(e) => setRepartidor(e.target.value)}
-            className="input text-xs py-1 w-auto"
-            title="Filtra la lista de ventas de abajo por repartidor"
-          >
-            {REPARTIDORES.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
-          {(metodo || canal || repartidor) && (
+          {/* El filtro por repartidor se movió al buscador de la tabla (abajo):
+              ahora acota server-side, no solo la página cargada. */}
+          {(metodo || canal) && (
             <button
               onClick={() => {
                 setMetodo('');
                 setCanal('');
-                setRepartidor('');
               }}
               className="text-xs text-teresita-700 hover:underline"
             >
@@ -698,20 +704,56 @@ export default function VentasPage() {
         />
       )}
 
+      {/* Buscador de la TABLA. Deliberadamente independiente de los recuadros
+          de arriba: los KPIs y el efectivo en caja siguen respondiendo al
+          período de la pantalla, no a esta búsqueda. */}
+      <BuscadorFiltros
+        q={tabla.q}
+        onQ={tabla.setQ}
+        periodo={tabla.periodo}
+        onPeriodo={tabla.setPeriodo}
+        desde={tabla.desde}
+        onDesde={tabla.setDesde}
+        hasta={tabla.hasta}
+        onHasta={tabla.setHasta}
+        placeholder="🔎 Buscar venta: N° de venta o comanda, cliente, teléfono, total…"
+        total={tabla.meta.total}
+        loading={tabla.loading}
+        onLimpiar={() => {
+          tabla.limpiar();
+          setRepartidor('');
+        }}
+        hayFiltro={tabla.hayFiltro || !!repartidor}
+      >
+        <select
+          value={repartidor}
+          onChange={(e) => setRepartidor(e.target.value)}
+          className="input w-auto"
+        >
+          {REPARTIDORES.map((r) => (
+            <option key={r.value} value={r.value}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+      </BuscadorFiltros>
+
       {/* Listado de ventas */}
       <section className="card overflow-hidden">
         <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken flex items-center justify-between">
           <h2 className="font-display text-md text-ink-900">
-            Ventas del período ({ventasTabla.length}
+            Ventas ({tabla.meta.total}
             {repartidor ? ` · ${BUCKET_LABEL[repartidor] ?? repartidor}` : ''})
           </h2>
           <span className="text-2xs text-ink-500">
-            {data.ventas.length === 200 ? 'mostrando últimas 200' : 'todas'}
+            {tabla.periodo === 'todo' ? 'toda la base' : 'período filtrado'}
           </span>
         </header>
         {ventasTabla.length === 0 ? (
           <div className="px-4 py-8 text-center text-ink-500 text-sm">
-            Sin ventas en el período seleccionado.
+            {tabla.hayFiltro || repartidor
+              ? 'Ninguna venta coincide con la búsqueda.'
+              : 'Sin ventas registradas.'}
           </div>
         ) : (
           <>
@@ -802,16 +844,20 @@ export default function VentasPage() {
                 );
               })}
             </tbody>
-            {totalCobradoNum > 0 && (
+            {ventasTabla.length > 0 && (
               <tfoot className="border-t-2 border-cream-300 bg-surface-sunken">
                 <tr>
+                  {/* Subtotal de la PÁGINA visible. Con paginación server-side
+                      no podemos sumar todo el resultado sin traerlo entero; el
+                      total del período lo dan los recuadros de arriba. */}
                   <td colSpan={8} className="px-4 py-3 font-medium text-ink-700">
-                    TOTAL · {repartidor ? ventasTabla.length : data.kpis.cantidadVentas} ventas
+                    Subtotal de esta página · {ventasTabla.length} venta
+                    {ventasTabla.length === 1 ? '' : 's'}
                     {repartidor ? ` · ${BUCKET_LABEL[repartidor] ?? repartidor}` : ''}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <MoneyAmount
-                      value={repartidor ? ventasTablaTotal : data.kpis.totalCobrado}
+                      value={ventasTablaTotal}
                       className="font-mono text-md text-teresita-700 font-bold"
                     />
                   </td>
@@ -884,6 +930,14 @@ export default function VentasPage() {
           </div>
           </>
         )}
+        <Paginacion
+          page={tabla.meta.page}
+          totalPages={tabla.meta.totalPages}
+          total={tabla.meta.total}
+          pageSize={tabla.meta.pageSize}
+          onPage={tabla.setPage}
+          loading={tabla.loading}
+        />
       </section>
     </div>
   );

@@ -1,10 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { api, ApiError } from '@/lib/api';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { cn } from '@/lib/cn';
+import {
+  useBusquedaPaginada,
+  BuscadorFiltros,
+  Paginacion,
+} from '@/components/admin/BusquedaTabla';
 
 interface FacturaRow {
   id: string;
@@ -38,27 +42,15 @@ const estadoBadgeMap: Record<string, { label: string; cls: string }> = {
 
 export default function FacturasInboxPage() {
   const [filtro, setFiltro] = useState('PENDIENTE_VALIDACION');
-  const [facturas, setFacturas] = useState<FacturaRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  const cargar = useCallback(async (estado: string) => {
-    setLoading(true);
-    try {
-      const q = estado ? `?estado=${estado}` : '';
-      const res = await api.get<{ facturas: FacturaRow[] }>(`/admin/facturas${q}`);
-      setFacturas(res.facturas);
-      setError(null);
-    } catch (e) {
-      if (!(e instanceof ApiError) || e.status !== 401) setError('No se pudieron cargar las facturas');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Objeto estable: si se recreara en cada render, el hook refetchearía en loop.
+  const paramsExtra = useMemo(() => ({ estado: filtro }), [filtro]);
 
-  useEffect(() => {
-    void cargar(filtro);
-  }, [filtro, cargar]);
+  const b = useBusquedaPaginada<FacturaRow>({
+    endpoint: '/admin/facturas',
+    extraerItems: (res) => (res as { facturas?: FacturaRow[] }).facturas ?? [],
+    paramsExtra,
+  });
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
@@ -67,33 +59,50 @@ export default function FacturasInboxPage() {
         <p className="text-sm text-ink-500">Compras a proveedores. Las cargadas por OCR esperan tu validación.</p>
       </header>
 
-      <div className="flex gap-1 flex-wrap">
-        {FILTROS.map((f) => (
-          <button
-            key={f.key}
-            onClick={() => setFiltro(f.key)}
-            className={cn(
-              'text-sm px-3 py-1.5 rounded-md transition-colors',
-              filtro === f.key ? 'bg-teresita-600 text-white' : 'bg-cream-100 text-ink-600 hover:bg-cream-200',
-            )}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
+      <BuscadorFiltros
+        q={b.q}
+        onQ={b.setQ}
+        periodo={b.periodo}
+        onPeriodo={b.setPeriodo}
+        desde={b.desde}
+        onDesde={b.setDesde}
+        hasta={b.hasta}
+        onHasta={b.setHasta}
+        placeholder="🔎 Buscar: nº de factura, punto de venta, proveedor, total…"
+        total={b.meta.total}
+        loading={b.loading}
+        onLimpiar={b.limpiar}
+        hayFiltro={b.hayFiltro}
+      >
+        <select
+          value={filtro}
+          onChange={(e) => setFiltro(e.target.value)}
+          className="input w-auto"
+        >
+          {FILTROS.map((f) => (
+            <option key={f.key} value={f.key}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+      </BuscadorFiltros>
 
-      {error && <p className="text-pomodoro-600 text-sm">{error}</p>}
+      {b.error && <p className="text-pomodoro-600 text-sm">{b.error}</p>}
 
-      {loading ? (
+      {b.loading && b.items.length === 0 ? (
         <p className="text-ink-500 text-sm p-4">Cargando…</p>
-      ) : facturas.length === 0 ? (
+      ) : b.items.length === 0 ? (
         <div className="card p-8 text-center text-ink-500">
-          {filtro === 'PENDIENTE_VALIDACION' ? '✅ No hay facturas pendientes de validar.' : 'No hay facturas en este estado.'}
+          {b.hayFiltro
+            ? 'Ninguna factura coincide con la búsqueda.'
+            : filtro === 'PENDIENTE_VALIDACION'
+              ? '✅ No hay facturas pendientes de validar.'
+              : 'No hay facturas en este estado.'}
         </div>
       ) : (
         <section className="card overflow-hidden">
           <ul className="divide-y divide-cream-200">
-            {facturas.map((f) => {
+            {b.items.map((f) => {
               const badge = estadoBadgeMap[f.estado] ?? { label: f.estado, cls: 'bg-cream-200 text-ink-500' };
               const esOcr = f.origen === 'TELEGRAM_OCR' || f.origen === 'PROGRAMA_FOTO';
               return (
@@ -118,6 +127,14 @@ export default function FacturasInboxPage() {
               );
             })}
           </ul>
+          <Paginacion
+            page={b.meta.page}
+            totalPages={b.meta.totalPages}
+            total={b.meta.total}
+            pageSize={b.meta.pageSize}
+            onPage={b.setPage}
+            loading={b.loading}
+          />
         </section>
       )}
     </div>

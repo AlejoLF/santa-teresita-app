@@ -22,6 +22,9 @@ const destinoConfigSchema = z.object({
   canales: z.array(z.enum(CANALES_ENRUTABLES)).optional(),
   // ¿Esta comandera imprime los tickets de ENCARGO? (panel dedicado).
   encargos: z.boolean().optional(),
+  // Nombre visible editable. Solo presentación — el ruteo usa la key del
+  // destino, así que renombrar no puede romper a dónde sale cada ticket.
+  nombre: z.string().trim().max(40).optional(),
 });
 
 /**
@@ -276,6 +279,25 @@ export default async function impresionRoutes(fastify: FastifyInstance) {
     { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
     async () => {
       return getConfigImpresion();
+    },
+  );
+
+  // GET /impresion/destinos — SOLO los nombres visibles de las comanderas, para
+  // cualquier usuario logueado. El cajero necesita ver "la de adelante" en el
+  // selector de encargos, pero la config completa es admin-only (tiene hosts y
+  // puertos de la LAN). Por eso este endpoint devuelve nombre + activa y nada más.
+  fastify.get(
+    '/impresion/destinos',
+    { preHandler: fastify.requireAuth() },
+    async () => {
+      const cfg = await getConfigImpresion();
+      return {
+        destinos: (['MOSTRADOR', 'DELIVERY', 'COCINA'] as const).map((d) => ({
+          destino: d,
+          nombre: cfg[d]?.nombre?.trim() || null,
+          activa: cfg[d]?.activa ?? true,
+        })),
+      };
     },
   );
 

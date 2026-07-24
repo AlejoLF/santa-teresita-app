@@ -71,7 +71,10 @@ export default function EncargosPage() {
     const t = setTimeout(async () => {
       try {
         const res = await api.get<{ encargos: EncargoListItem[] }>(
-          `/encargos/buscar?q=${encodeURIComponent(q)}&entrega=${entregaFiltro}`,
+          // pageSize alto a propósito: esta vista del cajero NO tiene paginado
+          // (muestra la lista completa de una). El paginado de a 12 es del
+          // buscador de admin.
+          `/encargos/buscar?q=${encodeURIComponent(q)}&entrega=${entregaFiltro}&pageSize=100`,
         );
         setSearchResults(res.encargos ?? []);
       } catch {

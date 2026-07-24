@@ -16,6 +16,8 @@ interface ConfigImpresora {
   canales: string[];
   /** ¿Esta comandera imprime los tickets de ENCARGO? (panel dedicado). */
   encargos?: boolean;
+  /** Nombre visible editable. Vacío = se usa el título por defecto. */
+  nombre?: string;
 }
 
 type ConfigPrinters = Record<Destino, ConfigImpresora>;
@@ -259,12 +261,22 @@ export default function ImpresorasConfigPage() {
               className={cn('card p-4 space-y-3 border-t-4', ribbonClass)}
             >
               <header>
-                <div className="flex items-center justify-between">
-                  <h3 className="font-display text-md text-ink-900">
-                    <span className="mr-1">{meta.icon}</span>
-                    {meta.titulo}
-                  </h3>
-                  <label className="flex items-center gap-1 cursor-pointer text-2xs">
+                <div className="flex items-center justify-between gap-2">
+                  {/* Nombre editable: la encargada las llama por dónde están
+                      ("la de adelante"), no por el número. Vacío = default. */}
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <span>{meta.icon}</span>
+                    <input
+                      type="text"
+                      value={cfg.nombre ?? ''}
+                      onChange={(e) => setField(d, { nombre: e.target.value })}
+                      placeholder={meta.titulo}
+                      maxLength={40}
+                      title="Nombre de la comandera (editable)"
+                      className="font-display text-md text-ink-900 bg-transparent border-b border-dashed border-cream-300 focus:border-teresita-700 focus:outline-none flex-1 min-w-0 py-0.5"
+                    />
+                  </div>
+                  <label className="flex items-center gap-1 cursor-pointer text-2xs shrink-0">
                     <input
                       type="checkbox"
                       checked={cfg.activa}

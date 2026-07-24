@@ -1042,6 +1042,13 @@ export interface PrinterDestinoConfig {
   width: number;
   activa: boolean;
   /**
+   * Nombre visible de la comandera, editable por el admin ("Comandera 1",
+   * "La de adelante", "Cocina fondo"…). Si está vacío, la UI cae al label por
+   * defecto del destino. Es SOLO presentación: el ruteo sigue usando la key
+   * del destino (MOSTRADOR/DELIVERY/COCINA), que no cambia nunca.
+   */
+  nombre?: string;
+  /**
    * Canales cuyos pedidos imprimen su COMANDA en esta comandera. Configurable
    * por el admin (matriz comandera × canal): la encargada elige DÓNDE y CUÁLES
    * tickets salen. COCINA además se limita a pedidos con cocción (ver

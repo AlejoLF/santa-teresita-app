@@ -735,6 +735,7 @@ function buildMovimientosListado(state: DemoState, search: URLSearchParams) {
     total,
     page,
     pageSize,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
     sumas: {
       ingresos: ingresos.toString(),
       egresos: egresos.toString(),
@@ -1436,7 +1437,28 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
           itemsCount: e.items?.length ?? 0,
         };
       });
-    return ok({ encargos });
+    // Paginado (el buscador de admin pide de a 12; el del cajero manda 100).
+    const pageEnc = Number(search.get('page') ?? '1');
+    const pageSizeEnc = Number(search.get('pageSize') ?? '12');
+    const totalEnc = encargos.length;
+    return ok({
+      encargos: encargos.slice((pageEnc - 1) * pageSizeEnc, pageEnc * pageSizeEnc),
+      total: totalEnc,
+      page: pageEnc,
+      pageSize: pageSizeEnc,
+      totalPages: Math.max(1, Math.ceil(totalEnc / pageSizeEnc)),
+    });
+  }
+  // Nombres visibles de las comanderas (editables por el admin).
+  if (p === '/impresion/destinos' && method === 'GET') {
+    const cfg = state.impresorasConfig ?? {};
+    return ok({
+      destinos: (['MOSTRADOR', 'DELIVERY', 'COCINA'] as const).map((d) => ({
+        destino: d,
+        nombre: (cfg as Record<string, { nombre?: string }>)[d]?.nombre ?? null,
+        activa: true,
+      })),
+    });
   }
   // Marcar / desmarcar retiro (no toca la caja ni el estado de cobro).
   m = p.match(/^\/encargos\/([^/]+)\/retirar$/);
@@ -1529,6 +1551,31 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
   if (p === '/admin/dashboard' && method === 'GET') return ok(buildDashboard(state));
   if (p === '/admin/ventas-por-hora' && method === 'GET') return ok(ventasPorHora());
   if (p === '/admin/estadisticas' && method === 'GET') return ok(buildEstadisticas(state, search));
+  // Buscador paginado de la tabla de ventas (independiente de ventas-analisis,
+  // que sirve los KPIs de arriba).
+  if (p === '/admin/ventas/buscar' && method === 'GET') {
+    const texto = (search.get('q') ?? '').trim().toLowerCase();
+    const bucket = search.get('bucket');
+    const analisis = buildVentasAnalisis(state, search);
+    let filas = analisis.ventas;
+    if (bucket) filas = filas.filter((v) => v.bucket === bucket);
+    if (texto) {
+      filas = filas.filter((v) =>
+        [v.numero, v.numeroOrdenTurno, v.cliente, v.canal, v.total].some((c) =>
+          (c ?? '').toString().toLowerCase().includes(texto),
+        ),
+      );
+    }
+    const pageV = Number(search.get('page') ?? '1');
+    const pageSizeV = Number(search.get('pageSize') ?? '12');
+    return ok({
+      ventas: filas.slice((pageV - 1) * pageSizeV, pageV * pageSizeV),
+      total: filas.length,
+      page: pageV,
+      pageSize: pageSizeV,
+      totalPages: Math.max(1, Math.ceil(filas.length / pageSizeV)),
+    });
+  }
   if (p === '/admin/ventas-analisis' && method === 'GET') return ok(buildVentasAnalisis(state, search));
 
   // ─── Admin: cuentas ─────────────────────────────────────────────────
@@ -1547,6 +1594,36 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
   }
   if (p === '/admin/configuracion/posnets' && method === 'POST') return ok({ id: 'pos-new' });
   if (p.startsWith('/admin/configuracion/posnets/') && method === 'PATCH') return ok({});
+
+  // ─── Admin: facturas recibidas (inbox con buscador paginado) ───────
+  if (p === '/admin/facturas' && method === 'GET') {
+    const estado = search.get('estado');
+    const texto = (search.get('q') ?? '').trim().toLowerCase();
+    const base = [
+      { id: 'fac-1', numero: '00012345', puntoVenta: '0001', tipoComprobante: 'FACTURA_A', total: '145000', estado: 'PENDIENTE_VALIDACION', origen: 'TELEGRAM_OCR', ocrConfianza: '0.92', proveedor: { id: 'prov-1', nombre: 'Frigorífico La Plata' }, itemsCount: 4 },
+      { id: 'fac-2', numero: '00098765', puntoVenta: '0003', tipoComprobante: 'FACTURA_B', total: '86300', estado: 'PENDIENTE_PAGO', origen: 'MANUAL', ocrConfianza: null, proveedor: { id: 'prov-2', nombre: 'Molino Tres Arroyos' }, itemsCount: 2 },
+      { id: 'fac-3', numero: '00044321', puntoVenta: '0001', tipoComprobante: 'FACTURA_A', total: '52000', estado: 'PAGADA', origen: 'MANUAL', ocrConfianza: null, proveedor: { id: 'prov-3', nombre: 'Lácteos del Sur' }, itemsCount: 6 },
+    ].map((f, i) => ({ ...f, fechaEmision: addDays(-(i + 1)), creadoAt: addDays(-(i + 1)) }));
+
+    const filtradas = base
+      .filter((f) => (estado ? f.estado === estado : true))
+      .filter((f) =>
+        !texto
+          ? true
+          : [f.numero, f.puntoVenta, f.proveedor.nombre, f.total].some((c) =>
+              (c ?? '').toString().toLowerCase().includes(texto),
+            ),
+      );
+    const pageF = Number(search.get('page') ?? '1');
+    const pageSizeF = Number(search.get('pageSize') ?? '12');
+    return ok({
+      facturas: filtradas.slice((pageF - 1) * pageSizeF, pageF * pageSizeF),
+      total: filtradas.length,
+      page: pageF,
+      pageSize: pageSizeF,
+      totalPages: Math.max(1, Math.ceil(filtradas.length / pageSizeF)),
+    });
+  }
 
   // ─── Admin: movimientos ────────────────────────────────────────────
   if (p === '/admin/movimientos' && method === 'GET') {

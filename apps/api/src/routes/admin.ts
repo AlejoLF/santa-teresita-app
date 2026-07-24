@@ -28,6 +28,15 @@ import {
   getOrCreateSesionActual,
   FueraDeHorarioError,
 } from '../services/sesion-caja.js';
+import {
+  periodoBusquedaSchema,
+  paginacionSchema,
+  resolverFiltroTemporal,
+  whereRangoFecha,
+  esBusquedaNumerica,
+  armarPaginacion,
+  type PeriodoBusqueda,
+} from '../services/filtro-temporal.js';
 
 /**
  * Filtro `where` para búsqueda de productos por texto libre. Matchea cualquiera
@@ -971,8 +980,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           tipo: z.enum(['INGRESO', 'EGRESO', 'TRANSFERENCIA_INTERNA', 'AJUSTE']).optional(),
           categoriaId: z.string().uuid().optional(),
           cuentaId: z.string().uuid().optional(),
-          // `sesion=actual|anterior` filtra por sesión de caja. Tiene prioridad
-          // sobre desde/hasta (es un filtro por sesión, no por fecha).
+          // Búsqueda libre: observación, categoría, cuenta origen/destino,
+          // usuario y monto exacto.
+          q: z.string().trim().min(1).max(80).optional(),
+          // Filtro temporal unificado (ver services/filtro-temporal.ts). Default
+          // 'todo' = TODA la base; la paginación es la que acota.
+          periodo: periodoBusquedaSchema.optional(),
+          // LEGACY: `sesion=actual|anterior`. Se mantiene para no romper
+          // llamadores viejos; se mapea a periodo sesion_actual/sesion_anterior.
           sesion: z.enum(['actual', 'anterior']).optional(),
           desde: z.string().datetime().optional(),
           hasta: z.string().datetime().optional(),
@@ -986,6 +1001,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         tipo?: 'INGRESO' | 'EGRESO' | 'TRANSFERENCIA_INTERNA' | 'AJUSTE';
         categoriaId?: string;
         cuentaId?: string;
+        q?: string;
+        periodo?: PeriodoBusqueda;
         sesion?: 'actual' | 'anterior';
         desde?: string;
         hasta?: string;
@@ -993,38 +1010,57 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         pageSize: number;
       };
 
-      // "Sesión actual": resolvemos la sesión de caja abierta y filtramos por su
-      // id (no por fecha — un movimiento cuenta para el turno por su
-      // `sesionCajaId`, ver invariante en CLAUDE.md). Si no hay sesión abierta,
-      // forzamos un id imposible para que el listado salga vacío.
-      let sesionCajaId: string | undefined;
-      if (q.sesion === 'actual') {
-        const abierta = await prisma.sesionCaja.findFirst({
-          where: { estado: EstadoSesionCaja.ABIERTA },
-          orderBy: { horarioApertura: 'desc' },
-          select: { id: true },
-        });
-        sesionCajaId = abierta?.id ?? '00000000-0000-0000-0000-000000000000';
-      } else if (q.sesion === 'anterior') {
-        const { sesion } = await getSesionAnteriorReadOnly();
-        sesionCajaId = sesion?.id ?? '00000000-0000-0000-0000-000000000000';
-      }
+      // Filtro temporal unificado. El `sesion` legacy se mapea a periodo; si no
+      // vino ninguno pero sí desde/hasta, es un rango custom; sin nada = 'todo'
+      // (toda la base). Filtrar por sesión usa `sesionCajaId`, NO un rango de
+      // fechas: un movimiento cuenta para el turno por su sesión (invariante
+      // en CLAUDE.md), y por fecha darían números distintos al cierre de caja.
+      const periodoEfectivo: PeriodoBusqueda =
+        q.periodo ??
+        (q.sesion === 'actual'
+          ? 'sesion_actual'
+          : q.sesion === 'anterior'
+            ? 'sesion_anterior'
+            : q.desde || q.hasta
+              ? 'custom'
+              : 'todo');
+      const ft = await resolverFiltroTemporal({
+        periodo: periodoEfectivo,
+        desde: q.desde,
+        hasta: q.hasta,
+      });
+
+      // Búsqueda libre multi-campo (convención del repo: buscar por TODOS los
+      // campos visibles de la fila, no solo la descripción).
+      const texto = q.q?.trim();
+      const orBusqueda = texto
+        ? [
+            { observacion: { contains: texto, mode: 'insensitive' as const } },
+            { categoria: { nombre: { contains: texto, mode: 'insensitive' as const } } },
+            { cuentaOrigen: { nombre: { contains: texto, mode: 'insensitive' as const } } },
+            { cuentaDestino: { nombre: { contains: texto, mode: 'insensitive' as const } } },
+            { usuario: { nombre: { contains: texto, mode: 'insensitive' as const } } },
+            ...(esBusquedaNumerica(texto) ? [{ monto: texto }] : []),
+          ]
+        : null;
 
       const where = {
         ...(q.tipo && { tipo: q.tipo }),
         ...(q.categoriaId && { categoriaId: q.categoriaId }),
-        ...(sesionCajaId && { sesionCajaId }),
-        ...(q.cuentaId && {
-          OR: [{ cuentaOrigenId: q.cuentaId }, { cuentaDestinoId: q.cuentaId }],
+        ...(ft.sesionCajaId && { sesionCajaId: ft.sesionCajaId }),
+        // El rango por fecha solo aplica cuando NO se filtró por sesión.
+        ...whereRangoFecha('fechaComputo', ft),
+        // `cuentaId` y la búsqueda son dos OR independientes → van con AND para
+        // que no se mezclen (si los pusiéramos como un solo OR, buscar texto
+        // ignoraría el filtro de cuenta).
+        ...((q.cuentaId || orBusqueda) && {
+          AND: [
+            ...(q.cuentaId
+              ? [{ OR: [{ cuentaOrigenId: q.cuentaId }, { cuentaDestinoId: q.cuentaId }] }]
+              : []),
+            ...(orBusqueda ? [{ OR: orBusqueda }] : []),
+          ],
         }),
-        // El filtro por fecha solo aplica cuando NO se filtró por sesión actual.
-        ...(!sesionCajaId &&
-          (q.desde || q.hasta) && {
-            fechaComputo: {
-              ...(q.desde && { gte: new Date(q.desde) }),
-              ...(q.hasta && { lte: new Date(q.hasta) }),
-            },
-          }),
       };
       const [movimientos, total, sumas] = await Promise.all([
         prisma.movimiento.findMany({
@@ -1113,9 +1149,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               (empleadoMap.get(m.entidadId) ?? proveedorMap.get(m.entidadId))) ??
             null,
         })),
-        total,
-        page: q.page,
-        pageSize: q.pageSize,
+        ...armarPaginacion(total, q.page, q.pageSize),
         sumas: {
           ingresos: totalIngresos.toFixed(2),
           egresos: totalEgresos.toFixed(2),
@@ -2693,6 +2727,214 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   // ──────────────────────────────────────────────────────────────────────
   //   VENTAS — análisis dedicado (lo que rinde el día/semana/mes/custom)
   // ──────────────────────────────────────────────────────────────────────
+
+  // GET /admin/ventas/buscar — buscador PAGINADO sobre TODAS las ventas.
+  // Aparte de ventas-analisis a propósito: ese endpoint calcula KPIs del
+  // período y corta el listado en 200; este sirve la tabla, que necesita
+  // recorrer la base entera de a páginas. Mezclarlos obligaría a recalcular
+  // todos los KPIs en cada cambio de página.
+  fastify.get(
+    '/admin/ventas/buscar',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        querystring: z.object({
+          // Busca por nº de venta, nº de comanda del turno, cliente (cargado o
+          // snapshot de delivery), teléfono, canal y total exacto.
+          q: z.string().trim().min(1).max(80).optional(),
+          periodo: periodoBusquedaSchema.optional(),
+          desde: z.string().datetime().optional(),
+          hasta: z.string().datetime().optional(),
+          sesionId: z.string().uuid().optional(),
+          metodo: z.string().optional(),
+          canal: z.string().optional(),
+          // Repartidor/bucket. Se filtra en el SERVER (no client-side) porque
+          // con paginación filtrar en el cliente solo acotaría la página actual.
+          bucket: z
+            .enum(['mostrador', 'delivery_propio', 'deliverate', 'plataforma'])
+            .optional(),
+          // Por defecto solo FINALIZADA (lo que la tabla muestra hoy).
+          estado: z.enum(['FINALIZADA', 'ANULADA', 'PROCESADA', 'TODAS']).default('FINALIZADA'),
+          ...paginacionSchema,
+        }),
+      },
+    },
+    async (req) => {
+      const q = req.query as {
+        q?: string;
+        periodo?: PeriodoBusqueda;
+        desde?: string;
+        hasta?: string;
+        sesionId?: string;
+        metodo?: string;
+        canal?: string;
+        bucket?: 'mostrador' | 'delivery_propio' | 'deliverate' | 'plataforma';
+        estado: 'FINALIZADA' | 'ANULADA' | 'PROCESADA' | 'TODAS';
+        page: number;
+        pageSize: number;
+      };
+
+      // Traducción del bucket a condiciones sobre (canal, modalidad). Espeja
+      // `clasificarCanalBucket` — si esa función cambia, actualizar acá.
+      const CANALES_PLATAFORMA = ['RAPPI', 'PEDIDOS_YA', 'MERCADO_LIBRE'] as const;
+      const CANALES_MIXTOS = ['TELEFONO', 'WHATSAPP', 'WEB'] as const;
+      const whereBucket = (() => {
+        switch (q.bucket) {
+          case undefined:
+            return {};
+          case 'deliverate':
+            // DELIVERATE es modalidad (tipo de entrega); el canal viejo se
+            // mantiene por compatibilidad con ventas históricas.
+            return {
+              OR: [
+                { modalidad: 'DELIVERY_DELIVERATE' as never },
+                { canal: 'DELIVERATE' as never },
+              ],
+            };
+          case 'plataforma':
+            return {
+              canal: { in: CANALES_PLATAFORMA as unknown as never[] },
+              modalidad: { not: 'DELIVERY_DELIVERATE' as never },
+            };
+          case 'delivery_propio':
+            return {
+              canal: { in: CANALES_MIXTOS as unknown as never[] },
+              modalidad: 'DELIVERY_PROPIO' as never,
+            };
+          case 'mostrador':
+            // Mostrador = el canal MOSTRADOR, más los canales mixtos que NO
+            // salieron como delivery propio (ej. take-away avisado por tel).
+            return {
+              modalidad: { not: 'DELIVERY_DELIVERATE' as never },
+              OR: [
+                { canal: 'MOSTRADOR' as never },
+                {
+                  canal: { in: CANALES_MIXTOS as unknown as never[] },
+                  modalidad: { not: 'DELIVERY_PROPIO' as never },
+                },
+              ],
+            };
+        }
+      })();
+
+      const ft = await resolverFiltroTemporal({
+        periodo: q.periodo,
+        desde: q.desde,
+        hasta: q.hasta,
+        sesionId: q.sesionId,
+      });
+
+      const texto = q.q?.trim();
+      const numero = texto && /^\d+$/.test(texto) ? Number(texto) : null;
+
+      // El filtro de bucket y la búsqueda por texto usan cada uno su propio OR;
+      // van dentro de AND para que no se pisen entre sí (un solo OR mezclaría
+      // ambos criterios y el bucket dejaría de acotar).
+      const orTexto = texto
+        ? [
+            ...(numero !== null
+              ? [{ numero }, { numeroOrdenTurno: numero }]
+              : []),
+            ...(esBusquedaNumerica(texto) ? [{ total: texto }] : []),
+            { cliente: { nombre: { contains: texto, mode: 'insensitive' as const } } },
+            { cliente: { apellido: { contains: texto, mode: 'insensitive' as const } } },
+            { cliente: { telefono: { contains: texto, mode: 'insensitive' as const } } },
+            // Cliente de delivery: vive en el snapshot JSON, no en la relación.
+            {
+              deliveryInfo: {
+                is: {
+                  direccionSnapshot: {
+                    path: ['clienteNombre'],
+                    string_contains: texto,
+                  },
+                },
+              },
+            },
+            {
+              deliveryInfo: {
+                is: {
+                  direccionSnapshot: {
+                    path: ['clienteTelefono'],
+                    string_contains: texto,
+                  },
+                },
+              },
+            },
+          ]
+        : null;
+
+      const where = {
+        ...(q.estado !== 'TODAS' && { estado: q.estado as never }),
+        ...(q.canal && { canal: q.canal as never }),
+        ...(ft.sesionCajaId && { sesionCajaId: ft.sesionCajaId }),
+        // Las ventas se ordenan/filtran por fechaFinalizacion (cuándo se cerró
+        // la venta), igual que el listado de ventas-analisis.
+        ...whereRangoFecha('fechaFinalizacion', ft),
+        ...(q.metodo && {
+          pagos: { some: { estado: 'CONFIRMADO' as never, metodo: q.metodo as never } },
+        }),
+        ...((q.bucket || orTexto) && {
+          AND: [
+            ...(q.bucket ? [whereBucket] : []),
+            ...(orTexto ? [{ OR: orTexto }] : []),
+          ],
+        }),
+      };
+
+      const [ventas, total] = await Promise.all([
+        prisma.venta.findMany({
+          where,
+          select: {
+            id: true,
+            numero: true,
+            numeroOrdenTurno: true,
+            canal: true,
+            modalidad: true,
+            estado: true,
+            fechaFinalizacion: true,
+            fechaApertura: true,
+            total: true,
+            descuentoTotal: true,
+            cliente: { select: { nombre: true, apellido: true } },
+            deliveryInfo: { select: { direccionSnapshot: true } },
+            pagos: { where: { estado: 'CONFIRMADO' }, select: { metodo: true } },
+          },
+          orderBy: { fechaApertura: 'desc' },
+          skip: (q.page - 1) * q.pageSize,
+          take: q.pageSize,
+        }),
+        prisma.venta.count({ where }),
+      ]);
+
+      return {
+        // Misma forma de fila que ventas-analisis.ventas[] — la tabla del front
+        // renderiza ambas con el mismo componente.
+        ventas: ventas.map((v) => {
+          const snap = (v.deliveryInfo?.direccionSnapshot as Record<string, unknown> | null) ?? {};
+          const nombreSnap =
+            typeof snap.clienteNombre === 'string' ? snap.clienteNombre.trim() : '';
+          const nombreCliente = v.cliente
+            ? `${v.cliente.nombre}${v.cliente.apellido ? ' ' + v.cliente.apellido : ''}`.trim()
+            : '';
+          return {
+            id: v.id,
+            numero: v.numero,
+            numeroOrdenTurno: v.numeroOrdenTurno,
+            canal: v.canal,
+            modalidad: v.modalidad,
+            estado: v.estado,
+            bucket: clasificarCanalBucket(v.canal, v.modalidad),
+            fecha: v.fechaFinalizacion ?? v.fechaApertura,
+            cliente: nombreSnap || nombreCliente || null,
+            total: v.total.toString(),
+            descuento: v.descuentoTotal.toString(),
+            metodos: v.pagos.map((p) => p.metodo),
+          };
+        }),
+        ...armarPaginacion(total, q.page, q.pageSize),
+      };
+    },
+  );
 
   // GET /admin/ventas-analisis — KPIs + desglose por método + canal + listado.
   fastify.get(

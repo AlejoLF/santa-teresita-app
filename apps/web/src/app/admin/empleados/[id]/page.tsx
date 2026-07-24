@@ -179,10 +179,27 @@ export default function EmpleadoDetallePage({
 
       {/* Historial */}
       <section className="card overflow-hidden">
-        <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken">
+        {/* Los botones van ACÁ arriba, no al pie: con un historial largo
+            quedaban fuera de la pantalla y la encargada no los encontraba. */}
+        <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken flex items-center justify-between gap-3 flex-wrap">
           <h2 className="font-display text-md text-ink-900">
             Historial de pagos ({data.movimientos.length})
           </h2>
+          <div className="flex gap-2 flex-wrap">
+            {(['Sueldo', 'Adelanto', 'Comisión', 'Otro'] as const).map((et) => (
+              <Button
+                key={et}
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setTipoConcepto(et);
+                  setShowPagar(true);
+                }}
+              >
+                + {et === 'Sueldo' ? 'Pago de sueldo' : et}
+              </Button>
+            ))}
+          </div>
         </header>
         {data.movimientos.length === 0 ? (
           <div className="px-4 py-8 text-center text-ink-500 text-sm">
@@ -337,22 +354,6 @@ export default function EmpleadoDetallePage({
         />
       )}
 
-      {/* Acceso rápido para cargar distintos conceptos */}
-      <div className="flex gap-2 pt-2">
-        {(['Sueldo', 'Adelanto', 'Comisión', 'Otro'] as const).map((et) => (
-          <Button
-            key={et}
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              setTipoConcepto(et);
-              setShowPagar(true);
-            }}
-          >
-            + {et === 'Sueldo' ? 'Pago de sueldo' : et}
-          </Button>
-        ))}
-      </div>
     </div>
   );
 }
