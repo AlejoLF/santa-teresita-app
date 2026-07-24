@@ -14,6 +14,7 @@ import {
   selectSubtotal,
   subtotalItem,
   type CartItem,
+  type CartPromo,
   type ModificadorAplicado,
   type BorradorPedido,
 } from '@/stores/cart';
@@ -25,6 +26,28 @@ interface Categoria {
   icono?: string | null;
   tipos: TipoProducto[];
 }
+
+/** Promo/combo disponible ahora (el server ya filtró por día + turno). */
+interface PromoDisponible {
+  id: string;
+  nombre: string;
+  precioCombo: string;
+  precioSuelto: string;
+  descuento: string;
+  descuentoPct: number;
+  observaciones: string | null;
+  componentes: Array<{
+    productoId: string;
+    nombre: string;
+    codigo: string | null;
+    cantidad: string;
+    etiqueta: string | null;
+  }>;
+}
+
+// Valor centinela para la "categoría" de Promos en las solapas del catálogo.
+// No es una categoría real de la DB — activa la grilla de promos.
+const PROMOS_CAT = '__promos__';
 interface TipoProducto {
   id: string;
   nombre: string;
@@ -143,7 +166,11 @@ export default function CargarPedidoPage() {
   // null = mostrar todas las sub-categorías.
   const [tipoActivo, setTipoActivo] = useState<string | null>(null);
   const [productos, setProductos] = useState<Producto[]>([]);
+  // Promos/combos DISPONIBLES hoy (el server ya filtró por día + turno).
+  const [promos, setPromos] = useState<PromoDisponible[]>([]);
   const [categoriaActiva, setCategoriaActiva] = useState<string | null>(null);
+  // Promo elegida → abre el modal de cantidad + aclaración.
+  const [promoSeleccionada, setPromoSeleccionada] = useState<PromoDisponible | null>(null);
   const [search, setSearch] = useState('');
   const [productoSeleccionado, setProductoSeleccionado] = useState<{
     producto: Producto;
@@ -486,13 +513,13 @@ export default function CargarPedidoPage() {
     })();
   }, [ventaAbiertaId]);
 
-  // Cuando se agrega el primer item, desactivamos el flag de "carrito vacío forzado"
-  // para que el comportamiento normal vuelva.
+  // Cuando se agrega el primer item o promo, desactivamos el flag de "carrito
+  // vacío forzado" para que el comportamiento normal vuelva.
   useEffect(() => {
-    if (cart.items.length > 0 && forzarCarritoVacio) {
+    if ((cart.items.length > 0 || cart.promos.length > 0) && forzarCarritoVacio) {
       setForzarCarritoVacio(false);
     }
-  }, [cart.items.length, forzarCarritoVacio]);
+  }, [cart.items.length, cart.promos.length, forzarCarritoVacio]);
 
   // Cargar contexto inicial
   useEffect(() => {
@@ -503,15 +530,21 @@ export default function CargarPedidoPage() {
         // (secuencial); ahora todo va junto. Si el prefetch post-login hizo
         // su trabajo, productos sale del cache (TTL 5min). Sino, sale en
         // paralelo con los otros 2 calls.
-        const [me, cats, prods] = await Promise.all([
+        const [me, cats, prods, proms] = await Promise.all([
           api.getCached<{ usuario: { nombre: string; rol: string } }>('/auth/me', 5 * 60_000),
           api.getCached<{ categorias: Categoria[] }>('/catalogo/categorias', 5 * 60_000),
           api.getCached<{ productos: Producto[] }>(
             '/catalogo/productos?limit=2000',
             5 * 60_000,
           ),
+          // TTL corto: la temporalidad depende del turno, que puede cambiar
+          // durante la jornada. 60s de propagación es aceptable.
+          api
+            .getCached<{ promos: PromoDisponible[] }>('/catalogo/promos', 60_000)
+            .catch(() => ({ promos: [] as PromoDisponible[] })),
         ]);
         setUsuario(me.usuario);
+        setPromos(proms.promos ?? []);
         const ordenadas = [...cats.categorias].sort((a, b) =>
           a.nombre.localeCompare(b.nombre, 'es'),
         );
@@ -781,7 +814,7 @@ export default function CargarPedidoPage() {
 
   // Modo de envío: 'enviar' (queda en lista) | 'cobrar' (va directo a método de pago) | 'nuevo' (envía y limpia para cargar otro)
   async function procesarPedido(modo: 'enviar' | 'cobrar' | 'nuevo') {
-    if (cart.items.length === 0 || enviando) return;
+    if ((cart.items.length === 0 && cart.promos.length === 0) || enviando) return;
     // Items por peso con la casilla vacía (cantidad 0): no se puede enviar
     // hasta tipear el peso real. Ver cantidadInicial().
     const sinPeso = cart.items.filter((i) => i.cantidad <= 0);
@@ -801,9 +834,18 @@ export default function CargarPedidoPage() {
       parteDeComboId: i.parteDeComboId,
       parteDeComboInstancia: i.parteDeComboInstancia,
     }));
+    // Promos: el server las desarma en productos + reparte el precio.
+    const promosPayload = cart.promos.map((p) => ({
+      comboId: p.comboId,
+      cantidad: p.cantidad,
+      observacion: p.observacion,
+    }));
     try {
       if (ventaAbiertaId) {
-        await api.post(`/ventas/${ventaAbiertaId}/items`, { items: itemsPayload });
+        await api.post(`/ventas/${ventaAbiertaId}/items`, {
+          items: itemsPayload,
+          promos: promosPayload,
+        });
         cart.vaciar();
         if (modo === 'cobrar') {
           router.push(`/venta/${ventaAbiertaId}?cobrar=1`);
@@ -828,6 +870,7 @@ export default function CargarPedidoPage() {
         // cliente todavía está armando imprima en cocina antes de tiempo.
         enviarACocina: modo !== 'cobrar',
         items: itemsPayload,
+        promos: promosPayload,
         // Datos de cliente cuando es delivery — viajan a deliveryInfo y a la comanda.
         ...(esDelivery && cart.clienteNombre.trim() && { clienteNombre: cart.clienteNombre.trim() }),
         ...(esDelivery && cart.clienteTelefono.trim() && { clienteTelefono: cart.clienteTelefono.trim() }),
@@ -986,6 +1029,21 @@ export default function CargarPedidoPage() {
                     {c.icono} {c.nombre}
                   </button>
                 ))}
+                {/* Solapa de PROMOS: solo aparece si hay promos disponibles
+                    para el día/turno actual (el server ya filtró). */}
+                {promos.length > 0 && (
+                  <button
+                    onClick={() => setCategoriaActiva(PROMOS_CAT)}
+                    className={cn(
+                      'px-3 py-1.5 rounded-md text-sm font-semibold transition-colors duration-fast focus:ring-2 focus:ring-saffron-600/40 focus:outline-none',
+                      categoriaActiva === PROMOS_CAT
+                        ? 'bg-saffron-600 text-white'
+                        : 'bg-saffron-100 text-saffron-700 hover:bg-saffron-200',
+                    )}
+                  >
+                    🎁 Promos ({promos.length})
+                  </button>
+                )}
               </nav>
 
               {/* Sub-categorías (TipoProducto) — solo si la categoría tiene 2+ tipos.
@@ -1077,7 +1135,46 @@ export default function CargarPedidoPage() {
             </>
           )}
 
-          {/* Productos */}
+          {/* Grilla de PROMOS (cuando está activa esa solapa y no hay búsqueda) */}
+          {categoriaActiva === PROMOS_CAT && !search ? (
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
+              {promos.map((promo) => (
+                <button
+                  key={promo.id}
+                  onClick={() => setPromoSeleccionada(promo)}
+                  className="card p-3 min-h-28 flex flex-col items-start text-left border-l-4 border-saffron-600 hover:shadow-md transition-shadow duration-fast active:scale-[0.98] focus:ring-2 focus:ring-saffron-600/40 focus:outline-none"
+                >
+                  <div className="flex items-center gap-1 mb-1">
+                    <span className="text-2xs">🎁</span>
+                    {promo.descuentoPct > 0 && (
+                      <span className="text-2xs font-bold text-basil-600">
+                        -{promo.descuentoPct}%
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-sm font-semibold text-ink-900 line-clamp-2 leading-tight">
+                    {promo.nombre}
+                  </span>
+                  <span className="text-2xs text-ink-500 mt-0.5 line-clamp-2 leading-snug">
+                    {promo.componentes
+                      .map((c) => `${Number(c.cantidad)}× ${c.nombre}`)
+                      .join(' · ')}
+                  </span>
+                  <span className="mt-auto pt-1 flex items-baseline gap-1.5">
+                    <span className="text-md font-mono text-saffron-700 font-bold">
+                      ${Number(promo.precioCombo).toLocaleString('es-AR')}
+                    </span>
+                    {Number(promo.descuento) > 0 && (
+                      <span className="text-2xs text-ink-400 line-through">
+                        ${Number(promo.precioSuelto).toLocaleString('es-AR')}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+          /* Productos */
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
             {productosVisibles.map((p, idx) => (
               <button
@@ -1124,6 +1221,7 @@ export default function CargarPedidoPage() {
               </div>
             )}
           </div>
+          )}
         </section>
 
         {/* Columna derecha:
@@ -1131,7 +1229,7 @@ export default function CargarPedidoPage() {
             - Carrito vacío + se clickeó "Pedido nuevo" → muestra carrito vacío con prompt
             - Hay items en carrito → muestra carrito normal
             - Modo agregar a venta abierta → muestra carrito de "agregando" */}
-        {cart.items.length === 0 && !ventaAbiertaId && !forzarCarritoVacio ? (
+        {cart.items.length === 0 && cart.promos.length === 0 && !ventaAbiertaId && !forzarCarritoVacio ? (
           <aside className="card flex flex-col lg:overflow-hidden">
             {cart.borradores.length > 0 && (
               <BorradoresPanel
@@ -1179,7 +1277,7 @@ export default function CargarPedidoPage() {
             </header>
 
             <div className="overflow-y-auto px-3 py-2 max-h-[55vh] lg:max-h-none lg:flex-1">
-              {cart.items.length === 0 ? (
+              {cart.items.length === 0 && cart.promos.length === 0 ? (
                 <div className="flex flex-col items-center justify-center lg:h-full text-center px-4 py-12">
                   <div className="text-4xl mb-3">🍝</div>
                   <p className="text-sm font-medium text-ink-700 mb-1">Listo para empezar</p>
@@ -1189,7 +1287,12 @@ export default function CargarPedidoPage() {
                   </p>
                 </div>
               ) : (
-                renderCartGrouped(cart.items)
+                <>
+                  {cart.promos.map((promo) => (
+                    <CartPromoRow key={promo.uid} promo={promo} />
+                  ))}
+                  {renderCartGrouped(cart.items)}
+                </>
               )}
             </div>
 
@@ -1514,6 +1617,29 @@ export default function CargarPedidoPage() {
             for (const it of items) cart.agregar(it);
             setSalsaModal(null);
             // Volver el foco a la barra de búsqueda
+            setTimeout(() => searchInputRef.current?.focus(), 50);
+          }}
+        />
+      )}
+
+      {/* Modal de PROMO: cantidad + aclaración → al carrito */}
+      {promoSeleccionada && (
+        <PromoModal
+          promo={promoSeleccionada}
+          onClose={() => setPromoSeleccionada(null)}
+          onConfirm={(cantidad, observacion) => {
+            cart.agregarPromo({
+              comboId: promoSeleccionada.id,
+              nombre: promoSeleccionada.nombre,
+              cantidad,
+              observacion: observacion || undefined,
+              precioCombo: Number(promoSeleccionada.precioCombo),
+              componentes: promoSeleccionada.componentes.map((c) => ({
+                nombre: c.nombre,
+                cantidad: c.cantidad,
+              })),
+            });
+            setPromoSeleccionada(null);
             setTimeout(() => searchInputRef.current?.focus(), 50);
           }}
         />
@@ -3214,6 +3340,155 @@ function SalsaModal({ tipo, porcionesIncluidas, nombrePasta, onClose, onConfirm 
           </Button>
           <Button onClick={confirmar} disabled={usadas === 0}>
             Agregar (Enter)
+          </Button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   PROMOS: fila del carrito + modal de cantidad/aclaración
+// ────────────────────────────────────────────────────────────────────────
+
+/** Fila del carrito para una promo: nombre, componentes, cantidad, aclaración. */
+function CartPromoRow({ promo }: { promo: CartPromo }) {
+  const editarPromo = useCart((s) => s.editarPromo);
+  const removerPromo = useCart((s) => s.removerPromo);
+  const total = promo.precioCombo * promo.cantidad;
+  return (
+    <div className="border-l-4 border-saffron-600 bg-saffron-50/50 my-2 rounded-r-md px-3 py-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-ink-900 flex items-center gap-1">
+            🎁 {promo.nombre}
+            <span className="text-2xs font-bold text-saffron-700 uppercase">(promo)</span>
+          </div>
+          <div className="text-2xs text-ink-500 leading-snug">
+            {promo.componentes.map((c) => `${Number(c.cantidad)}× ${c.nombre}`).join(' · ')}
+          </div>
+        </div>
+        <button
+          onClick={() => removerPromo(promo.uid)}
+          className="text-pomodoro-600 text-lg leading-none shrink-0"
+          title="Quitar promo"
+        >
+          ×
+        </button>
+      </div>
+      <div className="flex items-center justify-between mt-1.5">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => editarPromo(promo.uid, { cantidad: Math.max(1, promo.cantidad - 1) })}
+            className="w-7 h-7 rounded-md bg-cream-200 text-ink-700 font-bold hover:bg-cream-300"
+          >
+            −
+          </button>
+          <span className="w-6 text-center font-mono text-sm">{promo.cantidad}</span>
+          <button
+            onClick={() => editarPromo(promo.uid, { cantidad: promo.cantidad + 1 })}
+            className="w-7 h-7 rounded-md bg-cream-200 text-ink-700 font-bold hover:bg-cream-300"
+          >
+            +
+          </button>
+        </div>
+        <span className="font-mono text-md text-saffron-700 font-bold">
+          ${total.toLocaleString('es-AR')}
+        </span>
+      </div>
+      {/* Aclaración editable (misma UX que la observación de un item). */}
+      <ObservacionEditable
+        observacion={promo.observacion ?? ''}
+        onSave={(nueva) => editarPromo(promo.uid, { observacion: nueva || undefined })}
+      />
+    </div>
+  );
+}
+
+/** Modal para elegir cantidad de promos + una aclaración antes de agregar. */
+function PromoModal({
+  promo,
+  onClose,
+  onConfirm,
+}: {
+  promo: PromoDisponible;
+  onClose: () => void;
+  onConfirm: (cantidad: number, observacion: string) => void;
+}) {
+  const [cantidad, setCantidad] = useState(1);
+  const [observacion, setObservacion] = useState('');
+  return (
+    <div className="fixed inset-0 bg-ink-900/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="card w-full max-w-md shadow-modal" onClick={(e) => e.stopPropagation()}>
+        <header className="px-5 py-4 border-b border-cream-300 flex items-center justify-between">
+          <h2 className="font-display text-md text-ink-900 flex items-center gap-1.5">
+            🎁 {promo.nombre}
+          </h2>
+          <button onClick={onClose} className="text-ink-500 hover:text-ink-900 text-xl leading-none">
+            ✕
+          </button>
+        </header>
+        <div className="px-5 py-4 space-y-3">
+          <div className="text-xs text-ink-600 bg-cream-100 rounded-md px-3 py-2">
+            {promo.componentes.map((c) => `${Number(c.cantidad)}× ${c.nombre}`).join(' · ')}
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-lg font-mono text-saffron-700 font-bold">
+              ${Number(promo.precioCombo).toLocaleString('es-AR')}
+            </span>
+            {Number(promo.descuento) > 0 && (
+              <>
+                <span className="text-sm text-ink-400 line-through">
+                  ${Number(promo.precioSuelto).toLocaleString('es-AR')}
+                </span>
+                <span className="text-2xs font-bold text-basil-600">
+                  ahorra ${Number(promo.descuento).toLocaleString('es-AR')}
+                </span>
+              </>
+            )}
+          </div>
+
+          <div>
+            <label className="text-2xs uppercase tracking-wide text-ink-500">Cantidad</label>
+            <div className="flex items-center gap-3 mt-1">
+              <button
+                onClick={() => setCantidad((c) => Math.max(1, c - 1))}
+                className="w-10 h-10 rounded-md bg-cream-200 text-ink-700 text-lg font-bold hover:bg-cream-300"
+              >
+                −
+              </button>
+              <span className="w-10 text-center font-mono text-lg">{cantidad}</span>
+              <button
+                onClick={() => setCantidad((c) => c + 1)}
+                className="w-10 h-10 rounded-md bg-cream-200 text-ink-700 text-lg font-bold hover:bg-cream-300"
+              >
+                +
+              </button>
+              <span className="ml-auto font-mono text-md text-ink-900">
+                Total: ${(Number(promo.precioCombo) * cantidad).toLocaleString('es-AR')}
+              </span>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-2xs uppercase tracking-wide text-ink-500">
+              Aclaración (opcional)
+            </label>
+            <textarea
+              value={observacion}
+              onChange={(e) => setObservacion(e.target.value)}
+              placeholder="Ej: sin sal, para las 21hs…"
+              rows={2}
+              className="input mt-1 resize-none"
+            />
+          </div>
+        </div>
+        <footer className="px-5 py-4 border-t border-cream-300 flex gap-2">
+          <Button variant="ghost" onClick={onClose} className="flex-1">
+            Cancelar
+          </Button>
+          <Button onClick={() => onConfirm(cantidad, observacion.trim())} className="flex-1">
+            Agregar {cantidad > 1 ? `${cantidad} promos` : 'promo'}
           </Button>
         </footer>
       </div>

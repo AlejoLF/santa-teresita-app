@@ -15,6 +15,108 @@ import { recordAudit } from './audit.js';
 import { encolarComandasParaVenta, ventaYaEnviadaACocina } from './impresion.js';
 
 /**
+ * Desarma promos/combos en ItemVentas componentes, calculando el precio EN EL
+ * SERVER (nunca del cliente). El precio del combo se reparte proporcional al
+ * precio suelto de cada componente; la última línea absorbe el redondeo para
+ * que la suma dé EXACTO precioCombo × cantidad. Cada línea queda tagueada con
+ * parteDeComboId + una `instancia` por promo → cuenta como producto individual
+ * "(en promo)" y el ticket la agrupa.
+ *
+ * Lo usan crearVenta y agregarItemsAVenta (mismo comportamiento en ambos).
+ */
+async function expandirPromosAItems(args: {
+  promos: Array<{ comboId: string; cantidad: number; observacion?: string }>;
+  listaId: string;
+  ajustePct: number;
+  ordenInicial: number;
+}): Promise<{
+  items: Prisma.ItemVentaCreateWithoutVentaInput[];
+  subtotal: number;
+  tieneCocina: boolean;
+}> {
+  const { promos, listaId, ajustePct } = args;
+  if (promos.length === 0) return { items: [], subtotal: 0, tieneCocina: false };
+
+  const comboIds = [...new Set(promos.map((p) => p.comboId))];
+  const combos = await prisma.combo.findMany({
+    where: { id: { in: comboIds }, activo: true },
+    include: {
+      componentes: {
+        orderBy: { orden: 'asc' },
+        include: {
+          producto: {
+            include: { tipoProducto: true, preciosPorLista: { where: { listaId }, take: 1 } },
+          },
+        },
+      },
+    },
+  });
+  const comboMap = new Map(combos.map((c) => [c.id, c]));
+
+  const items: Prisma.ItemVentaCreateWithoutVentaInput[] = [];
+  let subtotal = 0;
+  let tieneCocina = false;
+  let orden = args.ordenInicial;
+
+  for (const promo of promos) {
+    const combo = comboMap.get(promo.comboId);
+    if (!combo) throw new Error(`Combo ${promo.comboId} no existe o está inactivo`);
+    const comps = combo.componentes.filter((c) => c.producto);
+    if (comps.length === 0) throw new Error(`Combo ${combo.nombre} no tiene productos`);
+
+    const Q = promo.cantidad;
+    const totalCombo = Math.round(Number(combo.precioCombo) * Q * 100) / 100;
+    const instancia = crypto.randomUUID();
+
+    const sueltos = comps.map((c) => {
+      const prod = c.producto!;
+      const precioOverride = prod.preciosPorLista[0]?.precioEfectivo;
+      const precioLista = precioOverride
+        ? Number(precioOverride)
+        : Number(prod.precioBase) * (1 + ajustePct / 100);
+      return precioLista * Number(c.cantidad);
+    });
+    const sueltoTotal = sueltos.reduce((a, b) => a + b, 0);
+
+    let acumulado = 0;
+    comps.forEach((comp, i) => {
+      const prod = comp.producto!;
+      const totalUnits = Number(comp.cantidad) * Q;
+      let share: number;
+      if (i === comps.length - 1) {
+        share = Math.round((totalCombo - acumulado) * 100) / 100;
+      } else {
+        const prop = sueltoTotal > 0 ? sueltos[i]! / sueltoTotal : 1 / comps.length;
+        share = Math.round(totalCombo * prop * 100) / 100;
+        acumulado += share;
+      }
+      const precioUnit = totalUnits > 0 ? Math.round((share / totalUnits) * 100) / 100 : 0;
+      const cocinaInterviene = prod.cocinaIntervieneOverride ?? prod.tipoProducto.cocinaInterviene;
+      if (cocinaInterviene) tieneCocina = true;
+      subtotal += share;
+      items.push({
+        producto: { connect: { id: prod.id } },
+        nombreSnapshot: prod.nombre,
+        cantidad: String(totalUnits),
+        unidad: prod.formaVenta as DbFormaVenta,
+        precioUnitario: precioUnit.toFixed(2),
+        modificadoresAplicados: [] as never,
+        deltaModificadores: '0',
+        subtotal: share.toFixed(2),
+        totalLinea: share.toFixed(2),
+        observacion: promo.observacion ?? null,
+        orden: orden++,
+        cocinaInterviene,
+        combo: { connect: { id: combo.id } },
+        parteDeComboInstancia: instancia,
+      });
+    });
+  }
+
+  return { items, subtotal, tieneCocina };
+}
+
+/**
  * Crea una venta en estado PROCESADA, con items snapshot del precio.
  *
  * - Resuelve la lista de precios según canal
@@ -119,6 +221,18 @@ export async function crearVenta(args: {
       parteDeComboInstancia: item.parteDeComboInstancia ?? null,
     });
   }
+
+  // ── PROMOS / COMBOS ─────────────────────────────────────────────────────
+  // Cada promo se DESARMA en el server (nunca se confía el precio del cliente).
+  const promoExp = await expandirPromosAItems({
+    promos: data.promos ?? [],
+    listaId: lista.id,
+    ajustePct,
+    ordenInicial: data.items.length,
+  });
+  itemsToCreate.push(...promoExp.items);
+  subtotalVenta += promoExp.subtotal;
+  if (promoExp.tieneCocina) tieneCocina = true;
 
   // Todo en una transacción atómica: crear venta + items + audit log + delivery
   // info. Si cualquiera falla, la venta no queda persistida (no más estados
@@ -298,9 +412,11 @@ export async function listarVentasDeSesionActual(sesionId: string) {
 export async function agregarItemsAVenta(args: {
   ventaId: string;
   items: ItemNuevo[];
+  promos?: Array<{ comboId: string; cantidad: number; observacion?: string }>;
   usuarioId: string;
 }) {
   const { ventaId, items } = args;
+  const promos = args.promos ?? [];
   const venta = await prisma.venta.findUnique({
     where: { id: ventaId },
     include: { listaPrecios: true, items: true },
@@ -373,6 +489,17 @@ export async function agregarItemsAVenta(args: {
       parteDeComboInstancia: item.parteDeComboInstancia ?? null,
     });
   }
+
+  // Promos agregadas a la venta abierta (mismo desarme server-side que al crear).
+  const promoExp = await expandirPromosAItems({
+    promos,
+    listaId: venta.listaPreciosId,
+    ajustePct,
+    ordenInicial: ordenInicial + items.length,
+  });
+  itemsToCreate.push(...promoExp.items);
+  subtotalAdicional += promoExp.subtotal;
+  if (promoExp.tieneCocina) tieneCocinaNuevo = true;
 
   const subtotalNuevo = Number(venta.subtotal) + subtotalAdicional;
   const totalNuevo = subtotalNuevo - Number(venta.descuentoTotal) + Number(venta.recargoCanal);

@@ -136,6 +136,8 @@ export async function crearVentaCanal(orden: OrdenCanal): Promise<ResultadoOrden
           clienteTelefono: orden.cliente?.telefono,
           direccionEntrega: orden.entrega?.direccion,
           indicacionesEntrega: orden.entrega?.indicaciones,
+          // Las plataformas mandan items sueltos, no promos del catálogo interno.
+          promos: [],
           items: orden.items.map((it) => ({
             productoId: porCodigo.get(it.codigo) as string,
             cantidad: it.cantidad,

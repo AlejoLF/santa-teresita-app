@@ -573,11 +573,15 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
         : Prisma.empty;
 
       // Top productos del período — SIN LIMIT. El front pagina/colapsa.
+      // `cantidad` incluye TODO (sueltos + promos); `cantidad_en_promo` es
+      // cuánto de eso se vendió dentro de una promo, para el desglose que pidió
+      // el dueño: "Empanadas — 56 (10 en promo)".
       const top = await prisma.$queryRaw<
         Array<{
           producto_id: string;
           nombre: string;
           cantidad: string;
+          cantidad_en_promo: string;
           monto: string;
           ocurrencias: number;
         }>
@@ -586,6 +590,7 @@ export default async function analyticsRoutes(fastify: FastifyInstance) {
           i.producto_id::text,
           i.nombre_snapshot AS nombre,
           SUM(i.cantidad)::text AS cantidad,
+          COALESCE(SUM(i.cantidad) FILTER (WHERE i.parte_de_combo_id IS NOT NULL), 0)::text AS cantidad_en_promo,
           SUM(i.total_linea)::text AS monto,
           COUNT(DISTINCT i.venta_id)::int AS ocurrencias
         FROM items_venta i

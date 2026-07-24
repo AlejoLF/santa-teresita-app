@@ -392,12 +392,29 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       preHandler: fastify.requireAuth(),
       schema: {
         params: z.object({ id: z.string().uuid() }),
-        body: z.object({ items: z.array(ItemNuevoSchema).min(1) }),
+        body: z.object({
+          items: z.array(ItemNuevoSchema).default([]),
+          // Promos agregadas a la venta abierta (el server las desarma).
+          promos: z
+            .array(
+              z.object({
+                comboId: z.string().uuid(),
+                cantidad: z.number().int().positive(),
+                observacion: z.string().max(500).optional(),
+              }),
+            )
+            .default([]),
+        }).refine((b) => b.items.length > 0 || b.promos.length > 0, {
+          message: 'Se requiere al menos un item o una promo',
+        }),
       },
     },
     async (req, reply) => {
       const params = req.params as { id: string };
-      const body = req.body as { items: Array<z.infer<typeof ItemNuevoSchema>> };
+      const body = req.body as {
+        items: Array<z.infer<typeof ItemNuevoSchema>>;
+        promos: Array<{ comboId: string; cantidad: number; observacion?: string }>;
+      };
 
       const venta = await prisma.venta.findUnique({ where: { id: params.id } });
       if (!venta) return reply.code(404).send({ error: 'Venta no encontrada' });
@@ -413,6 +430,7 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       const updated = await agregarItemsAVenta({
         ventaId: venta.id,
         items: body.items,
+        promos: body.promos,
         usuarioId: req.usuario!.id,
       });
 

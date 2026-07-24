@@ -66,6 +66,18 @@ export const VentaNuevaSchema = z.object({
   clienteId: z.string().uuid().optional(),
   observaciones: z.string().max(500).optional(),
   items: z.array(ItemNuevoSchema).default([]),
+  // PROMOS/COMBOS: el cliente manda solo el combo + cantidad + aclaración. El
+  // SERVIDOR desarma cada promo en sus productos (ItemVenta) y reparte el
+  // precio del combo — nunca se confía el precio del cliente (ver venta.ts).
+  promos: z
+    .array(
+      z.object({
+        comboId: z.string().uuid(),
+        cantidad: z.number().int().positive(),
+        observacion: z.string().max(500).optional(),
+      }),
+    )
+    .default([]),
   // Datos de cliente para delivery (se guardan en deliveryInfo.direccionSnapshot
   // y se imprimen en la comanda de cocina cuando la venta es delivery).
   clienteNombre: z.string().max(120).optional(),

@@ -289,7 +289,7 @@ export async function imprimirComanda(
       printer.bold(false);
     }
     if (item.parteDeCombo) {
-      printer.println(`           > [COMBO: ${item.parteDeCombo}]`);
+      printer.println(`           > (promo: ${item.parteDeCombo})`);
     }
     printer.newLine();
   }

@@ -3654,9 +3654,10 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       });
       const catById = new Map(cats.map((c) => [c.id, c]));
 
-      // Top 10 productos INDIVIDUALES (excluye los items que son parte de un combo).
-      // Así no contamina las estadísticas: si un Ravioles se vendió como parte
-      // de "Promo 2 Planchas + Salsa", no suma en el top de Ravioles individuales.
+      // Top 10 productos, contando TAMBIÉN los vendidos dentro de una promo.
+      // Decisión del dueño: un Ravioles vendido en "Promo 2 Planchas" SÍ suma al
+      // total de Ravioles; aparte se muestra cuántos fueron en promo, ej.
+      // "Ravioles — 56 (10 en promo)". Ver `promoPorProducto` abajo.
       const topProductos = await prisma.itemVenta.groupBy({
         by: ['productoId'],
         _sum: { cantidad: true, totalLinea: true },
@@ -3666,11 +3667,26 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             estado: EstadoVenta.FINALIZADA,
             fechaFinalizacion: { gte: desde, lte: ahora },
           },
-          parteDeComboId: null,
         },
         orderBy: { _sum: { totalLinea: 'desc' } },
         take: 10,
       });
+      // Cuánto de cada producto se vendió EN PROMO (para el desglose entre
+      // paréntesis). Solo items con parteDeComboId, agrupados por producto.
+      const promoPorProducto = await prisma.itemVenta.groupBy({
+        by: ['productoId'],
+        _sum: { cantidad: true },
+        where: {
+          venta: {
+            estado: EstadoVenta.FINALIZADA,
+            fechaFinalizacion: { gte: desde, lte: ahora },
+          },
+          parteDeComboId: { not: null },
+        },
+      });
+      const enPromoPorProducto = new Map(
+        promoPorProducto.map((r) => [r.productoId, Number(r._sum.cantidad ?? 0)]),
+      );
       const productos = await prisma.producto.findMany({
         where: { id: { in: topProductos.map((t) => t.productoId) } },
         select: { id: true, nombre: true, tipoProducto: { select: { categoria: { select: { nombre: true } } } } },
@@ -3818,6 +3834,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             nombre: p?.nombre ?? '?',
             categoria: p?.tipoProducto.categoria.nombre ?? '?',
             cantidad: Number(t._sum.cantidad ?? 0).toFixed(2),
+            // Cuántos de esos se vendieron dentro de una promo (desglose "(N en promo)").
+            cantidadEnPromo: (enPromoPorProducto.get(t.productoId) ?? 0).toFixed(2),
             monto: Number(t._sum.totalLinea ?? 0).toFixed(2),
             ocurrencias: t._count._all,
           };
@@ -5029,6 +5047,10 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           nombre: z.string().min(1).max(160),
           precioCombo: z.string().regex(/^\d+(\.\d{1,2})?$/),
           observaciones: z.string().max(500).optional(),
+          // Temporalidad: días (0=domingo..6=sábado) y turnos donde la promo se
+          // muestra en PEDIDOS. Vacío = siempre.
+          diasSemana: z.array(z.number().int().min(0).max(6)).optional(),
+          turnos: z.array(z.enum(['MANANA', 'TARDE'])).optional(),
           componentes: z
             .array(
               z.object({
@@ -5046,6 +5068,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         nombre: string;
         precioCombo: string;
         observaciones?: string;
+        diasSemana?: number[];
+        turnos?: Array<'MANANA' | 'TARDE'>;
         componentes: Array<{ productoId: string; cantidad: string; etiqueta?: string }>;
       };
       const combo = await prisma.combo.create({
@@ -5053,6 +5077,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           nombre: body.nombre,
           precioCombo: body.precioCombo,
           observaciones: body.observaciones ?? null,
+          diasSemana: body.diasSemana ?? [],
+          turnos: (body.turnos ?? []) as never,
           componentes: {
             create: body.componentes.map((c, idx) => ({
               tipo: 'PRODUCTO_FIJO' as const,
@@ -5087,6 +5113,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           precioCombo: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
           activo: z.boolean().optional(),
           observaciones: z.string().max(500).nullable().optional(),
+          diasSemana: z.array(z.number().int().min(0).max(6)).optional(),
+          turnos: z.array(z.enum(['MANANA', 'TARDE'])).optional(),
           componentes: z
             .array(
               z.object({
@@ -5106,6 +5134,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         precioCombo?: string;
         activo?: boolean;
         observaciones?: string | null;
+        diasSemana?: number[];
+        turnos?: Array<'MANANA' | 'TARDE'>;
         componentes?: Array<{ productoId: string; cantidad: string; etiqueta?: string }>;
       };
       const combo = await prisma.$transaction(async (tx) => {
@@ -5116,6 +5146,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             ...(body.precioCombo !== undefined && { precioCombo: body.precioCombo }),
             ...(body.activo !== undefined && { activo: body.activo }),
             ...(body.observaciones !== undefined && { observaciones: body.observaciones }),
+            ...(body.diasSemana !== undefined && { diasSemana: body.diasSemana }),
+            ...(body.turnos !== undefined && { turnos: body.turnos as never }),
           },
         });
         if (body.componentes) {

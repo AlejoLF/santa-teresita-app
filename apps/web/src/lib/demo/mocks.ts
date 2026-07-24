@@ -1180,6 +1180,42 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
 
   if (p === '/catalogo/categorias' && method === 'GET') return ok({ categorias });
   if (p === '/catalogo/productos' && method === 'GET') return ok({ productos: productosFull() });
+  // Promos disponibles ahora (en el demo mostramos 2 fijas, sin filtrar por turno).
+  if (p === '/catalogo/promos' && method === 'GET') {
+    return ok({
+      turnoActual: 'TARDE',
+      diaHoy: new Date().getDay(),
+      promos: [
+        {
+          id: 'promo-1',
+          nombre: 'Promo Ravioles + Salsa',
+          precioCombo: '9000',
+          precioSuelto: '10500',
+          descuento: '1500',
+          descuentoPct: 14.3,
+          observaciones: null,
+          componentes: [
+            { productoId: 'p-rav', nombre: 'Ravioles tradicionales', codigo: '11', cantidad: '2', etiqueta: null },
+            { productoId: 'p-sal', nombre: 'Salsa casera', codigo: '60', cantidad: '1', etiqueta: null },
+          ],
+        },
+        {
+          id: 'promo-2',
+          nombre: 'Combo Familiar',
+          precioCombo: '15000',
+          precioSuelto: '18200',
+          descuento: '3200',
+          descuentoPct: 17.6,
+          observaciones: 'Ideal para 4 personas',
+          componentes: [
+            { productoId: 'p-rav', nombre: 'Ravioles tradicionales', codigo: '11', cantidad: '3', etiqueta: null },
+            { productoId: 'p-sal', nombre: 'Salsa casera', codigo: '60', cantidad: '2', etiqueta: null },
+            { productoId: 'p-beb', nombre: 'Coca-Cola 1.5L', codigo: '80', cantidad: '1', etiqueta: null },
+          ],
+        },
+      ],
+    });
+  }
   {
     const mSalsa = p.match(/^\/catalogo\/salsa\/(SIMPLE|ESPECIAL)$/);
     if (mSalsa && method === 'GET') {
@@ -1229,9 +1265,32 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
 
   // ─── Ventas ────────────────────────────────────────────────────────
   if (p === '/ventas' && method === 'POST') {
-    const b = body as { canal: string; modalidad: string; items: any[] };
+    const b = body as { canal: string; modalidad: string; items: any[]; promos?: any[] };
     const num = Math.max(...state.ventas.map((v) => v.numero), 1000) + 1;
-    const items = b.items.map((it: any, idx: number) => {
+    // Promos (demo): las mostramos como una línea sintética "(promo)" con el
+    // precio del combo. En la API real se desarman en productos individuales.
+    const PROMOS_DEMO: Record<string, { nombre: string; precio: number }> = {
+      'promo-1': { nombre: 'Ravioles tradicionales (promo)', precio: 9000 },
+      'promo-2': { nombre: 'Combo Familiar (promo)', precio: 15000 },
+    };
+    const itemsPromo = (b.promos ?? []).map((pr: any, idx: number) => {
+      const def = PROMOS_DEMO[pr.comboId] ?? { nombre: 'Promo', precio: 0 };
+      const cant = Number(pr.cantidad || 1);
+      return {
+        id: `itp-${Date.now()}-${idx}`,
+        productoId: 'promo',
+        nombreSnapshot: def.nombre,
+        cantidad: String(cant),
+        unidad: 'UNIDAD',
+        precioUnitario: def.precio.toString(),
+        totalLinea: (def.precio * cant).toString(),
+        cocinaInterviene: false,
+        modificadoresAplicados: [],
+        observacion: pr.observacion ?? null,
+        parteDeComboInstancia: `demo-${idx}`,
+      };
+    });
+    const items = [...b.items.map((it: any, idx: number) => {
       const prod = findProducto(it.productoId);
       if (!prod) throw new Error(`Producto ${it.productoId} no existe`);
       const delta = (it.modificadores || []).reduce((a: number, mm: any) => a + Number(mm.deltaPrecio || 0), 0);
@@ -1254,7 +1313,7 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
         modificadoresAplicados: (it.modificadores || []).map((mm: any) => ({ opcionNombre: mm.opcionNombre })),
         observacion: it.observacion ?? null,
       };
-    });
+    }), ...itemsPromo];
     const nueva: VentaSeed = {
       id: `v-${Date.now()}`,
       numero: num,

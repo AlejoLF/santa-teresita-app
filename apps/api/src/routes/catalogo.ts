@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@sta/db/client';
 import { getCached } from '../lib/cache.js';
+import { getConfigHorarios, resolverSlotActivo } from '../services/horarios.js';
 
 // TTLs por endpoint. Las categorías cambian rara vez (la encargada agrega
 // una sub-categoría tal vez 1 vez al mes), pero los precios sí — TTL más
@@ -157,6 +158,99 @@ export default async function catalogoRoutes(fastify: FastifyInstance) {
       return { productos: productosConSabores };
     },
   );
+
+  // GET /catalogo/promos — combos/promos DISPONIBLES ahora en PEDIDOS.
+  //
+  // Filtra por la TEMPORALIDAD configurada: solo devuelve combos activos, en
+  // vigencia, cuyo `diasSemana` incluya el día de hoy (o esté vacío = todos) y
+  // cuyo `turnos` incluya el turno actual (o esté vacío = todos). Así el cajero
+  // ve SOLO las promos que la encargada programó para este día/turno, sin tener
+  // que activar/desactivar nada a mano.
+  //
+  // El día/turno se calculan en hora de Argentina — el .exe corre la API con
+  // TZ=America/Argentina/Buenos_Aires, así que new Date() ya es AR.
+  fastify.get('/catalogo/promos', { preHandler: fastify.requireAuth() }, async () => {
+    const ahora = new Date();
+    const diaHoy = ahora.getDay(); // 0=domingo..6=sábado (AR)
+
+    // Turno actual: si estamos en horario, el del slot; si no (carga fuera de
+    // hora), heurística por hora del día (corte 15:00) para no dejar sin turno.
+    let turnoActual: 'MANANA' | 'TARDE';
+    try {
+      const resol = resolverSlotActivo(await getConfigHorarios(), ahora);
+      turnoActual =
+        resol.tipo === 'EN_HORARIO'
+          ? (resol.slot.turno as 'MANANA' | 'TARDE')
+          : ahora.getHours() < 15
+            ? 'MANANA'
+            : 'TARDE';
+    } catch {
+      turnoActual = ahora.getHours() < 15 ? 'MANANA' : 'TARDE';
+    }
+
+    const hoyDate = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate());
+
+    const combos = await prisma.combo.findMany({
+      where: {
+        activo: true,
+        AND: [
+          { OR: [{ vigenciaDesde: null }, { vigenciaDesde: { lte: hoyDate } }] },
+          { OR: [{ vigenciaHasta: null }, { vigenciaHasta: { gte: hoyDate } }] },
+        ],
+      },
+      include: {
+        componentes: {
+          orderBy: { orden: 'asc' },
+          include: {
+            producto: {
+              select: { id: true, nombre: true, codigo: true, precioBase: true, formaVenta: true },
+            },
+          },
+        },
+      },
+      orderBy: { nombre: 'asc' },
+    });
+
+    // Filtro de día/turno en JS (hay pocos combos; array-contains en SQL sería
+    // menos legible). Array vacío = sin restricción.
+    const disponibles = combos.filter((c) => {
+      const okDia = c.diasSemana.length === 0 || c.diasSemana.includes(diaHoy);
+      const okTurno = c.turnos.length === 0 || (c.turnos as string[]).includes(turnoActual);
+      return okDia && okTurno;
+    });
+
+    const promos = disponibles.map((c) => {
+      let precioSuelto = 0;
+      const componentes = c.componentes
+        .filter((comp) => comp.producto)
+        .map((comp) => {
+          const cant = Number(comp.cantidad);
+          const precio = Number(comp.producto!.precioBase);
+          precioSuelto += cant * precio;
+          return {
+            productoId: comp.producto!.id,
+            nombre: comp.producto!.nombre,
+            codigo: comp.producto!.codigo,
+            cantidad: comp.cantidad.toString(),
+            etiqueta: comp.etiqueta,
+          };
+        });
+      const precioCombo = Number(c.precioCombo);
+      const descuento = precioSuelto - precioCombo;
+      return {
+        id: c.id,
+        nombre: c.nombre,
+        precioCombo: c.precioCombo.toString(),
+        precioSuelto: precioSuelto.toFixed(2),
+        descuento: descuento.toFixed(2),
+        descuentoPct: precioSuelto > 0 ? Number(((descuento / precioSuelto) * 100).toFixed(1)) : 0,
+        observaciones: c.observaciones,
+        componentes,
+      };
+    });
+
+    return { promos, turnoActual, diaHoy };
+  });
 
   // GET /catalogo/buscar-por-codigo/:codigo — búsqueda exacta por código (Enter en barra).
   //

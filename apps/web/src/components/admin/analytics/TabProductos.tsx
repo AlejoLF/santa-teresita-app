@@ -15,7 +15,14 @@ import { InfoTooltip } from './InfoTooltip';
 import { api } from '@/lib/api';
 
 interface ProductosData {
-  top: Array<{ producto_id: string; nombre: string; cantidad: string; monto: string; ocurrencias: number }>;
+  top: Array<{
+    producto_id: string;
+    nombre: string;
+    cantidad: string;
+    cantidad_en_promo?: string;
+    monto: string;
+    ocurrencias: number;
+  }>;
   abc: Array<{
     producto_id: string;
     nombre: string;
@@ -169,12 +176,25 @@ export function TabProductos(props: TabProps) {
             { key: 'ocurrencias', label: 'Ventas', align: 'right' },
             { key: 'monto', label: 'Total', align: 'right' },
           ]}
-          filas={topVisibles.map((p) => ({
-            nombre: p.nombre,
-            cantidad: fmtNum(Number(p.cantidad)),
-            ocurrencias: fmtNum(p.ocurrencias),
-            monto: fmtPesos(p.monto),
-          }))}
+          filas={topVisibles.map((p) => {
+            const enPromo = Number(p.cantidad_en_promo ?? 0);
+            return {
+              nombre: p.nombre,
+              // "56 (10 en promo)" cuando parte se vendió dentro de una promo.
+              cantidad: (
+                <span>
+                  {fmtNum(Number(p.cantidad))}
+                  {enPromo > 0 && (
+                    <span className="text-2xs text-saffron-700 ml-1">
+                      ({fmtNum(enPromo)} en promo)
+                    </span>
+                  )}
+                </span>
+              ),
+              ocurrencias: fmtNum(p.ocurrencias),
+              monto: fmtPesos(p.monto),
+            };
+          })}
         />
         {data.top.length > TOP_INICIALES && (
           <div className="mt-2 text-center">

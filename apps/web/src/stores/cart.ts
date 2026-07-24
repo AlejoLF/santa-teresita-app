@@ -36,9 +36,28 @@ export interface CartItem {
   parteDeComboInstancia?: string;
 }
 
+/**
+ * Una PROMO/COMBO en el carrito. El cajero elige el combo + cantidad + una
+ * aclaración; el SERVIDOR la desarma en productos y reparte el precio (ver
+ * venta.ts). Acá guardamos lo mínimo para mostrarla y cobrarla: el precio del
+ * combo (para el subtotal en pantalla) y los componentes (solo display).
+ */
+export interface CartPromo {
+  uid: string;
+  comboId: string;
+  nombre: string;
+  cantidad: number;
+  observacion?: string;
+  /** Precio del combo por unidad (lo autoritativo lo recalcula el server). */
+  precioCombo: number;
+  /** Componentes para mostrar en el carrito ("2× Empanada, 1× Gaseosa"). */
+  componentes: Array<{ nombre: string; cantidad: string }>;
+}
+
 export interface BorradorPedido {
   id: string;
   items: CartItem[];
+  promos?: CartPromo[];
   canal: CartState['canal'];
   modalidad: CartState['modalidad'];
   clienteNombre?: string;
@@ -50,6 +69,7 @@ export interface BorradorPedido {
 
 interface CartState {
   items: CartItem[];
+  promos: CartPromo[];
   canal: 'MOSTRADOR' | 'TELEFONO' | 'WHATSAPP' | 'WEB' | 'PEDIDOS_YA' | 'RAPPI' | 'MERCADO_LIBRE' | 'DELIVERATE';
   modalidad: 'TAKE_AWAY' | 'DELIVERY_PROPIO' | 'DELIVERY_PLATAFORMA' | 'DELIVERY_DELIVERATE';
   // Datos del cliente cuando es delivery — viajan al backend y a la comanda.
@@ -68,6 +88,9 @@ interface CartState {
   agregar: (item: Omit<CartItem, 'uid'>) => void;
   remover: (uid: string) => void;
   editar: (uid: string, patch: Partial<CartItem>) => void;
+  agregarPromo: (promo: Omit<CartPromo, 'uid'>) => void;
+  removerPromo: (uid: string) => void;
+  editarPromo: (uid: string, patch: Partial<CartPromo>) => void;
   vaciar: () => void;
   setCanal: (c: CartState['canal']) => void;
   setModalidad: (m: CartState['modalidad']) => void;
@@ -93,7 +116,7 @@ const MAX_BORRADORES = 10;
 
 // Versión del schema persistido. Subir cuando cambien tipos de CartItem o
 // CartState para que `migrate` pueda transformar payloads viejos.
-const CART_PERSIST_VERSION = 1;
+const CART_PERSIST_VERSION = 2;
 
 const calcSubtotal = (i: CartItem): number => {
   return Number(
@@ -111,6 +134,7 @@ export const useCart = create<CartState>()(
   persist(
     (set, get) => ({
       items: [],
+      promos: [],
       canal: 'MOSTRADOR',
       modalidad: 'TAKE_AWAY',
       clienteNombre: '',
@@ -129,9 +153,20 @@ export const useCart = create<CartState>()(
         set((s) => ({
           items: s.items.map((i) => (i.uid === uid ? { ...i, ...patch } : i)),
         })),
+      agregarPromo: (promo) =>
+        set((s) => ({
+          promos: [...s.promos, { ...promo, uid: crypto.randomUUID() }],
+        })),
+      removerPromo: (uid) =>
+        set((s) => ({ promos: s.promos.filter((p) => p.uid !== uid) })),
+      editarPromo: (uid, patch) =>
+        set((s) => ({
+          promos: s.promos.map((p) => (p.uid === uid ? { ...p, ...patch } : p)),
+        })),
       vaciar: () =>
         set({
           items: [],
+          promos: [],
           ventaId: undefined,
           numeroOrden: undefined,
           clienteNombre: '',
@@ -153,10 +188,11 @@ export const useCart = create<CartState>()(
       // Devuelve el id del borrador o null si el carrito estaba vacío.
       guardarComoBorrador: () => {
         const s = get();
-        if (s.items.length === 0) return null;
+        if (s.items.length === 0 && s.promos.length === 0) return null;
         const borrador: BorradorPedido = {
           id: crypto.randomUUID(),
           items: s.items,
+          promos: s.promos,
           canal: s.canal,
           modalidad: s.modalidad,
           clienteNombre: s.clienteNombre || undefined,
@@ -171,6 +207,7 @@ export const useCart = create<CartState>()(
         set({
           borradores: [borrador, ...s.borradores].slice(0, MAX_BORRADORES),
           items: [],
+          promos: [],
           ventaId: undefined,
           numeroOrden: undefined,
           clienteNombre: '',
@@ -187,6 +224,7 @@ export const useCart = create<CartState>()(
         if (!b) return;
         set({
           items: b.items,
+          promos: b.promos ?? [],
           canal: b.canal,
           modalidad: b.modalidad,
           clienteNombre: b.clienteNombre ?? '',
@@ -220,6 +258,11 @@ export const useCart = create<CartState>()(
               typeof s.indicacionesEntrega === 'string' ? s.indicacionesEntrega : '',
           };
         }
+        // v1 → v2: agregamos `promos` al carrito. Defaults vacíos.
+        if (version < 2 && persistedState && typeof persistedState === 'object') {
+          const s = persistedState as Record<string, unknown>;
+          return { ...s, promos: Array.isArray(s.promos) ? s.promos : [] };
+        }
         return persistedState;
       },
     },
@@ -227,5 +270,12 @@ export const useCart = create<CartState>()(
 );
 
 export function selectSubtotal(s: CartState): number {
-  return s.items.reduce((acc, i) => acc + calcSubtotal(i), 0);
+  const itemsTotal = s.items.reduce((acc, i) => acc + calcSubtotal(i), 0);
+  const promosTotal = s.promos.reduce((acc, p) => acc + p.precioCombo * p.cantidad, 0);
+  return itemsTotal + promosTotal;
+}
+
+/** Total de unidades en el carrito (items + promos), para badges/contadores. */
+export function selectCantidadTotal(s: CartState): number {
+  return s.items.length + s.promos.length;
 }

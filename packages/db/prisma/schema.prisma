@@ -502,6 +502,14 @@ model Combo {
   vigenciaDesde     DateTime?           @map("vigencia_desde") @db.Date
   vigenciaHasta     DateTime?           @map("vigencia_hasta") @db.Date
   canalesAplicables CanalListaPrecios[] @map("canales_aplicables")
+  // Temporalidad de la promo: en QUÉ días de la semana y en QUÉ turnos aparece
+  // en la pantalla de PEDIDOS. Vacío = sin restricción (siempre visible).
+  //   diasSemana: 0=domingo .. 6=sábado (JS getDay, en TZ Argentina).
+  //   turnos: MANANA / TARDE (mismo enum que las sesiones de caja).
+  // Es un filtro de VISTA del catálogo — el cajero no tiene que activar/
+  // desactivar promos a mano; se muestran solas el día/turno configurado.
+  diasSemana        Int[]               @default([]) @map("dias_semana")
+  turnos            TurnoCaja[]         @default([])
   activo            Boolean             @default(true)
   observaciones     String?
   creadoAt          DateTime            @default(now()) @map("creado_at")

@@ -1492,8 +1492,23 @@ interface Combo {
   descuentoPct: number;
   activo: boolean;
   observaciones: string | null;
+  // Temporalidad: en qué días (0=domingo..6=sábado) y turnos aparece en PEDIDOS.
+  // Vacío = siempre.
+  diasSemana: number[];
+  turnos: Array<'MANANA' | 'TARDE'>;
   componentes: ComboComponente[];
 }
+
+// Etiquetas de los días para los chips (índice = getDay: 0=domingo).
+const DIAS_SEMANA: Array<{ n: number; label: string }> = [
+  { n: 1, label: 'Lun' },
+  { n: 2, label: 'Mar' },
+  { n: 3, label: 'Mié' },
+  { n: 4, label: 'Jue' },
+  { n: 5, label: 'Vie' },
+  { n: 6, label: 'Sáb' },
+  { n: 0, label: 'Dom' },
+];
 
 function CombosTab() {
   const [combos, setCombos] = useState<Combo[]>([]);
@@ -1665,6 +1680,8 @@ function ComboFormModal({
   const [precio, setPrecio] = useState(combo?.precioCombo ?? '');
   const [observaciones, setObservaciones] = useState(combo?.observaciones ?? '');
   const [activo, setActivo] = useState(combo?.activo ?? true);
+  const [diasSemana, setDiasSemana] = useState<number[]>(combo?.diasSemana ?? []);
+  const [turnos, setTurnos] = useState<Array<'MANANA' | 'TARDE'>>(combo?.turnos ?? []);
   const [componentes, setComponentes] = useState<
     Array<{ productoId: string; cantidad: string; etiqueta: string }>
   >(
@@ -1737,6 +1754,8 @@ function ComboFormModal({
         nombre,
         precioCombo: Number(precio).toFixed(2),
         observaciones: observaciones || undefined,
+        diasSemana,
+        turnos,
         ...(combo && { activo }),
         componentes: componentes.map((c) => ({
           productoId: c.productoId,
@@ -1905,6 +1924,73 @@ function ComboFormModal({
               </span>
             </div>
           )}
+
+          {/* Temporalidad: cuándo se muestra la promo en PEDIDOS. */}
+          <div className="rounded-lg border border-saffron-600/30 bg-saffron-50/40 p-3 space-y-2.5">
+            <div className="text-sm font-medium text-ink-800">
+              🗓️ ¿Cuándo aparece esta promo en PEDIDOS?
+            </div>
+            <div>
+              <label className="block text-2xs uppercase tracking-wide text-ink-500 mb-1">
+                Días (ninguno = todos los días)
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {DIAS_SEMANA.map((d) => {
+                  const on = diasSemana.includes(d.n);
+                  return (
+                    <button
+                      key={d.n}
+                      type="button"
+                      onClick={() =>
+                        setDiasSemana((arr) =>
+                          on ? arr.filter((x) => x !== d.n) : [...arr, d.n],
+                        )
+                      }
+                      className={cn(
+                        'px-2.5 py-1 rounded-md text-xs font-medium transition-colors',
+                        on
+                          ? 'bg-saffron-600 text-white'
+                          : 'bg-white text-ink-700 border border-cream-300 hover:bg-cream-100',
+                      )}
+                    >
+                      {d.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div>
+              <label className="block text-2xs uppercase tracking-wide text-ink-500 mb-1">
+                Turnos (ninguno = todos los turnos)
+              </label>
+              <div className="flex gap-1.5">
+                {(['MANANA', 'TARDE'] as const).map((t) => {
+                  const on = turnos.includes(t);
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() =>
+                        setTurnos((arr) => (on ? arr.filter((x) => x !== t) : [...arr, t]))
+                      }
+                      className={cn(
+                        'px-3 py-1 rounded-md text-xs font-medium transition-colors',
+                        on
+                          ? 'bg-saffron-600 text-white'
+                          : 'bg-white text-ink-700 border border-cream-300 hover:bg-cream-100',
+                      )}
+                    >
+                      {t === 'MANANA' ? '🌅 Mañana' : '🌆 Tarde'}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <p className="text-2xs text-ink-500">
+              La promo se muestra sola el día/turno configurado — no hay que
+              activarla ni desactivarla a mano.
+            </p>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-ink-700 mb-1">
