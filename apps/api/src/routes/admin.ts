@@ -4755,6 +4755,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           nombre: g.nombre,
           tipoSeleccion: g.tipoSeleccion,
           obligatorio: g.obligatorio,
+          icono: g.icono,
+          requiereCantidad: g.requiereCantidad,
           opciones: g.opciones.map((o) => ({
             id: o.id,
             nombre: o.nombre,
@@ -4781,6 +4783,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           nombre: z.string().min(1).max(80),
           tipoSeleccion: z.enum(['UNICA', 'MULTIPLE']).default('UNICA'),
           obligatorio: z.boolean().default(false),
+          icono: z.string().max(16).nullable().optional(),
+          requiereCantidad: z.boolean().default(true),
           opciones: z
             .array(
               z.object({
@@ -4797,6 +4801,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         nombre: string;
         tipoSeleccion: 'UNICA' | 'MULTIPLE';
         obligatorio: boolean;
+        icono?: string | null;
+        requiereCantidad: boolean;
         opciones: Array<{ nombre: string; deltaPrecio: string }>;
       };
       const yaExiste = await prisma.grupoModificador.findFirst({
@@ -4810,6 +4816,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           nombre: body.nombre,
           tipoSeleccion: body.tipoSeleccion,
           obligatorio: body.obligatorio,
+          icono: body.icono ?? null,
+          requiereCantidad: body.requiereCantidad,
           minOpciones: body.obligatorio ? 1 : 0,
           maxOpciones: body.tipoSeleccion === 'UNICA' ? 1 : body.opciones.length,
           opciones: {
@@ -4830,6 +4838,69 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         valorNuevo: { nombre: grupo.nombre, opciones: body.opciones.map((o) => o.nombre) },
       });
       return reply.code(201).send({ grupo });
+    },
+  );
+
+  // PATCH /admin/modificadores/grupos/:id — editar metadatos del grupo
+  // (nombre, tipo de selección, obligatorio, ícono, requiere cantidad). NO
+  // toca las opciones (eso es otro flujo). Se usa para configurar el ícono del
+  // chip en PEDIDOS y el flag de unidad numérica de las opciones.
+  fastify.patch(
+    '/admin/modificadores/grupos/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          nombre: z.string().min(1).max(80).optional(),
+          tipoSeleccion: z.enum(['UNICA', 'MULTIPLE']).optional(),
+          obligatorio: z.boolean().optional(),
+          icono: z.string().max(16).nullable().optional(),
+          requiereCantidad: z.boolean().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as {
+        nombre?: string;
+        tipoSeleccion?: 'UNICA' | 'MULTIPLE';
+        obligatorio?: boolean;
+        icono?: string | null;
+        requiereCantidad?: boolean;
+      };
+      const actual = await prisma.grupoModificador.findUnique({ where: { id } });
+      if (!actual) return reply.code(404).send({ error: 'Grupo no encontrado' });
+
+      if (body.nombre && body.nombre !== actual.nombre) {
+        const dup = await prisma.grupoModificador.findFirst({
+          where: { nombre: body.nombre, id: { not: id } },
+        });
+        if (dup) return reply.code(409).send({ error: `Ya existe un grupo "${body.nombre}"` });
+      }
+
+      const grupo = await prisma.grupoModificador.update({
+        where: { id },
+        data: {
+          ...(body.nombre !== undefined && { nombre: body.nombre }),
+          ...(body.tipoSeleccion !== undefined && { tipoSeleccion: body.tipoSeleccion }),
+          ...(body.obligatorio !== undefined && {
+            obligatorio: body.obligatorio,
+            minOpciones: body.obligatorio ? 1 : 0,
+          }),
+          ...(body.icono !== undefined && { icono: body.icono }),
+          ...(body.requiereCantidad !== undefined && { requiereCantidad: body.requiereCantidad }),
+        },
+      });
+      await recordAudit({
+        tabla: 'grupos_modificador',
+        registroId: id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { icono: actual.icono, requiereCantidad: actual.requiereCantidad },
+        valorNuevo: { icono: grupo.icono, requiereCantidad: grupo.requiereCantidad },
+      });
+      return { grupo };
     },
   );
 
@@ -4874,6 +4945,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           nombre: a.grupoModificador.nombre,
           tipoSeleccion: a.grupoModificador.tipoSeleccion,
           obligatorio: a.grupoModificador.obligatorio,
+          icono: a.grupoModificador.icono,
+          requiereCantidad: a.grupoModificador.requiereCantidad,
           opciones: a.grupoModificador.opciones.map((o) => ({
             id: o.id,
             nombre: o.nombre,

@@ -451,6 +451,15 @@ model GrupoModificador {
   obligatorio   Boolean       @default(false)
   minOpciones   Int           @default(0) @map("min_opciones")
   maxOpciones   Int           @default(1) @map("max_opciones")
+  // Ícono (emoji) configurable desde admin. En la tarjeta de producto del
+  // cajero NO se listan todas las opciones (recuadro gigante): se muestra este
+  // ícono + la cantidad de opciones del grupo. Un ícono por grupo distinto.
+  icono         String?       @db.VarChar(16)
+  // ¿Cada opción lleva una unidad numérica al lado (peso/cantidad)? Los sabores
+  // clásicos (Ravioles) sí. Los grupos "solo seleccionables" (ej. punto de
+  // cocción, tipo de pan) NO: se marcan y listo. Default true = comportamiento
+  // histórico. La selección única vs múltiple ya la da `tipoSeleccion`.
+  requiereCantidad Boolean    @default(true) @map("requiere_cantidad")
 
   opciones   OpcionModificador[]
   aplicables ModificadorAplicable[]

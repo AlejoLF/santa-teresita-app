@@ -219,6 +219,8 @@ function buildSabores(p: (typeof productosSeed)[number], grupo?: typeof grupoMod
         nombre: grupo.nombre,
         obligatorio: grupo.obligatorio,
         tipoSeleccion: grupo.tipoSeleccion,
+        icono: (grupo as { icono?: string | null }).icono ?? null,
+        requiereCantidad: (grupo as { requiereCantidad?: boolean }).requiereCantidad ?? true,
         opciones: grupo.opciones,
       },
     },

@@ -131,6 +131,7 @@ export default function AdminEncargosPage() {
                   <th className="text-left px-4 py-2">Cliente</th>
                   <th className="text-left px-4 py-2">Horario</th>
                   <th className="text-left px-4 py-2">Entrega</th>
+                  <th className="text-left px-4 py-2">Fecha y hora</th>
                   <th className="text-center px-4 py-2">Cobro</th>
                   <th className="text-right px-4 py-2">Total</th>
                   <th className="px-3 py-2 w-8"></th>
@@ -153,6 +154,17 @@ export default function AdminEncargosPage() {
                     <td className="px-4 py-2 text-xs text-ink-700">🕒 {cuandoLabel(e)}</td>
                     <td className="px-4 py-2 text-xs text-ink-500">
                       {e.tipoEntrega === 'ENVIO' ? '🛵 Envío' : '🏪 Retira'}
+                    </td>
+                    <td className="px-4 py-2 text-xs text-ink-700 whitespace-nowrap">
+                      {e.fechaEntrega ? (
+                        <>
+                          {fechaLargaDia(e.fechaEntrega)}
+                          <span className="text-ink-400"> · </span>
+                          {cuandoLabel(e)}
+                        </>
+                      ) : (
+                        '—'
+                      )}
                     </td>
                     <td className="px-4 py-2 text-center">
                       <span

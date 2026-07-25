@@ -63,6 +63,10 @@ interface GrupoMod {
   nombre: string;
   obligatorio: boolean;
   tipoSeleccion: 'UNICA' | 'MULTIPLE';
+  /** Ícono (emoji) del grupo — configurable en admin. Se muestra en la tarjeta. */
+  icono?: string | null;
+  /** false = opciones solo seleccionables, sin input numérico de cantidad. */
+  requiereCantidad?: boolean;
   opciones: OpcionMod[];
 }
 interface ProductoMod {
@@ -1200,15 +1204,32 @@ export default function CargarPedidoPage() {
                     {p.presentacion && ` · ${p.presentacion}`}
                   </span>
                 )}
-                {p.sabores && p.sabores.length > 0 && (
-                  <span className="text-2xs text-ink-500 line-clamp-3 mt-0.5 leading-snug">
-                    {p.sabores
-                      .map((s) =>
-                        s.codigo ? `${s.nombre} (${s.codigo})` : s.nombre,
-                      )
-                      .join(' · ')}
-                  </span>
-                )}
+                {/* En vez de listar TODOS los sabores (recuadro gigante e
+                    ilegible), un chip por grupo: ícono configurable + cantidad
+                    de opciones. Distinto ícono por grupo distinto. Dedup por si
+                    el mismo grupo viene aplicado al producto Y al tipo. */}
+                {(() => {
+                  const grupos = new Map<string, GrupoMod>();
+                  for (const m of p.modificadores) {
+                    if (m.grupoModificador.opciones.length > 0)
+                      grupos.set(m.grupoModificador.id, m.grupoModificador);
+                  }
+                  if (grupos.size === 0) return null;
+                  return (
+                    <span className="flex flex-wrap gap-1 mt-1">
+                      {[...grupos.values()].map((g) => (
+                        <span
+                          key={g.id}
+                          title={`${g.nombre}: ${g.opciones.length} opciones`}
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-cream-200 text-2xs text-ink-600 tabular-nums"
+                        >
+                          <span>{g.icono || '🏷️'}</span>
+                          {g.opciones.length}
+                        </span>
+                      ))}
+                    </span>
+                  );
+                })()}
                 <div className="mt-auto flex items-baseline gap-1">
                   <MoneyAmount value={p.precioBase} className="text-md text-teresita-700" />
                   <span className="text-2xs text-ink-500">/{unidadCorta(p.unidadPrecio)}</span>
@@ -2137,6 +2158,9 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
       deltaPrecio: string;
       grupoId: string | null;
       grupoNombre: string | null;
+      // false = opción solo seleccionable (sin input de cantidad; se marca 1/0).
+      requiereCantidad: boolean;
+      tipoSeleccion: 'UNICA' | 'MULTIPLE';
     }> = [];
     for (const m of producto.modificadores) {
       for (const op of m.grupoModificador.opciones) {
@@ -2147,6 +2171,8 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
           deltaPrecio: op.deltaPrecio,
           grupoId: m.grupoModificador.id,
           grupoNombre: m.grupoModificador.nombre,
+          requiereCantidad: m.grupoModificador.requiereCantidad ?? true,
+          tipoSeleccion: m.grupoModificador.tipoSeleccion,
         });
       }
     }
@@ -2159,6 +2185,8 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
         deltaPrecio: '0',
         grupoId: null,
         grupoNombre: null,
+        requiereCantidad: true,
+        tipoSeleccion: 'MULTIPLE',
       });
     }
     return out;
@@ -2272,6 +2300,23 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
 
   function setQty(opcionId: string, value: string) {
     setCantidades((c) => ({ ...c, [opcionId]: value }));
+  }
+  // Grupos "solo seleccionables" (requiereCantidad=false): en vez de cantidad,
+  // se marca/desmarca (cantidad 1/0). En grupos UNICA, marcar uno limpia los
+  // hermanos del mismo grupo (comportamiento radio).
+  function toggleSeleccion(s: { id: string; grupoId: string | null; tipoSeleccion: 'UNICA' | 'MULTIPLE' }) {
+    setCantidades((c) => {
+      const yaEstaba = Number(c[s.id] ?? 0) > 0;
+      if (yaEstaba) return { ...c, [s.id]: '' };
+      const next = { ...c };
+      if (s.tipoSeleccion === 'UNICA' && s.grupoId) {
+        for (const otro of sabores) {
+          if (otro.grupoId === s.grupoId && otro.id !== s.id) next[otro.id] = '';
+        }
+      }
+      next[s.id] = '1';
+      return next;
+    });
   }
   function setSalsaQty(opcionId: string, value: string) {
     setSalsaCantidades((c) => ({ ...c, [opcionId]: value }));
@@ -2842,20 +2887,34 @@ function ModalModificadores({ producto, focoOpcionId, onClose, onConfirmMulti }:
                       <MoneyAmount value={s.deltaPrecio} />
                     </span>
                   )}
-                  <input
-                    ref={(el) => { inputRefs.current[s.id] = el; }}
-                    type="number"
-                    inputMode="numeric"
-                    min="0"
-                    step="1"
-                    placeholder="0"
-                    value={cantidades[s.id] ?? ''}
-                    onChange={(e) => setQty(s.id, e.target.value)}
-                    onKeyDown={(e) => onKeyDownNav(idx, e)}
-                    onFocus={(e) => e.target.select()}
-                    className="w-20 input text-center font-mono py-1.5 text-sm"
-                  />
-                  <span className="text-2xs text-ink-300 w-10 text-left">{unidadCant}</span>
+                  {s.requiereCantidad === false ? (
+                    // Grupo "solo seleccionable": checkbox, sin unidad numérica.
+                    <input
+                      ref={(el) => { inputRefs.current[s.id] = el; }}
+                      type="checkbox"
+                      checked={Number(cantidades[s.id] ?? 0) > 0}
+                      onChange={() => toggleSeleccion(s)}
+                      onKeyDown={(e) => onKeyDownNav(idx, e)}
+                      className="w-5 h-5 accent-teresita-700"
+                    />
+                  ) : (
+                    <>
+                      <input
+                        ref={(el) => { inputRefs.current[s.id] = el; }}
+                        type="number"
+                        inputMode="numeric"
+                        min="0"
+                        step="1"
+                        placeholder="0"
+                        value={cantidades[s.id] ?? ''}
+                        onChange={(e) => setQty(s.id, e.target.value)}
+                        onKeyDown={(e) => onKeyDownNav(idx, e)}
+                        onFocus={(e) => e.target.select()}
+                        className="w-20 input text-center font-mono py-1.5 text-sm"
+                      />
+                      <span className="text-2xs text-ink-300 w-10 text-left">{unidadCant}</span>
+                    </>
+                  )}
                 </div>
                 </div>
               );

@@ -1164,9 +1164,14 @@ interface GrupoMod {
   nombre: string;
   tipoSeleccion: 'UNICA' | 'MULTIPLE';
   obligatorio: boolean;
+  icono?: string | null;
+  requiereCantidad?: boolean;
   opciones: Array<{ id: string; nombre: string; deltaPrecio: string; activa: boolean }>;
   usadoEn?: Array<{ aplicableId: string; tipo: 'TIPO' | 'PRODUCTO'; nombre: string }>;
 }
+
+/** Emojis sugeridos para el ícono del grupo (chip en PEDIDOS). */
+const ICONOS_GRUPO = ['🍝', '🥫', '🧀', '🌶️', '🍅', '🥩', '🍗', '🍤', '🥬', '🧂', '🔥', '⭐', '📏', '🥖', '🍕', '🏷️'];
 
 interface AplicadoMod {
   aplicableId: string;
@@ -1185,6 +1190,8 @@ function GrupoNuevoForm({
   const [nombre, setNombre] = useState('');
   const [tipoSeleccion, setTipoSeleccion] = useState<'UNICA' | 'MULTIPLE'>('UNICA');
   const [obligatorio, setObligatorio] = useState(false);
+  const [icono, setIcono] = useState('🏷️');
+  const [requiereCantidad, setRequiereCantidad] = useState(true);
   const [opciones, setOpciones] = useState<Array<{ nombre: string; delta: string }>>([
     { nombre: '', delta: '0' },
   ]);
@@ -1205,7 +1212,14 @@ function GrupoNuevoForm({
     try {
       const r = await api.post<{ grupo: { id: string; nombre: string } }>(
         '/admin/modificadores/grupos',
-        { nombre: nombre.trim(), tipoSeleccion, obligatorio, opciones: opcionesLimpias },
+        {
+          nombre: nombre.trim(),
+          tipoSeleccion,
+          obligatorio,
+          icono: icono.trim() || null,
+          requiereCantidad,
+          opciones: opcionesLimpias,
+        },
       );
       await onCreated(r.grupo);
     } catch (e) {
@@ -1248,6 +1262,43 @@ function GrupoNuevoForm({
         />
         Obligatorio (el cajero tiene que elegir una opción sí o sí)
       </label>
+      <label className="flex items-center gap-2 cursor-pointer text-2xs text-ink-700">
+        <input
+          type="checkbox"
+          checked={requiereCantidad}
+          onChange={(e) => setRequiereCantidad(e.target.checked)}
+          className="w-3.5 h-3.5"
+        />
+        Las opciones llevan cantidad/peso al lado (destildá si son solo para elegir)
+      </label>
+      {/* Ícono del grupo: se muestra como chip en la tarjeta de PEDIDOS junto
+          al conteo de opciones (en vez de listar todos los sabores). */}
+      <div className="space-y-1">
+        <div className="text-2xs text-ink-500">Ícono del grupo (aparece en PEDIDOS):</div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {ICONOS_GRUPO.map((ic) => (
+            <button
+              key={ic}
+              type="button"
+              onClick={() => setIcono(ic)}
+              className={cn(
+                'w-7 h-7 rounded flex items-center justify-center text-sm transition-colors',
+                icono === ic ? 'bg-teresita-700 ring-2 ring-teresita-700/40' : 'bg-cream-200 hover:bg-cream-300',
+              )}
+            >
+              {ic}
+            </button>
+          ))}
+          <input
+            type="text"
+            value={icono}
+            onChange={(e) => setIcono(e.target.value)}
+            maxLength={4}
+            className="input text-sm py-1 w-14 text-center"
+            title="Otro emoji"
+          />
+        </div>
+      </div>
       <div className="space-y-1.5">
         {opciones.map((o, idx) => (
           <div key={idx} className="flex gap-2 items-center">
@@ -1305,6 +1356,73 @@ function GrupoNuevoForm({
   );
 }
 
+/** Editor inline del ícono + flag de unidad de un grupo (config global). */
+function GrupoIconoEditor({
+  grupo,
+  onGuardar,
+  onCancel,
+}: {
+  grupo: GrupoMod;
+  onGuardar: (cambios: { icono: string | null; requiereCantidad: boolean }) => void;
+  onCancel: () => void;
+}) {
+  const [icono, setIcono] = useState(grupo.icono || '🏷️');
+  const [requiereCantidad, setRequiereCantidad] = useState(grupo.requiereCantidad ?? true);
+  return (
+    <div className="mt-2 p-2 rounded-md bg-cream-100 border border-cream-300 space-y-2">
+      <div className="text-2xs text-ink-500">
+        Cambia el ícono y la unidad para <b>todos</b> los productos que usan este grupo.
+      </div>
+      <div className="flex items-center gap-1 flex-wrap">
+        {ICONOS_GRUPO.map((ic) => (
+          <button
+            key={ic}
+            type="button"
+            onClick={() => setIcono(ic)}
+            className={cn(
+              'w-7 h-7 rounded flex items-center justify-center text-sm transition-colors',
+              icono === ic ? 'bg-teresita-700 ring-2 ring-teresita-700/40' : 'bg-cream-200 hover:bg-cream-300',
+            )}
+          >
+            {ic}
+          </button>
+        ))}
+        <input
+          type="text"
+          value={icono}
+          onChange={(e) => setIcono(e.target.value)}
+          maxLength={4}
+          className="input text-sm py-1 w-14 text-center"
+          title="Otro emoji"
+        />
+      </div>
+      <label className="flex items-center gap-2 cursor-pointer text-2xs text-ink-700">
+        <input
+          type="checkbox"
+          checked={requiereCantidad}
+          onChange={(e) => setRequiereCantidad(e.target.checked)}
+          className="w-3.5 h-3.5"
+        />
+        Las opciones llevan cantidad/peso al lado (destildá si son solo para elegir)
+      </label>
+      <div className="flex gap-2">
+        <button
+          onClick={() => onGuardar({ icono: icono.trim() || null, requiereCantidad })}
+          className="px-3 py-1 rounded-md text-2xs font-medium bg-teresita-700 text-cream-50 hover:bg-teresita-800"
+        >
+          Guardar
+        </button>
+        <button
+          onClick={onCancel}
+          className="px-3 py-1 rounded-md text-2xs font-medium bg-cream-200 text-ink-700 hover:bg-cream-300"
+        >
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** Tab "Modificadores" del modal de edición: grupos aplicados + aplicar/crear. */
 function ModificadoresManager({ productoId }: { productoId: string }) {
   const [aplicados, setAplicados] = useState<AplicadoMod[]>([]);
@@ -1313,6 +1431,9 @@ function ModificadoresManager({ productoId }: { productoId: string }) {
   const [grupoSel, setGrupoSel] = useState('');
   const [crearOpen, setCrearOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Edición inline del ícono / unidad de un grupo existente (afecta al grupo
+  // en TODOS los productos donde se usa — es config global del grupo).
+  const [editandoId, setEditandoId] = useState<string | null>(null);
 
   const fetchTodo = useCallback(async () => {
     setLoading(true);
@@ -1347,6 +1468,20 @@ function ModificadoresManager({ productoId }: { productoId: string }) {
       await fetchTodo();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al aplicar el grupo');
+    }
+  }
+
+  async function guardarGrupo(
+    grupoId: string,
+    cambios: { icono?: string | null; requiereCantidad?: boolean },
+  ) {
+    setError(null);
+    try {
+      await api.patch(`/admin/modificadores/grupos/${grupoId}`, cambios);
+      setEditandoId(null);
+      await fetchTodo();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al guardar el grupo');
     }
   }
 
@@ -1387,6 +1522,9 @@ function ModificadoresManager({ productoId }: { productoId: string }) {
             >
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-base" title="Ícono del grupo (se ve en PEDIDOS)">
+                    {a.grupo.icono || '🏷️'}
+                  </span>
                   <span className="text-sm font-medium text-ink-900">{a.grupo.nombre}</span>
                   <span
                     className={cn(
@@ -1406,21 +1544,38 @@ function ModificadoresManager({ productoId }: { productoId: string }) {
                   <span className="text-2xs text-ink-400">
                     {a.grupo.tipoSeleccion === 'UNICA' ? 'elige una' : 'elige varias'}
                     {a.grupo.obligatorio ? ' · obligatorio' : ''}
+                    {a.grupo.requiereCantidad === false ? ' · solo elegir' : ''}
                   </span>
                 </div>
                 <div className="text-xs text-ink-500 mt-0.5 truncate">
                   {a.grupo.opciones.filter((o) => o.activa).map((o) => o.nombre).join(' · ') || 'sin opciones'}
                 </div>
+                {editandoId === a.grupo.id && (
+                  <GrupoIconoEditor
+                    grupo={a.grupo}
+                    onGuardar={(cambios) => void guardarGrupo(a.grupo.id, cambios)}
+                    onCancel={() => setEditandoId(null)}
+                  />
+                )}
               </div>
-              {a.origen === 'PRODUCTO' && (
+              <div className="flex items-center gap-1 shrink-0">
                 <button
-                  onClick={() => void quitar(a)}
-                  className="text-ink-400 hover:text-pomodoro-600 text-lg leading-none shrink-0"
-                  title="Quitar este grupo del producto"
+                  onClick={() => setEditandoId(editandoId === a.grupo.id ? null : a.grupo.id)}
+                  className="text-ink-400 hover:text-teresita-700 text-sm shrink-0"
+                  title="Editar ícono y unidad del grupo"
                 >
-                  ×
+                  ✏️
                 </button>
-              )}
+                {a.origen === 'PRODUCTO' && (
+                  <button
+                    onClick={() => void quitar(a)}
+                    className="text-ink-400 hover:text-pomodoro-600 text-lg leading-none shrink-0"
+                    title="Quitar este grupo del producto"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
             </div>
           ))}
 

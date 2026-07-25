@@ -89,6 +89,8 @@ export const grupoModRavioles = {
   nombre: 'Sabor — Ravioles',
   obligatorio: true,
   tipoSeleccion: 'UNICA' as const,
+  icono: '🍝',
+  requiereCantidad: true,
   opciones: [
     { id: id('op-rav-ricota-esp'), nombre: 'Ricota y espinaca', deltaPrecio: '0', activa: true, orden: 1 },
     { id: id('op-rav-cuatro-q'), nombre: 'Cuatro quesos', deltaPrecio: '300', activa: true, orden: 2 },
@@ -103,6 +105,8 @@ export const grupoModSorrentinos = {
   nombre: 'Sabor — Sorrentinos',
   obligatorio: true,
   tipoSeleccion: 'UNICA' as const,
+  icono: '🍝',
+  requiereCantidad: true,
   opciones: [
     { id: id('op-sor-jam-mozza'), nombre: 'Jamón y mozzarella', deltaPrecio: '0', activa: true, orden: 1 },
     { id: id('op-sor-pollo-verd'), nombre: 'Pollo y verdeo', deltaPrecio: '400', activa: true, orden: 2 },
@@ -116,6 +120,9 @@ export const grupoModCanelones = {
   nombre: 'Sabor — Canelones',
   obligatorio: true,
   tipoSeleccion: 'UNICA' as const,
+  // Demo del fix 2: solo seleccionable (checkbox), sin cantidad numérica.
+  icono: '🥧',
+  requiereCantidad: false,
   opciones: [
     { id: id('op-can-verdura'), nombre: 'Verdura', deltaPrecio: '0', activa: true, orden: 1 },
     { id: id('op-can-carne'), nombre: 'Carne', deltaPrecio: '200', activa: true, orden: 2 },
@@ -128,6 +135,8 @@ export const grupoModSalsa = {
   nombre: 'Tipo — Salsa',
   obligatorio: true,
   tipoSeleccion: 'UNICA' as const,
+  icono: '🥫',
+  requiereCantidad: false,
   opciones: [
     { id: id('op-sal-bolognesa'), nombre: 'Bolognesa', deltaPrecio: '0', activa: true, orden: 1 },
     { id: id('op-sal-filetto'), nombre: 'Filetto', deltaPrecio: '0', activa: true, orden: 2 },
