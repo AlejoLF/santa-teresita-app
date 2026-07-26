@@ -1,0 +1,47 @@
+name: Cloud Migrate
+
+# Aplica las migraciones PENDIENTES de Prisma a la Supabase de producción,
+# desde la nube — botón "Run workflow" (se puede tirar desde el celu).
+#
+# Reusa el script sancionado `scripts/cloud/migrate.mjs`: raw SQL, aplica solo
+# lo pendiente, idempotente, y trackea en `_prisma_migrations`. NO usa
+# `prisma migrate` (ver invariantes en CLAUDE.md — `migrate dev` dropea índices).
+#
+# SOLO manual (workflow_dispatch): nunca corre solo en push. La DB de prod es
+# sensible, así que el gate queda deliberado — vos apretás el botón cuando
+# querés aplicar. Correrlo sin migraciones pendientes es inofensivo (dice
+# "0 aplicadas, N ya estaban").
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install deps (incluye `pg`, optionalDependency del root)
+        run: pnpm install --frozen-lockfile
+
+      - name: Aplicar migraciones pendientes a Supabase
+        # migrate.mjs → _url.mjs usa SUPABASE_DB_URL_POOLED en modo explícito.
+        # Reusamos el secret SUPABASE_DB_URL ya existente (es la connection
+        # string del pooler que también consume el .exe). El script enmascara
+        # la URL en los logs (maskUrl), así que la password no se imprime.
+        env:
+          SUPABASE_DB_URL_POOLED: ${{ secrets.SUPABASE_DB_URL }}
+        run: node scripts/cloud/migrate.mjs
