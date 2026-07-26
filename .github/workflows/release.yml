@@ -1,30 +1,116 @@
 name: Release Desktop
 
-# Se dispara cuando se pushea un tag `v*` (ej. v1.26.0). Buildea el desktop
-# .exe + .zip + latest.yml en Windows y los sube como artefactos al GitHub
-# Release que matchea el tag.
+# Dispara de DOS formas:
 #
-# El primer release v1.25.0 se hace MANUAL desde la PC del dev (con
-# `pnpm --filter @sta/desktop run release` y GH_TOKEN local) porque el flow
-# automático requiere que electron-updater esté ya instalado en el cliente.
-# A partir de v1.26 las releases salen solas con tag push.
+#  1) Push de un tag `v*` (ej. `git push origin v2.0.0-alpha.57`) — el flujo
+#     histórico desde la PC del dev. Buildea el .exe y lo publica al Release.
+#
+#  2) "Run workflow" (workflow_dispatch) desde la web/app de GitHub — pensado
+#     para lanzar DESDE EL CELULAR. El job `prepare` bumpea la versión de
+#     apps/desktop, commitea a main, crea el tag y en el mismo run dispara el
+#     build. No hay que tocar archivos ni tipear tags a mano → elimina el
+#     drift versión/tag que hizo fallar alpha.54.
+#
+# El build (job `build-desktop`) es idéntico para ambos caminos; solo cambia
+# de dónde sale la versión/tag.
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Qué publicar'
+        type: choice
+        default: prerelease
+        options:
+          - prerelease   # 2.0.0-alpha.56 → 2.0.0-alpha.57 (el caso normal)
+          - custom       # una versión exacta (campo de abajo)
+      custom_version:
+        description: 'Versión exacta SIN la v (solo si bump=custom). Ej: 2.0.0-alpha.60'
+        required: false
+        default: ''
 
 permissions:
-  contents: write # necesario para subir assets al release
+  contents: write # subir assets al release + pushear el bump/tag a main
 
 jobs:
+  # ── Solo en "Run workflow" (celu): bump + commit + tag ────────────────────
+  # Corre en ubuntu (rápido/barato — son solo git ops, sin build).
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0 # historial completo para poder commitear+pushear
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Bump versión en apps/desktop/package.json
+        id: bump
+        working-directory: apps/desktop
+        run: |
+          if [ "${{ inputs.bump }}" = "custom" ]; then
+            if [ -z "${{ inputs.custom_version }}" ]; then
+              echo "::error::bump=custom pero custom_version está vacío"; exit 1
+            fi
+            npm version "${{ inputs.custom_version }}" --no-git-tag-version --allow-same-version
+          else
+            # prerelease mantiene el preid (-alpha.N → -alpha.N+1)
+            npm version prerelease --preid alpha --no-git-tag-version
+          fi
+          VER="$(node -p "require('./package.json').version")"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+          echo "Nueva versión: $VER (tag v$VER)"
+
+      - name: Commit bump + crear/pushear tag
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/desktop/package.json
+          git commit -m "chore(desktop): release $TAG (workflow_dispatch)"
+          git push origin HEAD:main
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+  # ── Build del .exe: corre en tag push (PC) o después de `prepare` (celu) ───
   build-desktop:
+    needs: [prepare]
+    # always() para que corra aunque `prepare` esté skipped (caso tag push).
+    if: ${{ always() && (github.event_name == 'push' || needs.prepare.result == 'success') }}
     runs-on: windows-latest
     timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # dispatch → el tag recién creado por `prepare`; tag push → github.ref
+          ref: ${{ github.event_name == 'workflow_dispatch' && needs.prepare.outputs.tag || github.ref }}
+
+      - name: Resolver tag/versión
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            $tag = "${{ needs.prepare.outputs.tag }}"
+          } else {
+            $tag = $env:GITHUB_REF_NAME
+          }
+          "TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Output "Building tag=$tag (version $($tag.TrimStart('v')))"
 
       - name: Setup Node 22
         uses: actions/setup-node@v4
@@ -123,7 +209,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $tag = $env:GITHUB_REF_NAME
+          $tag = $env:TAG
           Write-Output "Tag: $tag"
 
           # Crear la release si no existe (gh upload requiere release previa).
