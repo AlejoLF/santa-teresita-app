@@ -236,7 +236,9 @@ se auto-actualiza. Desde el bootstrap se sumó, entre otras cosas:
 ✅ **Promos** con temporalidad + modificadores con ícono/conteo/unidad
 ✅ Impresión: routing de comanderas configurable, tickets de encargo por comandera,
    ficha del producto impresa, re-impresión eligiendo comandera
-✅ Ingesta de órdenes de plataforma (puente RAPPI/PYA/MELI — `channel.ts` + `ingest.ts`)
+✅ Ingesta de órdenes de plataforma (puente RAPPI/PYA/MELI — `channel.ts`; `ingest.ts`
+   es otra cosa: facturas por OCR). **Ojo**: es un puente platform-neutral con token
+   propio (`CHANNEL_INGEST_TOKEN`) — no hay credenciales de RAPPI/PYA/MELI cableadas
 ✅ Responsive real en celular (tarjetas en vez de tablas) + PWA instalable
 ✅ Todo en TZ Argentina explícita
 ✅ Buscadores con filtro temporal y paginación en las 4 áreas pesadas
