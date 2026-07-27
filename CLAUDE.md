@@ -249,6 +249,11 @@ se auto-actualiza. Desde el bootstrap se sumó, entre otras cosas:
 
 Detalle en [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md). Resumen:
 
+- **ANTES de publicar: escribí las novedades.** Agregá una entrada nueva arriba de
+  todo en `apps/web/src/lib/novedades.ts` con la versión que va a salir. Es lo que
+  ve la encargada y las empleadas al abrir la app actualizada (cartel una vez por
+  versión). Si no la agregás, el release sale mudo y nadie se entera de qué cambió.
+  Escribilo para ellas, no para programadores.
 - **Publicar un alpha** → Actions → *Release Desktop* → Run workflow (`bump=prerelease`).
   El workflow bumpea, commitea a `main`, taggea y buildea. No toques versiones a mano:
   el drift versión/tag es lo que hizo fallar alpha.54.
