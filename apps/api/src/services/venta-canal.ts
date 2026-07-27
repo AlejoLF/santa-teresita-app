@@ -10,6 +10,7 @@ import {
 import type { ModificadorAplicado } from '@sta/shared';
 import { crearVenta } from './venta.js';
 import { recordAudit } from './audit.js';
+import { getConfigHorarios, resolverSlotActivo } from './horarios.js';
 
 /**
  * Ingesta de ÓRDENES de canal (RAPPI / Pedidos YA / Mercado Libre) → crea la
@@ -81,6 +82,113 @@ export class MapeoIncompletoError extends Error {
 export interface ResultadoOrdenCanal {
   venta: Venta;
   duplicate: boolean;
+}
+
+/** Resultado del pre-flight (`simularOrdenCanal`) — ninguna escritura ocurrió. */
+export interface DiagnosticoOrdenCanal {
+  /** true = la orden real se crearía sin errores AHORA MISMO. */
+  ok: boolean;
+  /** Motivos por los que la orden real fallaría o no crearía nada. */
+  problemas: string[];
+  horario: { enHorario: boolean; razon?: string };
+  idempotencia: { yaExiste: boolean; ventaId?: string; numero?: number; estado?: string };
+  cuentaACobrar: { nombre: string; existe: boolean };
+  items: Array<{ codigo: string; cantidad: number; mapeado: boolean; nombre?: string }>;
+  skusFaltantes: string[];
+}
+
+/**
+ * MODO DE PRUEBA del puente: corre las MISMAS validaciones que `crearVentaCanal`
+ * pero **sin escribir absolutamente nada**. Solo lecturas — no crea venta, no
+ * abre sesión de caja, no registra pago, no encola impresión, no audita.
+ *
+ * Existe porque una orden real es destructiva de hecho: se auto-finaliza, entra
+ * al cierre de caja del turno y dispara la comanda a la cocina. Probar el
+ * contrato contra producción "a ver si anda" imprime papel y ensucia el cierre.
+ * Con esto el integrador verifica el mapeo del menú y el shape del payload sin
+ * tocar nada.
+ *
+ * Cubre los 3 modos de falla reales del endpoint vivo:
+ *   - fuera de horario   → la orden real daría 423
+ *   - SKU sin mapear     → la orden real daría 422
+ *   - cuenta a cobrar faltante (seed) → la orden real explotaría al finalizar
+ * …y además avisa si el (canal, idExternoCanal) ya fue ingerido (idempotencia).
+ */
+export async function simularOrdenCanal(orden: OrdenCanal): Promise<DiagnosticoOrdenCanal> {
+  const canal = orden.canal as CanalVenta;
+  const problemas: string[] = [];
+
+  // 1. Horario — mismo resolver que usa getOrCreateSesionActual, pero puro:
+  //    resolverSlotActivo no escribe, así que NO se crea la SesionCaja.
+  const resolucion = resolverSlotActivo(await getConfigHorarios(), new Date());
+  const enHorario = resolucion.tipo !== 'CERRADO';
+  if (!enHorario) {
+    problemas.push(
+      `Fuera del horario de atención (${resolucion.razon}) — la orden real daría 423.`,
+    );
+  }
+
+  // 2. Idempotencia — ¿este (canal, idExternoCanal) ya se ingirió?
+  const existente = await prisma.venta.findFirst({
+    where: { canal, idExternoCanal: orden.idExternoCanal },
+    select: { id: true, numero: true, estado: true },
+  });
+  if (existente) {
+    problemas.push(
+      `Ya existe la venta #${existente.numero} para ${orden.canal}/${orden.idExternoCanal} — la orden real NO crearía otra (idempotente).`,
+    );
+  }
+
+  // 3. Cuenta a cobrar del canal (viene del seed) — sin ella no se puede finalizar.
+  const nombreCac = CUENTA_A_COBRAR_POR_CANAL[orden.canal];
+  const receivable = await prisma.cuentaACobrar.findFirst({
+    where: { nombre: nombreCac },
+    select: { id: true },
+  });
+  if (!receivable) {
+    problemas.push(
+      `Falta la cuenta a cobrar "${nombreCac}" (seed) — la orden real no podría auto-finalizar.`,
+    );
+  }
+
+  // 4. Mapeo de SKUs (SKU = Producto.codigo, activo).
+  const codigos = [...new Set(orden.items.map((i) => i.codigo))];
+  const productos = await prisma.producto.findMany({
+    where: { codigo: { in: codigos }, activo: true },
+    select: { codigo: true, nombre: true },
+  });
+  const porCodigo = new Map(productos.map((p) => [p.codigo as string, p.nombre]));
+  const skusFaltantes = codigos.filter((c) => !porCodigo.has(c));
+  if (skusFaltantes.length) {
+    problemas.push(
+      `SKUs sin mapear en el catálogo: ${skusFaltantes.join(', ')} — la orden real daría 422.`,
+    );
+  }
+
+  return {
+    ok: problemas.length === 0,
+    problemas,
+    horario: {
+      enHorario,
+      ...(resolucion.tipo === 'CERRADO' && { razon: resolucion.razon }),
+    },
+    idempotencia: {
+      yaExiste: Boolean(existente),
+      ...(existente && {
+        ventaId: existente.id,
+        numero: existente.numero,
+        estado: existente.estado,
+      }),
+    },
+    cuentaACobrar: { nombre: nombreCac, existe: Boolean(receivable) },
+    items: orden.items.map((it) => ({
+      codigo: it.codigo,
+      cantidad: it.cantidad,
+      mapeado: porCodigo.has(it.codigo),
+      ...(porCodigo.has(it.codigo) && { nombre: porCodigo.get(it.codigo) }),
+    })),
+    skusFaltantes,
+  };
 }
 
 export async function crearVentaCanal(orden: OrdenCanal): Promise<ResultadoOrdenCanal> {

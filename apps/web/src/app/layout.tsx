@@ -3,6 +3,7 @@ import './globals.css';
 import { DemoBanner } from '@/components/DemoBanner';
 import { ServiceWorkerRegister } from '@/components/ServiceWorkerRegister';
 import { InstallPrompt } from '@/components/InstallPrompt';
+import { NotasDeVersion } from '@/components/NotasDeVersion';
 
 const isDemo = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 
@@ -60,6 +61,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <DemoBanner />
         <ServiceWorkerRegister />
         <InstallPrompt />
+        <NotasDeVersion />
         {children}
       </body>
     </html>

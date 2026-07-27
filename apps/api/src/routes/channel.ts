@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import { FueraDeHorarioError } from '../services/sesion-caja.js';
 import {
   crearVentaCanal,
+  simularOrdenCanal,
   MapeoIncompletoError,
   type OrdenCanal,
 } from '../services/venta-canal.js';
@@ -106,6 +107,31 @@ export default async function channelRoutes(fastify: FastifyInstance) {
         }
         throw e;
       }
+    },
+  );
+
+  // POST /channel/orders/dry-run — MODO DE PRUEBA. Mismo body y mismo token que
+  // /channel/orders, pero NO escribe nada: ni venta, ni sesión de caja, ni pago,
+  // ni comanda impresa. Devuelve el diagnóstico de lo que pasaría en vivo.
+  //
+  // Es el pre-flight del integrador: con esto se valida el mapeo del menú y el
+  // shape del payload sin ensuciar el cierre de caja ni imprimir papel en la
+  // cocina. Siempre 200 — el veredicto está en `ok` y `problemas`, porque un
+  // dry-run que "falla" no es un error HTTP: es información.
+  fastify.post(
+    '/channel/orders/dry-run',
+    { schema: { body: OrdenCanalSchema } },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      if (!config.CHANNEL_INGEST_TOKEN) {
+        return reply
+          .code(503)
+          .send({ error: 'Ingesta de canal deshabilitada (falta CHANNEL_INGEST_TOKEN)' });
+      }
+      if (!tokenOk(req)) {
+        return reply.code(401).send({ error: 'Token de ingesta de canal inválido' });
+      }
+      const diagnostico = await simularOrdenCanal(req.body as OrdenCanal);
+      return reply.send({ dryRun: true, ...diagnostico });
     },
   );
 

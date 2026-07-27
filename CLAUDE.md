@@ -13,8 +13,17 @@ problemas estructurales.
 - [docs/SPEC.md](docs/SPEC.md) — especificación funcional completa (13 secciones, ~5.000 líneas).
 - [docs/PREGUNTAS.md](docs/PREGUNTAS.md) — pendientes a resolver con el cliente.
 - [docs/wireframes/00-INDEX.md](docs/wireframes/00-INDEX.md) — wireframes ASCII.
+- [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md) — **cómo operar el proyecto sin la PC** (publicar
+  alpha y migrar Supabase desde el celu). Abrir antes de tocar un release.
 - [docs/SERVIDOR-LOCAL.md](docs/SERVIDOR-LOCAL.md) — diseño del servidor local LAN (Fase 1A/1B/1.5 implementadas).
 - [docs/DEPLOY-SERVIDOR-LOCAL.md](docs/DEPLOY-SERVIDOR-LOCAL.md) — **playbook de deploy** del server, cajas y PWA. Abrir cuando vayas a desplegar.
+- [docs/PLAN-PARIDAD-APP-NUBE.md](docs/PLAN-PARIDAD-APP-NUBE.md) — plan de una sola app responsive
+  servida desde la nube (Camino A: API en cloud + `apps/web` real). Estado: parcialmente ejecutado.
+- [docs/CLOUD-DB.md](docs/CLOUD-DB.md) / [docs/CLOUD-ANALYTICS.md](docs/CLOUD-ANALYTICS.md) — Supabase: schema, sync, vistas de analytics.
+- [docs/ACCESO-REMOTO-S1.md](docs/ACCESO-REMOTO-S1.md) — acceso remoto al server S1.
+- [docs/N8N-FACTURAS-OCR.md](docs/N8N-FACTURAS-OCR.md) — OCR de facturas vía N8N + bot Telegram.
+- [docs/MIGRACION-INNOVO.md](docs/MIGRACION-INNOVO.md) — migración de datos desde Innovo Suite.
+- [docs/POSNETS.md](docs/POSNETS.md) — posnets y medios de pago.
 - [docs/PRODUCTIZACION-Y-VENTA.md](docs/PRODUCTIZACION-Y-VENTA.md) — análisis estratégico de vender el POS como producto (mercado ES/AR/PT, regulación Veri*Factu/AT, pricing, arquitectura SaaS multi-tenant, capacidad Supabase medida, features IA). Research 2026-06-06.
 
 ## Arquitectura: WAT (Workflows / Agents / Tools)
@@ -31,35 +40,54 @@ orquestación confiable.
 
 | Capa | Tech | Notas |
 |-|-|-|
-| Backend | Node 22 + TS + Fastify + Prisma | tipado end-to-end |
-| DB | PostgreSQL 16 | replicación lógica local↔VPS |
-| Cola | Redis 7 + BullMQ | webhooks, impresión, jobs |
-| Web | Next.js 15 + React 19 + Tailwind | PWA instalable |
-| Auth | better-auth + PIN 4 dígitos | bcrypt |
+| Backend | Node 22 + TS + Fastify 5 + Prisma | tipado end-to-end, zod type provider |
+| DB | PostgreSQL 16 (local) + Supabase (nube) | fuente de verdad local, réplica cloud |
+| Web | Next.js 15 + React 19 + Tailwind | responsive + PWA instalable |
+| Escritorio | Electron (`apps/desktop`) | el `.exe` de las cajas, auto-update |
+| Auth | PIN 4 dígitos (bcryptjs) + Bearer token | token en localStorage → funciona cross-origin |
 | Agente local | Node daemon + node-thermal-printer | EPSON TM-T20II |
-| Sync Excel | Google Drive API + exceljs | aprobación admin |
-| OCR facturas | LLM con visión (Haiku/4o-mini) en N8N | bot Telegram |
-| Deploy | Docker Compose + Caddy | VPS + LAN local |
+| Cola de impresión | tabla `TrabajoImpresion` + polling del agente (3s) | **no** hay BullMQ (ver nota abajo) |
+| Excel | exceljs (en la API) | export/import; **sin** Google Drive API todavía |
+| OCR facturas | LLM con visión en N8N | bot Telegram |
+| Deploy | Vercel (web) + Railway (API) + GitHub Actions | Docker Compose + Caddy para local/LAN |
+
+> **Ojo con la cola**: `infra/docker/docker-compose.dev.yml` levanta un contenedor
+> Redis, pero **ningún paquete lo usa** (no hay `bullmq` ni `ioredis` en el
+> workspace). La impresión es una cola en la DB que el agente pollea. Si alguna
+> vez migrás a BullMQ, el Redis ya está ahí; hasta entonces, no asumas que hay
+> cola real.
 
 ## Estructura del repo
 
 ```
 .
 ├── apps/
-│   ├── api/          ─ Fastify API (auth, catálogo, ventas, audit)
-│   ├── web/          ─ Next.js (Vendedor + Admin)
+│   ├── api/          ─ Fastify API (16 módulos de rutas: auth, catálogo, ventas,
+│   │                   encargos, mayoristas, proveedores, impresión, analytics,
+│   │                   channel/ingest de plataformas, sync, audit…)
+│   ├── web/          ─ Next.js — la app real (Vendedor + Admin + Encargos), responsive
+│   ├── desktop/      ─ Electron: el `.exe` de las cajas (empaqueta API + web + agente)
+│   ├── server/       ─ servidor local LAN del mini PC (Postgres + API + replicator)
+│   ├── mobile/       ─ PWA read-only para Julio/encargada (consulta Supabase directo)
 │   └── local-agent/  ─ daemon de impresión ESC/POS
 ├── packages/
-│   ├── db/           ─ Prisma schema + seeds
+│   ├── db/           ─ Prisma schema + migraciones SQL + seeds
 │   └── shared/       ─ types, zod schemas, money utils, hash chain
-├── tools/            ─ scripts Python (parsers de Excel)
+├── scripts/
+│   └── cloud/        ─ migrate / status / seed / analytics contra Supabase
+├── tools/            ─ scripts Python (parsers de Excel) + api-scripts
 ├── workflows/        ─ SOPs en markdown
 ├── infra/
 │   ├── docker/       ─ compose + init SQL
 │   └── caddy/        ─ Caddyfile prod
-├── docs/             ─ SPEC.md, PREGUNTAS.md, wireframes/
+├── .github/workflows ─ release.yml (build del .exe) + cloud-migrate.yml
+├── docs/             ─ SPEC.md, PREGUNTAS.md, wireframes/, playbooks
 └── *.xlsx            ─ Excels del cliente (input)
 ```
+
+`apps/web` es **la** app: el `.exe` la empaqueta y la nube la sirve. `apps/mobile`
+es un cliente read-only aparte — no repliques lógica de negocio ahí (ver
+PLAN-PARIDAD-APP-NUBE.md §1).
 
 ## Cómo arrancar dev
 
@@ -78,8 +106,10 @@ pnpm docker:up
 # 4. Generar el cliente Prisma
 pnpm db:generate
 
-# 5. Migrar DB (genera y aplica migración inicial)
-pnpm --filter @sta/db migrate -- --name init
+# 5. Sincronizar el schema con la DB local
+#    ⚠️ NO uses `pnpm db:migrate`: mapea a `prisma migrate dev`, que detecta
+#    "drift" y auto-genera una migración que DROPEA índices (ver Invariantes).
+pnpm --filter @sta/db exec prisma db push --skip-generate --accept-data-loss
 
 # 6. Parsear el Excel (opcional, output ya está committeado)
 pip install openpyxl
@@ -96,6 +126,10 @@ pnpm dev
 # Web   → http://localhost:3000
 # Adminer (DB UI) → http://localhost:8080  (server: postgres / user: teresita / db: teresita)
 ```
+
+Con el repo ya clonado, **`pnpm sync-local`** hace 2→7 de una (pull de `main`,
+install, generate, `db push`, seed). Ojo: stashea lo que tengas sin commitear y
+te cambia a `main` — no lo corras en medio de una feature branch.
 
 PINs default (cambiar en producción):
 - Vendedor: `0001`
@@ -117,8 +151,10 @@ PINs default (cambiar en producción):
 
 ## Testing
 
-Pendiente — el alcance del MVP no incluyó suite de tests. La rama `feat/tests` levanta
-Vitest + Playwright cuando se priorice.
+Pendiente — el alcance del MVP no incluyó suite de tests. **No hay ni un archivo
+`.test.ts`/`.spec.ts` en el workspace** y la rama `feat/tests` que citaba este doc ya
+no existe en el remoto. `pnpm test` corre `pnpm -r test` sobre paquetes sin tests.
+La verificación hoy es manual (ver `workflows/dia-de-prueba.md`).
 
 ## Decisiones cerradas (no re-discutir sin evidencia nueva)
 
@@ -163,8 +199,10 @@ Ver SPEC §1.5. Punteo:
   Cerrar la app antes de regenerar. Verificar con:
   `Get-Process | ? { $_.Modules.FileName -like '*query_engine-windows*' }`.
 
-- **NO correr `prisma migrate dev` (ni `pnpm db:migrate` si mapea a eso)
-  contra ninguna DB de este repo.** Las migraciones se aplican vía raw SQL
+- **NO correr `prisma migrate dev` contra ninguna DB de este repo — y `pnpm
+  db:migrate` MAPEA A ESO.** (Verificado: `packages/db/package.json` →
+  `"migrate": "prisma migrate dev"`. El atajo es una trampa; para sincronizar
+  una DB local usá `prisma db push`, como hace `scripts/sync-local.mjs`.) Las migraciones se aplican vía raw SQL
   (`scripts/cloud/migrate.mjs` para cloud; aplicar el `migration.sql` a mano
   para local). `migrate dev` compara la schema contra su shadow DB, detecta
   "drift" (porque el historial se aplicó por SQL, no por Prisma Migrate) y
@@ -186,33 +224,59 @@ Ver SPEC §1.5. Punteo:
   del canal. Los 3 tickets (comanda cocina, ticket cliente, ticket delivery)
   deben mostrarlo — si tocás uno, revisá los otros dos.
 
-## Estado del bootstrap (2026-04-27)
+## Estado (2026-07-26 · v2.0.0-alpha.56)
 
-✅ Schema Prisma con todas las entidades de SPEC §2-11
-✅ Seeds idempotentes (usuarios, cuentas, categorías, productos desde Excel)
-✅ Parser de "Lista de Precios.xlsx" → JSON de seed
-✅ API Fastify: auth con PIN bcrypt, sesiones, hash-chain audit, catálogo, ventas
-✅ Web Next.js: design tokens (verde Teresita + cremoso), login Vendedor (Wireframe 01),
-   pantalla cargar pedido (Wireframe 02) con catálogo + carrito + modal modificadores,
-   pantalla cobro con descuento 10%, historial de sesión
-✅ Local agent stub con drivers ESC/POS para EPSON TM-T20II
-✅ Docker Compose dev (Postgres + Redis + Adminer)
-✅ Caddyfile prod
-✅ Workflows iniciales
+El sistema está **en producción en el local**, distribuido como `.exe` Electron que
+se auto-actualiza. Desde el bootstrap se sumó, entre otras cosas:
+
+✅ Admin completo: dashboard, ventas, movimientos, cierres, cuentas, precios, listas,
+   productos, insumos/proveedores (con pago multi-cuenta), facturas, clientes,
+   empleados, horarios, mayoristas, delivery, analytics, configuración
+✅ **Encargos** (pestaña propia): calendario, carga, cobro diferido, comanda, retiro
+✅ **Promos** con temporalidad + modificadores con ícono/conteo/unidad
+✅ Impresión: routing de comanderas configurable, tickets de encargo por comandera,
+   ficha del producto impresa, re-impresión eligiendo comandera
+✅ Ingesta de órdenes de plataforma (puente RAPPI/PYA/MELI — `channel.ts`; `ingest.ts`
+   es otra cosa: facturas por OCR). **Ojo**: es un puente platform-neutral con token
+   propio (`CHANNEL_INGEST_TOKEN`) — no hay credenciales de RAPPI/PYA/MELI cableadas
+✅ Responsive real en celular (tarjetas en vez de tablas) + PWA instalable
+✅ Todo en TZ Argentina explícita
+✅ Buscadores con filtro temporal y paginación en las 4 áreas pesadas
+✅ Cloud: Supabase + replicación, vistas de analytics, API deployable (Dockerfile)
+✅ CI/CD: build del `.exe` y migraciones de Supabase disparables desde el celular
+
+## El ciclo de release (desde la nube)
+
+Detalle en [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md). Resumen:
+
+- **ANTES de publicar: escribí las novedades.** Agregá una entrada nueva arriba de
+  todo en `apps/web/src/lib/novedades.ts` con la versión que va a salir. Es lo que
+  ve la encargada y las empleadas al abrir la app actualizada (cartel una vez por
+  versión). Si no la agregás, el release sale mudo y nadie se entera de qué cambió.
+  Escribilo para ellas, no para programadores.
+- **Publicar un alpha** → Actions → *Release Desktop* → Run workflow (`bump=prerelease`).
+  El workflow bumpea, commitea a `main`, taggea y buildea. No toques versiones a mano:
+  el drift versión/tag es lo que hizo fallar alpha.54.
+- **Migrar Supabase** → Actions → *Cloud Migrate* → Run workflow. Idempotente.
+- **Orden cuando el release trae cambio de schema**: primero Cloud Migrate, después
+  Release Desktop (así las cajas encuentran las columnas nuevas al actualizarse).
+- Web y API deployan solos en cada push a `main` (Vercel + Railway).
+
+> Al 2026-07-26 ninguno de los dos workflows corrió todavía por `workflow_dispatch`
+> (todos los releases previos salieron por push de tag). El cableado está verificado;
+> falta el primer disparo real.
 
 ## Pendientes priorizados
 
 | # | Item | Bloqueante para |
 |-|-|-|
 | 1 | Resolver pendientes del cliente (PREGUNTAS.md) | Producción |
-| 2 | Implementar pago multi-cuenta UI (Wireframe 08) | Pago a proveedores |
-| 3 | Implementar dashboard admin (Wireframe 06) | Sesión Admin |
-| 4 | Implementar sync Excel ↔ programa | Aprobación de cambios masivos |
-| 5 | Conectar webhooks RAPPI/PYA/MELI | Integración delivery |
-| 6 | Hash-chain audit triggers en Postgres (no solo app-level) | Forensic strength |
-| 7 | Cola BullMQ para impresión (en lugar de polling del agent) | Throughput alto |
-| 8 | Tests E2E con Playwright | Calidad |
-| 9 | Setup CI/CD GitHub Actions | Deploy automático |
+| 2 | Sync Excel ↔ programa (falta Google Drive API; hoy solo exceljs) | Aprobación de cambios masivos |
+| 3 | Webhooks reales de RAPPI/PYA/MELI (la ingesta existe, falta el push de las plataformas) | Integración delivery automática |
+| 4 | Hash-chain audit triggers en Postgres (no solo app-level) | Forensic strength |
+| 5 | Cola real para impresión (hoy DB + polling cada 3s) | Throughput alto |
+| 6 | Tests E2E con Playwright | Calidad |
+| 7 | Completar Camino A de PLAN-PARIDAD (una sola app en la nube) | Que el admin opere 100% desde el celu |
 
 ### 🔒 Pendientes de seguridad — HACER CUANDO ESTÉ EL SERVER LISTO
 
@@ -244,5 +308,8 @@ operativo: **cambiar los PINs default `0001/0002/0003`** + segmentar el WiFi.
 
 ---
 
-*Última actualización: 2026-05-15 (alpha.19). Sección "Invariantes / gotchas"
-agregada tras el incidente de movimientos sin sesión reportado por la encargada.*
+*Última actualización: 2026-07-26 (alpha.56). Puesta al día tras la migración a
+cloud-coding: Stack y estructura corregidos contra el código real (no hay BullMQ ni
+better-auth; se sumaron desktop/server/mobile), setup de dev sin el `db:migrate`
+trampa, estado y pendientes reflejando lo que ya se envió entre alpha.19 y alpha.56,
+y el nuevo ciclo de release por GitHub Actions.*
