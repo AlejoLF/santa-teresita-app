@@ -39,6 +39,49 @@ interface SmtpDbConfig {
 }
 
 /**
+ * Timeouts explícitos. SIN esto nodemailer usa sus defaults —connectionTimeout
+ * 2 min, socketTimeout 10 min— y un puerto SMTP bloqueado (router del local,
+ * ISP) deja el request colgado minutos: la encargada ve el spinner eterno y el
+ * navegador corta con "timeout" sin decir nunca qué falló. Incidente real:
+ * el reenvío del cierre desde /admin/cierres no salía y no había diagnóstico.
+ *
+ * Preferimos fallar en ~8s con un mensaje accionable antes que "cargando".
+ * socketTimeout es más holgado porque el adjunto (Excel del cierre) se sube
+ * por ahí y el uplink del local puede ser lento.
+ */
+const SMTP_TIMEOUTS = {
+  connectionTimeout: 8_000,
+  greetingTimeout: 8_000,
+  socketTimeout: 30_000,
+} as const;
+
+/**
+ * Traduce el error crudo de nodemailer/Node a algo que se pueda leer desde la
+ * UI y accionar sin mirar logs. El código viene en `err.code`.
+ */
+export function describirErrorSmtp(e: unknown): string {
+  const err = e as { code?: string; responseCode?: number; message?: string };
+  const code = err?.code ?? '';
+  const detalle = err?.message ? ` (${err.message})` : '';
+  switch (code) {
+    case 'ETIMEDOUT':
+    case 'ESOCKET':
+      return `No se pudo conectar al servidor de correo: se agotó el tiempo de espera. Casi siempre es el puerto SMTP bloqueado en la red del local (probá el otro puerto: 587 o 465) o el host mal cargado.${detalle}`;
+    case 'ECONNREFUSED':
+      return `El servidor de correo rechazó la conexión. Revisá host y puerto en Configuración.${detalle}`;
+    case 'ENOTFOUND':
+    case 'EDNS':
+      return `No se encontró el servidor de correo (host inexistente). Revisá que diga exactamente smtp.gmail.com.${detalle}`;
+    case 'EAUTH':
+      return `El servidor rechazó usuario o contraseña. Con Gmail hay que usar una "app password" de 16 caracteres, no la clave normal de la cuenta.${detalle}`;
+    case 'EENVELOPE':
+      return `Alguna dirección de destino es inválida.${detalle}`;
+    default:
+      return err?.message ?? 'Error desconocido enviando el email';
+  }
+}
+
+/**
  * Lee la config SMTP de `configuracion_sistema` y completa con .env como
  * fallback campo a campo. Devuelve null si NI la DB NI el env tienen host
  * — en ese caso se cae a Ethereal preview.
@@ -108,6 +151,7 @@ async function buildTransporter(): Promise<{
       port: smtp.port,
       secure: smtp.secure,
       auth: smtp.user ? { user: smtp.user, pass: smtp.pass } : undefined,
+      ...SMTP_TIMEOUTS,
     });
     console.log(
       `[mailer] SMTP real: ${smtp.host}:${smtp.port} via ${smtp.user || '(sin auth)'}`,
@@ -134,6 +178,7 @@ async function buildTransporter(): Promise<{
     port: test.smtp.port,
     secure: test.smtp.secure,
     auth: { user: test.user, pass: test.pass },
+    ...SMTP_TIMEOUTS,
   });
   cachedEtherealTransporter = transporter;
   cachedEtherealConfig = {
@@ -201,14 +246,30 @@ export async function sendMail(opts: SendMailOpts): Promise<SendMailResult> {
       'No hay destinatarios. Setea ADMIN_EMAIL_RECIPIENTS o pasá to[] explícito.',
     );
   }
-  const info = await transporter.sendMail({
-    from: config.from,
-    to: recipients.join(', '),
-    subject: opts.subject,
-    text: opts.text,
-    html: opts.html,
-    attachments: opts.attachments,
-  });
+  // Re-lanzamos con un mensaje accionable: la ruta que llama devuelve
+  // `e.message` al cliente, así que acá es donde se decide qué lee la
+  // encargada cuando el envío falla.
+  let info;
+  try {
+    info = await transporter.sendMail({
+      from: config.from,
+      to: recipients.join(', '),
+      subject: opts.subject,
+      text: opts.text,
+      html: opts.html,
+      attachments: opts.attachments,
+    });
+  } catch (e) {
+    // Mensaje legible, PERO conservando code/command/response: /admin/email/test
+    // los devuelve al cliente para diagnóstico y no queremos degradarlo.
+    const err = new Error(describirErrorSmtp(e), { cause: e }) as Error &
+      Record<string, unknown>;
+    const orig = e as Record<string, unknown>;
+    for (const k of ['code', 'command', 'response', 'responseCode'] as const) {
+      if (orig?.[k] !== undefined) err[k] = orig[k];
+    }
+    throw err;
+  }
   const previewUrl = config.isEthereal
     ? (nodemailer.getTestMessageUrl(info) as string | false) || null
     : null;
