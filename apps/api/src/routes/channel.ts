@@ -135,6 +135,77 @@ export default async function channelRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // GET /channel/products — catálogo publicable, para que el integrador arme el
+  // menú de la plataforma (RAPPI/PYA/MELI publican el menú: no lo bajan de ahí).
+  //
+  // El SKU de la plataforma ES `Producto.codigo`, así que un producto SIN código
+  // no se puede publicar NI se puede matchear cuando entra un pedido (daría 422).
+  // Por eso la respuesta separa `productos` (publicables) de `sinCodigo`, y el
+  // resumen sirve de diagnóstico antes de conectar en vivo.
+  //
+  // Sólo lectura. Mismo token que el resto del módulo de canal.
+  fastify.get(
+    '/channel/products',
+    {
+      schema: {
+        querystring: z.object({
+          // Por defecto sólo los activos: es lo que se publica. `todos=1`
+          // incluye los inactivos para auditar el catálogo completo.
+          todos: z.enum(['0', '1']).optional(),
+        }),
+      },
+    },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      if (!config.CHANNEL_INGEST_TOKEN) {
+        return reply.code(503).send({ error: 'Ingesta de canal deshabilitada' });
+      }
+      if (!tokenOk(req)) {
+        return reply.code(401).send({ error: 'Token de ingesta de canal inválido' });
+      }
+      const { todos } = req.query as { todos?: '0' | '1' };
+      const filas = await prisma.producto.findMany({
+        where: todos === '1' ? {} : { activo: true },
+        select: {
+          codigo: true,
+          nombre: true,
+          descripcion: true,
+          precioBase: true,
+          activo: true,
+          tipoProducto: {
+            select: { nombre: true, categoria: { select: { nombre: true } } },
+          },
+        },
+        orderBy: { nombre: 'asc' },
+      });
+
+      const productos = filas
+        .filter((p) => p.codigo)
+        .map((p) => ({
+          sku: p.codigo as string,
+          name: p.nombre,
+          description: p.descripcion ?? null,
+          price: Number(p.precioBase),
+          enabled: p.activo,
+          category: p.tipoProducto?.categoria?.nombre ?? null,
+          subcategory: p.tipoProducto?.nombre ?? null,
+        }));
+      // Sin código no hay SKU posible: los devolvemos aparte para que el
+      // operador sepa qué cargar antes de publicar, en vez de descubrirlo
+      // cuando una orden real rebote.
+      const sinCodigo = filas.filter((p) => !p.codigo).map((p) => p.nombre);
+
+      return reply.send({
+        resumen: {
+          total: filas.length,
+          publicables: productos.length,
+          sinCodigo: sinCodigo.length,
+        },
+        productos,
+        sinCodigo,
+      });
+    },
+  );
+
   // GET /channel/products/:codigo — sonda de alcance (reachability) que usa el
   // integrador para verificar que el POS responde y que el SKU está mapeado.
   fastify.get(
