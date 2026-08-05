@@ -7,8 +7,10 @@ import { FueraDeHorarioError } from '../services/sesion-caja.js';
 import {
   crearVentaCanal,
   simularOrdenCanal,
+  anularVentaCanal,
   MapeoIncompletoError,
   type OrdenCanal,
+  type CanalPlataforma,
 } from '../services/venta-canal.js';
 
 /**
@@ -229,6 +231,65 @@ export default async function channelRoutes(fastify: FastifyInstance) {
         name: p.nombre,
         price: Number(p.precioBase),
         enabled: p.activo,
+      });
+    },
+  );
+
+  // POST /channel/orders/cancel — la plataforma canceló la orden.
+  //
+  // Sin esto, un ORDER_EVENT_CANCEL de Rappi no hacía nada: la venta quedaba
+  // FINALIZADA y entraba al cierre de caja como facturada aunque el cliente
+  // nunca pagó. Descuadraba el turno.
+  //
+  // Va por body (no `/:id`) porque `idExternoCanal` es texto libre de la
+  // plataforma: puede traer barras y romper el ruteo.
+  //
+  // SIEMPRE 200 cuando el token es válido — mismo criterio que el dry-run: que
+  // la venta no exista es información, no un error. Pasa de verdad (la orden se
+  // rechazó, o entró con RAPPI_DRY_RUN), y devolver 404 haría que el integrador
+  // lo loguee como falla y reintente algo que no tiene arreglo.
+  fastify.post(
+    '/channel/orders/cancel',
+    {
+      schema: {
+        body: z.object({
+          canal: z.enum(['RAPPI', 'PEDIDOS_YA', 'MERCADO_LIBRE']),
+          idExternoCanal: z.string().min(1).max(120),
+          motivo: z.string().max(500).optional(),
+        }),
+      },
+    },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      if (!config.CHANNEL_INGEST_TOKEN) {
+        return reply.code(503).send({ error: 'Ingesta de canal deshabilitada' });
+      }
+      if (!tokenOk(req)) {
+        return reply.code(401).send({ error: 'Token de ingesta de canal inválido' });
+      }
+      const body = req.body as {
+        canal: CanalPlataforma;
+        idExternoCanal: string;
+        motivo?: string;
+      };
+      const out = await anularVentaCanal({
+        canal: body.canal,
+        idExternoCanal: body.idExternoCanal,
+        motivo: body.motivo?.trim() || `Cancelada por ${body.canal}`,
+      });
+
+      if (out.resultado === 'NO_ENCONTRADA') {
+        req.log.info(
+          { canal: body.canal, idExternoCanal: body.idExternoCanal },
+          'channel_cancel_venta_inexistente',
+        );
+        return reply.send({ resultado: out.resultado });
+      }
+      return reply.send({
+        resultado: out.resultado,
+        ventaId: out.venta.id,
+        numero: out.venta.numero,
+        total: out.venta.total,
+        pagosReversados: out.resultado === 'ANULADA' ? out.pagosReversados : 0,
       });
     },
   );
