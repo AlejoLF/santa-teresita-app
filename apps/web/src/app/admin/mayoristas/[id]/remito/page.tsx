@@ -1,7 +1,7 @@
 'use client';
 
-import { use, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, use, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
@@ -23,11 +23,26 @@ interface Catalogo {
   productos: ProductoCat[];
 }
 interface Linea {
-  productoId: string;
+  /** `null` para ítems libres (cargados por API sin producto del catálogo). */
+  productoId: string | null;
   nombre: string;
   unidadPrecio: string;
   precioUnitario: string;
   cantidad: string;
+  /** Clave estable de React: los ítems libres no tienen productoId. */
+  key: string;
+}
+interface RemitoExistente {
+  id: string;
+  numero: number;
+  estado: 'PENDIENTE' | 'PAGADO' | 'ANULADO';
+  observaciones: string | null;
+  items: Array<{
+    productoId: string | null;
+    nombre: string;
+    cantidad: string;
+    precioUnitario: string;
+  }>;
 }
 
 /** Subtotal de una línea, espejo de subtotalItem del backend. */
@@ -42,11 +57,26 @@ export default function NuevoRemitoPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  // useSearchParams obliga a un límite de Suspense o el build de Next falla.
+  return (
+    <Suspense fallback={<div className="text-ink-500 p-6">Cargando...</div>}>
+      <EditorRemito clienteId={id} />
+    </Suspense>
+  );
+}
+
+function EditorRemito({ clienteId: id }: { clienteId: string }) {
   const router = useRouter();
+  // `?editar=<remitoId>` → misma pantalla, pero precargada y guardando con PUT.
+  // Reusar el editor en vez de escribir uno aparte evita que creación y edición
+  // se vayan separando (y con ellas, el total que calcula cada una).
+  const remitoId = useSearchParams().get('editar');
+  const editando = Boolean(remitoId);
   const [cat, setCat] = useState<Catalogo | null>(null);
   const [busqueda, setBusqueda] = useState('');
   const [lineas, setLineas] = useState<Linea[]>([]);
   const [observaciones, setObservaciones] = useState('');
+  const [numeroEditado, setNumeroEditado] = useState<number | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,13 +85,41 @@ export default function NuevoRemitoPage({
       try {
         const res = await api.get<Catalogo>(`/admin/mayoristas/${id}/catalogo`);
         setCat(res);
+        if (!remitoId) return;
+        const rem = await api.get<RemitoExistente>(`/admin/mayoristas/remitos/${remitoId}`);
+        if (rem.estado !== 'PENDIENTE') {
+          setError(
+            rem.estado === 'PAGADO'
+              ? 'Este remito ya está cobrado. Marcalo como pendiente para poder editarlo.'
+              : 'Este remito está anulado y no se puede editar.',
+          );
+          return;
+        }
+        setNumeroEditado(rem.numero);
+        setObservaciones(rem.observaciones ?? '');
+        // El precio/unidad se toman del catálogo actual cuando el ítem tiene
+        // producto: así el editor muestra lo mismo que va a recalcular el
+        // backend al guardar. Los ítems libres conservan su precio manual.
+        setLineas(
+          rem.items.map((it, i) => {
+            const p = it.productoId ? res.productos.find((x) => x.id === it.productoId) : undefined;
+            return {
+              productoId: it.productoId,
+              nombre: p?.nombre ?? it.nombre,
+              unidadPrecio: p?.unidadPrecio ?? 'POR_UNIDAD',
+              precioUnitario: p?.precioUnitario ?? it.precioUnitario,
+              cantidad: it.cantidad,
+              key: it.productoId ?? `libre-${i}`,
+            };
+          }),
+        );
       } catch (e) {
         if (!(e instanceof ApiError) || e.status !== 401) {
-          setError('No se pudo cargar el catálogo');
+          setError('No se pudo cargar el remito');
         }
       }
     })();
-  }, [id]);
+  }, [id, remitoId]);
 
   const filtrados = useMemo(() => {
     if (!cat) return [];
@@ -89,16 +147,19 @@ export default function NuevoRemitoPage({
           unidadPrecio: p.unidadPrecio,
           precioUnitario: p.precioUnitario,
           cantidad: '1',
+          key: p.id,
         },
       ];
     });
   }
 
-  function setCantidad(productoId: string, cantidad: string) {
-    setLineas((arr) => arr.map((l) => (l.productoId === productoId ? { ...l, cantidad } : l)));
+  // Por `key`, no por productoId: los ítems libres lo tienen en null y dos de
+  // ellos se pisarían entre sí.
+  function setCantidad(key: string, cantidad: string) {
+    setLineas((arr) => arr.map((l) => (l.key === key ? { ...l, cantidad } : l)));
   }
-  function quitar(productoId: string) {
-    setLineas((arr) => arr.filter((l) => l.productoId !== productoId));
+  function quitar(key: string) {
+    setLineas((arr) => arr.filter((l) => l.key !== key));
   }
 
   const total = lineas.reduce(
@@ -114,15 +175,26 @@ export default function NuevoRemitoPage({
       return setError('Cada línea tiene que tener cantidad > 0');
     }
     setGuardando(true);
+    // Los ítems libres mandan su precio manual; los del catálogo NO, porque el
+    // backend los resuelve contra la lista del cliente (precio autoritativo).
+    const items = lineas.map((l) => ({
+      productoId: l.productoId ?? undefined,
+      nombre: l.nombre,
+      cantidad: Number(l.cantidad),
+      ...(l.productoId ? {} : { precioUnitario: Number(l.precioUnitario).toFixed(2) }),
+    }));
     try {
-      await api.post(`/admin/mayoristas/${id}/remitos`, {
-        observaciones: observaciones || undefined,
-        items: lineas.map((l) => ({
-          productoId: l.productoId,
-          nombre: l.nombre,
-          cantidad: Number(l.cantidad),
-        })),
-      });
+      if (remitoId) {
+        await api.put(`/admin/mayoristas/remitos/${remitoId}`, {
+          observaciones: observaciones || null,
+          items,
+        });
+      } else {
+        await api.post(`/admin/mayoristas/${id}/remitos`, {
+          observaciones: observaciones || undefined,
+          items,
+        });
+      }
       router.push(`/admin/mayoristas/${id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo guardar el remito');
@@ -136,7 +208,9 @@ export default function NuevoRemitoPage({
         <Link href={`/admin/mayoristas/${id}`} className="text-sm text-ink-500 hover:underline">
           ← Volver a la cuenta
         </Link>
-        <h1 className="font-display text-xl text-ink-900 mt-1">Nuevo remito</h1>
+        <h1 className="font-display text-xl text-ink-900 mt-1">
+          {editando ? `Editar remito${numeroEditado ? ` #${numeroEditado}` : ''}` : 'Nuevo remito'}
+        </h1>
         {cat && <p className="text-sm text-ink-500">Precios de la lista: {cat.lista.nombre}</p>}
       </header>
 
@@ -199,7 +273,7 @@ export default function NuevoRemitoPage({
                   l.unidadPrecio,
                 );
                 return (
-                  <div key={l.productoId} className="flex items-center gap-2">
+                  <div key={l.key} className="flex items-center gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="text-sm text-ink-700 truncate">{l.nombre}</div>
                       <div className="text-2xs text-ink-500">
@@ -214,14 +288,14 @@ export default function NuevoRemitoPage({
                       type="number"
                       step="0.001"
                       value={l.cantidad}
-                      onChange={(e) => setCantidad(l.productoId, e.target.value)}
+                      onChange={(e) => setCantidad(l.key, e.target.value)}
                       className="input w-20 text-sm font-mono text-right py-1"
                     />
                     <span className="w-24 text-right font-mono text-sm text-ink-900">
                       ${sub.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
                     </span>
                     <button
-                      onClick={() => quitar(l.productoId)}
+                      onClick={() => quitar(l.key)}
                       className="text-pomodoro-600 hover:bg-pomodoro-100 px-2 py-1 rounded"
                     >
                       ✕
@@ -249,7 +323,7 @@ export default function NuevoRemitoPage({
               onClick={() => void guardar()}
               disabled={guardando || lineas.length === 0}
             >
-              {guardando ? 'Guardando...' : 'Guardar remito'}
+              {guardando ? 'Guardando...' : editando ? 'Guardar cambios' : 'Guardar remito'}
             </Button>
           </div>
         </section>
