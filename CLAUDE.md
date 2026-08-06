@@ -224,7 +224,7 @@ Ver SPEC §1.5. Punteo:
   del canal. Los 3 tickets (comanda cocina, ticket cliente, ticket delivery)
   deben mostrarlo — si tocás uno, revisá los otros dos.
 
-## Estado (2026-07-26 · v2.0.0-alpha.56)
+## Estado (2026-08-05 · v2.0.0-alpha.58)
 
 El sistema está **en producción en el local**, distribuido como `.exe` Electron que
 se auto-actualiza. Desde el bootstrap se sumó, entre otras cosas:
@@ -262,9 +262,18 @@ Detalle en [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md). Resumen:
   Release Desktop (así las cajas encuentran las columnas nuevas al actualizarse).
 - Web y API deployan solos en cada push a `main` (Vercel + Railway).
 
-> Al 2026-07-26 ninguno de los dos workflows corrió todavía por `workflow_dispatch`
-> (todos los releases previos salieron por push de tag). El cableado está verificado;
-> falta el primer disparo real.
+> **Primer disparo real: 2026-08-05 (alpha.58).** Los dos workflows corrieron por
+> `workflow_dispatch` y funcionaron. Cloud Migrate reportó "1 aplicadas, 23 ya
+> estaban"; Release Desktop bumpeó a alpha.58, commiteó a `main` y taggeó sin
+> drift versión/tag.
+>
+> **Truco de orden que conviene repetir**: si el release trae cambio de schema,
+> corré Cloud Migrate **desde la rama de la feature** (el selector de rama del
+> "Run workflow"), ANTES de mergear. Si mergeás primero, Vercel y Railway
+> deployan solos en el acto y el API queda pidiendo columnas que todavía no
+> existen → 500 en la pantalla afectada hasta que corras la migración. Como las
+> migraciones son aditivas e idempotentes, aplicarlas antes que el código es
+> seguro: el código viejo ignora las columnas nuevas.
 
 ## Pendientes priorizados
 
@@ -308,7 +317,14 @@ operativo: **cambiar los PINs default `0001/0002/0003`** + segmentar el WiFi.
 
 ---
 
-*Última actualización: 2026-07-26 (alpha.56). Puesta al día tras la migración a
+*Última actualización: 2026-08-05 (alpha.58). Se sumó a mayoristas la impresión
+de remitos individuales, el detalle/edición de cada remito y el estado PAGADO con
+imputación de cobros (ojo con el cálculo del saldo: PAGADO NO sale del total
+remitado). Del lado de canal, `GET /channel/products` y `POST
+/channel/orders/cancel`. Y quedó registrado el primer release disparado
+íntegramente por `workflow_dispatch`.*
+
+*Anterior: 2026-07-26 (alpha.56). Puesta al día tras la migración a
 cloud-coding: Stack y estructura corregidos contra el código real (no hay BullMQ ni
 better-auth; se sumaron desktop/server/mobile), setup de dev sin el `db:migrate`
 trampa, estado y pendientes reflejando lo que ya se envió entre alpha.19 y alpha.56,
