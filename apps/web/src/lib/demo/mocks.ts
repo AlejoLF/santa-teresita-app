@@ -1908,9 +1908,30 @@ export function handleMock(method: Method, path: string, body?: unknown): MockRe
       ],
     });
   }
-  // Anular remito: /admin/mayoristas/remitos/:remitoId/anular (va antes del :id genérico).
+  // Remitos por id: van ANTES del /:id genérico o se los come el match de cliente.
   m = p.match(/^\/admin\/mayoristas\/remitos\/([^/]+)\/anular$/);
   if (m && method === 'POST') return ok({});
+  m = p.match(/^\/admin\/mayoristas\/remitos\/([^/]+)\/pagar$/);
+  if (m && method === 'POST') return ok({});
+  m = p.match(/^\/admin\/mayoristas\/remitos\/([^/]+)$/);
+  if (m && method === 'PUT') return ok({});
+  if (m && method === 'GET') {
+    // Los remitos demo son heterogéneos (algunos sin `items`): se tipa el
+    // acumulador o TS no puede unificarlos al aplanar.
+    type RemitoDemo = {
+      id: string;
+      items?: Array<{ nombre: string; cantidad: string; precioUnitario: string; subtotal: string }>;
+    };
+    const todos = MAYORISTAS_DEMO.flatMap((x) => x.remitos as RemitoDemo[]);
+    const rem = todos.find((r) => r.id === m![1]);
+    if (!rem) return notFound('Remito no encontrado');
+    return ok({
+      ...rem,
+      // El editor precarga por productoId; en demo no hay catálogo real detrás,
+      // así que van como ítems libres con su precio.
+      items: (rem.items ?? []).map((it) => ({ ...it, productoId: null })),
+    });
+  }
   m = p.match(/^\/admin\/mayoristas\/([^/]+)\/catalogo$/);
   if (m && method === 'GET') {
     return ok(mayoristaCatalogo(MAYORISTAS_DEMO.find((x) => x.id === m![1])));

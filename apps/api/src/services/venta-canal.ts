@@ -10,6 +10,7 @@ import {
 import type { ModificadorAplicado } from '@sta/shared';
 import { crearVenta } from './venta.js';
 import { recordAudit } from './audit.js';
+import { encolarComandasCanceladas } from './impresion.js';
 import { getConfigHorarios, resolverSlotActivo } from './horarios.js';
 
 /**
@@ -321,4 +322,97 @@ export async function crearVentaCanal(orden: OrdenCanal): Promise<ResultadoOrden
   });
 
   return { venta: finalizada, duplicate: Boolean(existente) };
+}
+
+/**
+ * Resultado de anular una orden de canal. Siempre es información, nunca un
+ * error HTTP: que la venta no exista es un caso NORMAL (la orden pudo haberse
+ * rechazado, o haber entrado en dry-run), no una falla.
+ */
+export type ResultadoAnulacionCanal =
+  | { resultado: 'ANULADA'; venta: Venta; pagosReversados: number }
+  | { resultado: 'YA_ANULADA'; venta: Venta }
+  | { resultado: 'NO_ENCONTRADA' };
+
+/**
+ * Anula la venta creada por una orden de plataforma que la plataforma canceló.
+ *
+ * POR QUÉ EXISTE: sin esto, un `ORDER_EVENT_CANCEL` de Rappi se logueaba y nada
+ * más. La venta quedaba FINALIZADA, entraba al cierre de caja y al analytics
+ * como facturada, y el cliente nunca pagó → **descuadre del turno**.
+ *
+ * Diferencias con `POST /ventas/:id/anular` (el camino humano):
+ *
+ * - **Sin PIN admin.** No hay humano: la plataforma es la autoridad sobre el
+ *   estado de su propia orden. El control de acceso es el CHANNEL_INGEST_TOKEN.
+ *   Queda igual de auditado (`recordAudit` con el usuario de sistema Canales).
+ * - **Idempotente.** El webhook se reenvía; anular dos veces devuelve
+ *   `YA_ANULADA` sin tocar nada.
+ * - **Busca por `(canal, idExternoCanal)`**, no por el UUID interno: el
+ *   integrador sólo conoce el id de la plataforma.
+ *
+ * INVARIANTE (ver CLAUDE.md): dentro del `$transaction` TODO usa `tx`, nunca el
+ * prisma global — las cajas corren con connection_limit=1 y deadlockean.
+ */
+export async function anularVentaCanal(args: {
+  canal: CanalPlataforma;
+  idExternoCanal: string;
+  motivo: string;
+}): Promise<ResultadoAnulacionCanal> {
+  const canal = args.canal as CanalVenta;
+  const venta = await prisma.venta.findFirst({
+    where: { canal, idExternoCanal: args.idExternoCanal },
+  });
+  if (!venta) return { resultado: 'NO_ENCONTRADA' };
+  if (venta.estado === EstadoVenta.ANULADA) return { resultado: 'YA_ANULADA', venta };
+
+  // Sólo las FINALIZADAS tienen pagos; una PROCESADA a medias no.
+  const pagosAReversar =
+    venta.estado === EstadoVenta.FINALIZADA
+      ? await prisma.pago.findMany({
+          where: { ventaId: venta.id, estado: EstadoPago.CONFIRMADO },
+        })
+      : [];
+
+  const anulada = await prisma.$transaction(async (tx) => {
+    // NO se toca `saldoActual`: las ventas no acreditan saldo a las cuentas
+    // (se concilian a mano). Decrementar acá dejaría la cuenta en negativo —
+    // el mismo bug que ya se corrigió en el anular humano.
+    for (const pago of pagosAReversar) {
+      await tx.pago.update({ where: { id: pago.id }, data: { estado: EstadoPago.ANULADO } });
+    }
+
+    const upd = await tx.venta.update({
+      where: { id: venta.id },
+      data: {
+        estado: EstadoVenta.ANULADA,
+        motivoAnulacion: args.motivo,
+        fechaAnulacion: new Date(),
+        usuarioAnulacionId: USUARIO_CANALES_ID,
+      },
+    });
+
+    await recordAudit({
+      tabla: 'ventas',
+      registroId: venta.id,
+      accion: 'TRANSITION',
+      usuarioId: USUARIO_CANALES_ID,
+      pcOrigen: `CANAL:${args.canal}`,
+      valorAnterior: { estado: venta.estado, total: venta.total },
+      valorNuevo: {
+        estado: 'ANULADA',
+        motivo: args.motivo,
+        idExternoCanal: args.idExternoCanal,
+        pagosReversados: pagosAReversar.length,
+        montoReversado: pagosAReversar.reduce((s, p) => s + Number(p.monto), 0).toFixed(2),
+      },
+      tx,
+    });
+
+    // La cocina puede estar preparándolo: hay que mandarles la cancelación.
+    await encolarComandasCanceladas(venta.id, tx);
+    return upd;
+  });
+
+  return { resultado: 'ANULADA', venta: anulada, pagosReversados: pagosAReversar.length };
 }

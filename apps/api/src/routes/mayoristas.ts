@@ -46,6 +46,96 @@ async function getCategoriaCobroId(): Promise<string> {
   return cat.id;
 }
 
+/** Un ítem del remito no se pudo resolver (producto inexistente, precio faltante). */
+class ItemRemitoError extends Error {}
+
+interface ItemEntrada {
+  productoId?: string;
+  nombre: string;
+  cantidad: number;
+  precioUnitario?: string;
+}
+interface ItemsResueltos {
+  itemsData: Array<{
+    productoId: string | null;
+    nombreSnapshot: string;
+    cantidad: string;
+    precioUnitario: string;
+    subtotal: string;
+    orden: number;
+  }>;
+  total: number;
+}
+
+/**
+ * Resuelve los ítems de un remito contra la lista de precios del cliente.
+ *
+ * Los precios se resuelven **server-side**: para un ítem con `productoId` NO se
+ * confía en lo que manda el front, se lee el precio efectivo de la lista (o el
+ * precio base con el ajuste porcentual). Sólo los ítems libres (sin producto
+ * del catálogo) llevan precio manual.
+ *
+ * Extraído para que crear y EDITAR un remito usen exactamente el mismo cálculo:
+ * si divergen, editar un remito le cambia el total sin que nadie lo pida.
+ */
+async function resolverItemsRemito(
+  cliente: { listaPreciosId: string; listaPrecios: { ajustePctDefault: Prisma.Decimal } },
+  items: ItemEntrada[],
+): Promise<ItemsResueltos> {
+  const ajustePct = Number(cliente.listaPrecios.ajustePctDefault);
+  const productoIds = [...new Set(items.map((i) => i.productoId).filter(Boolean) as string[])];
+  const productos = productoIds.length
+    ? await prisma.producto.findMany({
+        where: { id: { in: productoIds } },
+        include: {
+          preciosPorLista: {
+            where: { listaId: cliente.listaPreciosId },
+            orderBy: { vigenciaDesde: 'desc' },
+            take: 1,
+          },
+        },
+      })
+    : [];
+  const prodMap = new Map(productos.map((p) => [p.id, p]));
+
+  const itemsData: ItemsResueltos['itemsData'] = [];
+  let total = 0;
+  for (const [idx, it] of items.entries()) {
+    let precioUnitario: number;
+    let subtotalStr: string;
+    let nombre = it.nombre;
+    if (it.productoId) {
+      const p = prodMap.get(it.productoId);
+      if (!p) throw new ItemRemitoError(`Producto ${it.productoId} no existe`);
+      const override = p.preciosPorLista[0]?.precioEfectivo;
+      precioUnitario = override ? Number(override) : Number(p.precioBase) * (1 + ajustePct / 100);
+      nombre = p.nombre;
+      subtotalStr = subtotalItem({
+        cantidad: it.cantidad,
+        precioUnitario: precioUnitario.toFixed(2),
+        unidadPrecio: p.unidadPrecio,
+      });
+    } else {
+      // Ítem libre (sin producto del catálogo): precio manual, por unidad.
+      precioUnitario = Number(it.precioUnitario ?? 0);
+      if (precioUnitario <= 0) {
+        throw new ItemRemitoError(`Falta el precio del ítem "${it.nombre}"`);
+      }
+      subtotalStr = (it.cantidad * precioUnitario).toFixed(2);
+    }
+    total += Number(subtotalStr);
+    itemsData.push({
+      productoId: it.productoId ?? null,
+      nombreSnapshot: nombre,
+      cantidad: String(it.cantidad),
+      precioUnitario: precioUnitario.toFixed(2),
+      subtotal: subtotalStr,
+      orden: idx,
+    });
+  }
+  return { itemsData, total };
+}
+
 export default async function mayoristasRoutes(fastify: FastifyInstance) {
   // ── Listas de precios disponibles (para asignar a un cliente) ──
   fastify.get(
@@ -82,7 +172,11 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         prisma.remito.groupBy({
           by: ['clienteMayoristaId'],
           _sum: { total: true },
-          where: { estado: 'PENDIENTE', clienteMayoristaId: { in: ids } },
+          // `not: ANULADO` (no `= PENDIENTE`): un remito PAGADO SIGUE contando
+          // en lo remitado. El saldo es remitado - cobrado, y el cobro ya está
+          // del otro lado de la resta; si los PAGADO salieran del total, el
+          // pago se restaría dos veces y el saldo daría negativo.
+          where: { estado: { not: 'ANULADO' }, clienteMayoristaId: { in: ids } },
         }),
         prisma.movimiento.groupBy({
           by: ['entidadId'],
@@ -243,7 +337,9 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         }),
         prisma.remito.aggregate({
           _sum: { total: true },
-          where: { clienteMayoristaId: id, estado: 'PENDIENTE' },
+          // Ver la nota del listado: PAGADO es una MARCA de qué cobro saldó el
+          // remito, no una baja del total remitado.
+          where: { clienteMayoristaId: id, estado: { not: 'ANULADO' } },
         }),
         prisma.movimiento.aggregate({
           _sum: { monto: true },
@@ -275,6 +371,7 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           fecha: r.fecha,
           total: r.total.toFixed(2),
           estado: r.estado,
+          pagadoAt: r.pagadoAt,
           itemsCount: r._count.items,
           observaciones: r.observaciones,
           items: r.items.map((it) => ({
@@ -388,68 +485,14 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       });
       if (!cliente) return reply.code(404).send({ error: 'Cliente no encontrado' });
 
-      const ajustePct = Number(cliente.listaPrecios.ajustePctDefault);
-      // Resolvemos precios autoritativamente desde la lista del cliente (no
-      // confiamos en lo que manda el front para ítems con productoId).
-      const productoIds = [...new Set(b.items.map((i) => i.productoId).filter(Boolean) as string[])];
-      const productos = productoIds.length
-        ? await prisma.producto.findMany({
-            where: { id: { in: productoIds } },
-            include: {
-              preciosPorLista: {
-                where: { listaId: cliente.listaPreciosId },
-                orderBy: { vigenciaDesde: 'desc' },
-                take: 1,
-              },
-            },
-          })
-        : [];
-      const prodMap = new Map(productos.map((p) => [p.id, p]));
-
-      const itemsData: Array<{
-        productoId: string | null;
-        nombreSnapshot: string;
-        cantidad: string;
-        precioUnitario: string;
-        subtotal: string;
-        orden: number;
-      }> = [];
-      let total = 0;
-      for (const [idx, it] of b.items.entries()) {
-        let precioUnitario: number;
-        let subtotalStr: string;
-        let nombre = it.nombre;
-        if (it.productoId) {
-          const p = prodMap.get(it.productoId);
-          if (!p) return reply.code(400).send({ error: `Producto ${it.productoId} no existe` });
-          const override = p.preciosPorLista[0]?.precioEfectivo;
-          precioUnitario = override
-            ? Number(override)
-            : Number(p.precioBase) * (1 + ajustePct / 100);
-          nombre = p.nombre;
-          subtotalStr = subtotalItem({
-            cantidad: it.cantidad,
-            precioUnitario: precioUnitario.toFixed(2),
-            unidadPrecio: p.unidadPrecio,
-          });
-        } else {
-          // Ítem libre (sin producto del catálogo): precio manual, por unidad.
-          precioUnitario = Number(it.precioUnitario ?? 0);
-          if (precioUnitario <= 0) {
-            return reply.code(400).send({ error: `Falta el precio del ítem "${it.nombre}"` });
-          }
-          subtotalStr = (it.cantidad * precioUnitario).toFixed(2);
-        }
-        total += Number(subtotalStr);
-        itemsData.push({
-          productoId: it.productoId ?? null,
-          nombreSnapshot: nombre,
-          cantidad: String(it.cantidad),
-          precioUnitario: precioUnitario.toFixed(2),
-          subtotal: subtotalStr,
-          orden: idx,
-        });
+      let resuelto: ItemsResueltos;
+      try {
+        resuelto = await resolverItemsRemito(cliente, b.items);
+      } catch (e) {
+        if (e instanceof ItemRemitoError) return reply.code(400).send({ error: e.message });
+        throw e;
       }
+      const { itemsData, total } = resuelto;
 
       const remito = await prisma.remito.create({
         data: {
@@ -495,16 +538,156 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         numero: remito.numero,
         fecha: remito.fecha,
         estado: remito.estado,
+        pagadoAt: remito.pagadoAt,
         total: remito.total.toFixed(2),
         observaciones: remito.observaciones,
         cliente: remito.clienteMayorista,
         items: remito.items.map((it) => ({
+          // productoId hace falta para PRECARGAR el editor: sin él no se puede
+          // reconstruir la línea contra el catálogo y editar perdería el ítem.
+          productoId: it.productoId,
           nombre: it.nombreSnapshot,
           cantidad: it.cantidad.toString(),
           precioUnitario: it.precioUnitario.toFixed(2),
           subtotal: it.subtotal.toFixed(2),
         })),
       };
+    },
+  );
+
+  // ── Editar remito (reemplaza los ítems y recalcula el total) ──
+  //
+  // Un remito ANULADO no se edita: ya salió de la cuenta corriente y
+  // reescribirlo dejaría el audit sin sentido. Uno PAGADO tampoco: cambiarle el
+  // total después de cobrarlo descuadra el saldo contra el cobro ya registrado.
+  fastify.put(
+    '/admin/mayoristas/remitos/:remitoId',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ remitoId: z.string().uuid() }),
+        body: z.object({
+          fecha: z.string().datetime().optional(),
+          observaciones: z.string().max(1000).nullable().optional(),
+          items: z
+            .array(
+              z.object({
+                productoId: z.string().uuid().optional(),
+                nombre: z.string().min(1).max(200),
+                cantidad: z.coerce.number().positive(),
+                precioUnitario: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+              }),
+            )
+            .min(1),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { remitoId } = req.params as { remitoId: string };
+      const b = req.body as {
+        fecha?: string;
+        observaciones?: string | null;
+        items: ItemEntrada[];
+      };
+      const remito = await prisma.remito.findUnique({ where: { id: remitoId } });
+      if (!remito) return reply.code(404).send({ error: 'Remito no encontrado' });
+      if (remito.estado === 'ANULADO') {
+        return reply.code(400).send({ error: 'No se puede editar un remito anulado' });
+      }
+      if (remito.estado === 'PAGADO') {
+        return reply.code(400).send({
+          error: 'No se puede editar un remito ya cobrado. Marcalo como pendiente primero.',
+        });
+      }
+      const cliente = await prisma.clienteMayorista.findUnique({
+        where: { id: remito.clienteMayoristaId },
+        include: { listaPrecios: true },
+      });
+      if (!cliente) return reply.code(404).send({ error: 'Cliente no encontrado' });
+
+      let resuelto: ItemsResueltos;
+      try {
+        resuelto = await resolverItemsRemito(cliente, b.items);
+      } catch (e) {
+        if (e instanceof ItemRemitoError) return reply.code(400).send({ error: e.message });
+        throw e;
+      }
+      const totalAnterior = remito.total.toFixed(2);
+
+      const actualizado = await prisma.$transaction(async (tx) => {
+        // Reemplazo completo: borrar + recrear es más simple y seguro que
+        // diffear, y el remito es chico. Los ítems no se referencian desde
+        // ningún lado, así que no hay nada que se rompa al borrarlos.
+        await tx.remitoItem.deleteMany({ where: { remitoId } });
+        const upd = await tx.remito.update({
+          where: { id: remitoId },
+          data: {
+            ...(b.fecha && { fecha: new Date(b.fecha) }),
+            ...(b.observaciones !== undefined && { observaciones: b.observaciones || null }),
+            total: resuelto.total.toFixed(2),
+            items: { create: resuelto.itemsData },
+          },
+          include: { items: { orderBy: { orden: 'asc' } } },
+        });
+        await recordAudit({
+          tabla: 'remitos',
+          registroId: remitoId,
+          accion: 'UPDATE',
+          usuarioId: req.usuario!.id,
+          valorAnterior: { total: totalAnterior },
+          valorNuevo: { total: upd.total.toFixed(2), items: upd.items.length },
+          tx,
+        });
+        return upd;
+      });
+      return actualizado;
+    },
+  );
+
+  // ── Marcar un remito como cobrado (o volverlo a pendiente) ──
+  //
+  // OJO: esto NO mueve plata. Es una MARCA para saber qué remitos cubrió un
+  // cobro; el dinero entra por `/cobros` (movimiento INGRESO). Un remito PAGADO
+  // sigue contando en el total remitado — ver la nota del cálculo de saldo.
+  fastify.post(
+    '/admin/mayoristas/remitos/:remitoId/pagar',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ remitoId: z.string().uuid() }),
+        body: z.object({ pagado: z.boolean().default(true) }).optional(),
+      },
+    },
+    async (req, reply) => {
+      const { remitoId } = req.params as { remitoId: string };
+      const pagado = (req.body as { pagado?: boolean } | undefined)?.pagado ?? true;
+      const remito = await prisma.remito.findUnique({ where: { id: remitoId } });
+      if (!remito) return reply.code(404).send({ error: 'Remito no encontrado' });
+      if (remito.estado === 'ANULADO') {
+        return reply.code(400).send({ error: 'El remito está anulado' });
+      }
+      const destino = pagado ? 'PAGADO' : 'PENDIENTE';
+      if (remito.estado === destino) return remito; // idempotente
+
+      const updated = await prisma.remito.update({
+        where: { id: remitoId },
+        data: {
+          estado: destino,
+          pagadoAt: pagado ? new Date() : null,
+          // Al despagar se suelta el link al cobro: si volvió a pendiente, ese
+          // movimiento ya no lo cubre.
+          ...(pagado ? {} : { pagadoConMovimientoId: null }),
+        },
+      });
+      await recordAudit({
+        tabla: 'remitos',
+        registroId: remitoId,
+        accion: 'TRANSITION',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { estado: remito.estado },
+        valorNuevo: { estado: destino },
+      });
+      return updated;
     },
   );
 
@@ -556,6 +739,9 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           fecha: z.string().datetime().optional(),
           numeroReferencia: z.string().max(80).optional(),
           observacion: z.string().max(500).optional(),
+          // Remitos que este cobro salda. Opcional: se puede cobrar "a cuenta"
+          // sin imputar a remitos puntuales, que es como venía funcionando.
+          remitoIds: z.array(z.string().uuid()).max(500).optional(),
         }),
       },
     },
@@ -568,9 +754,31 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         fecha?: string;
         numeroReferencia?: string;
         observacion?: string;
+        remitoIds?: string[];
       };
       const cliente = await prisma.clienteMayorista.findUnique({ where: { id } });
       if (!cliente) return reply.code(404).send({ error: 'Cliente no encontrado' });
+
+      // Los remitos a imputar tienen que ser DE ESTE cliente y no estar
+      // anulados. Sin este chequeo, un id de otro cliente marcaría pagado un
+      // remito ajeno.
+      let aImputar: string[] = [];
+      if (b.remitoIds?.length) {
+        const validos = await prisma.remito.findMany({
+          where: {
+            id: { in: b.remitoIds },
+            clienteMayoristaId: cliente.id,
+            estado: { not: 'ANULADO' },
+          },
+          select: { id: true },
+        });
+        if (validos.length !== b.remitoIds.length) {
+          return reply.code(400).send({
+            error: 'Hay remitos que no son de este cliente o están anulados',
+          });
+        }
+        aImputar = validos.map((r) => r.id);
+      }
 
       const categoriaId = await getCategoriaCobroId();
       const monto = Number(b.monto);
@@ -606,6 +814,15 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           where: { id: b.cuentaId },
           data: { saldoActual: { increment: monto } },
         });
+        // Imputación: los remitos elegidos quedan PAGADO y apuntando a ESTE
+        // movimiento. Va DENTRO de la tx: si falla, no queremos remitos
+        // marcados como cobrados sin el cobro registrado.
+        if (aImputar.length) {
+          await tx.remito.updateMany({
+            where: { id: { in: aImputar } },
+            data: { estado: 'PAGADO', pagadoAt: fecha, pagadoConMovimientoId: m.id },
+          });
+        }
         return m;
       });
       await recordAudit({
@@ -613,9 +830,15 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         registroId: mov.id,
         accion: 'INSERT',
         usuarioId: req.usuario!.id,
-        valorNuevo: { tipo: 'INGRESO', concepto: 'Cobro cuenta corriente', cliente: cliente.nombre, monto: b.monto },
+        valorNuevo: {
+          tipo: 'INGRESO',
+          concepto: 'Cobro cuenta corriente',
+          cliente: cliente.nombre,
+          monto: b.monto,
+          remitosImputados: aImputar.length,
+        },
       });
-      return reply.code(201).send(mov);
+      return reply.code(201).send({ ...mov, remitosImputados: aImputar.length });
     },
   );
 }

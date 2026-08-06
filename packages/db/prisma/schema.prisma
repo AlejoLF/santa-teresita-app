@@ -601,6 +601,9 @@ model PrecioPorLista {
 
 enum EstadoRemito {
   PENDIENTE
+  /// Cobrado. El remito SIGUE sumando al total remitado (el saldo se calcula
+  /// remitado - cobrado); PAGADO sólo marca CUÁL remito cubrió un cobro.
+  PAGADO
   ANULADO
 }
 
@@ -640,12 +643,18 @@ model Remito {
   usuarioId          String?      @map("usuario_id") @db.Uuid
   motivoAnulacion    String?      @map("motivo_anulacion")
   anuladoAt          DateTime?    @map("anulado_at")
+  pagadoAt           DateTime?    @map("pagado_at")
+  /// Movimiento del cobro que saldó este remito. Nullable: se puede marcar
+  /// pagado a mano (cobro viejo, ajuste) sin un movimiento asociado.
+  pagadoConMovimientoId String?   @map("pagado_con_movimiento_id") @db.Uuid
   creadoAt           DateTime     @default(now()) @map("creado_at")
 
-  clienteMayorista ClienteMayorista @relation(fields: [clienteMayoristaId], references: [id])
-  items            RemitoItem[]
+  clienteMayorista    ClienteMayorista @relation(fields: [clienteMayoristaId], references: [id])
+  items               RemitoItem[]
+  pagadoConMovimiento Movimiento?      @relation(fields: [pagadoConMovimientoId], references: [id], onDelete: SetNull)
 
   @@index([clienteMayoristaId, estado])
+  @@index([pagadoConMovimientoId])
   @@index([fecha])
   @@map("remitos")
 }
@@ -825,6 +834,7 @@ model Movimiento {
   pagos             Pago[]
   pagosFactura      PagoFactura[]       @relation("MovimientoPagoFactura")
   facturasAsociadas MovimientoFactura[]
+  remitosSaldados   Remito[]
 
   @@index([fechaComputo])
   @@index([categoriaId, estado])

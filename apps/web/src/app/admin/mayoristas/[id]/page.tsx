@@ -12,7 +12,8 @@ interface Remito {
   numero: number;
   fecha: string;
   total: string;
-  estado: 'PENDIENTE' | 'ANULADO';
+  estado: 'PENDIENTE' | 'PAGADO' | 'ANULADO';
+  pagadoAt?: string | null;
   itemsCount: number;
   observaciones: string | null;
   // Detalle de productos — el resumen impreso los lista debajo de cada remito.
@@ -60,6 +61,124 @@ function hoyISO(): string {
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
 }
 
+// ────────────────────────────────────────────────────────────────────────
+//   Impresión — resumen de cuenta y remito individual comparten la papelería
+// ────────────────────────────────────────────────────────────────────────
+
+// Escape HTML. El nombre/CUIT del cliente van a un documento same-origin; sin
+// escapar, un nombre con <img onerror=...> ejecuta JS y roba el token de
+// localStorage. Seguridad: stored XSS vía document.write.
+const esc = (v: unknown) =>
+  String(v ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const money = (v: unknown) =>
+  Number(v ?? 0).toLocaleString('es-AR', { minimumFractionDigits: 2 });
+const cant = (v: unknown) => Number(v ?? 0).toLocaleString('es-AR');
+/** Fecha de un input date (YYYY-MM-DD): se lee como UTC para no correrla un día. */
+const fechaCorta = (iso: string) =>
+  new Date(iso).toLocaleDateString('es-AR', { timeZone: 'UTC' });
+/** Fecha de un timestamp de la DB: en TZ Argentina, como todo el sistema. */
+const fechaLarga = (iso: string) =>
+  new Date(iso).toLocaleDateString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+
+/** Tabla de productos de un remito (o el conteo, si no vino el detalle). */
+function tablaItems(r: Remito): string {
+  const items = r.items ?? [];
+  if (items.length === 0) return `<div class="sin-items">${r.itemsCount} ítems (sin detalle)</div>`;
+  const filas = items
+    .map(
+      (it) =>
+        `<tr><td>${esc(it.nombre)}</td><td class="num">${cant(it.cantidad)}</td><td class="num">$ ${money(it.precioUnitario)}</td><td class="num">$ ${money(it.subtotal)}</td></tr>`,
+    )
+    .join('');
+  return `<table class="items"><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">P. unitario</th><th class="num">Total</th></tr></thead><tbody>${filas}</tbody></table>`;
+}
+
+/** Bloque de un remito dentro del resumen: encabezado + tabla + observaciones. */
+function bloqueRemito(r: Remito): string {
+  return `<section class="remito">
+    <div class="rem-head">
+      <span class="rem-num">Remito #${r.numero}</span>
+      <span class="rem-fecha">${fechaLarga(r.fecha)}</span>
+      <span class="rem-total">$ ${money(r.total)}</span>
+    </div>
+    ${tablaItems(r)}
+    ${r.observaciones ? `<div class="obs">Obs: ${esc(r.observaciones)}</div>` : ''}
+  </section>`;
+}
+
+function documentoHtml(o: {
+  titulo: string;
+  encabezado: string;
+  subtitulo: string;
+  cuerpo: string;
+  total: number;
+}): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(o.titulo)}</title>
+    <style>
+    body{font-family:system-ui,sans-serif;padding:24px 28px 60px;color:#1a1a1a}
+    /* Membrete de la fábrica — centrado a página */
+    .membrete{text-align:center;margin-bottom:18px;padding-bottom:12px;border-bottom:2px solid #1a1a1a}
+    .membrete .nombre{font-size:20px;font-weight:700;letter-spacing:2px;text-transform:uppercase}
+    .membrete .desc{font-size:12px;color:#555;margin-top:2px}
+    .membrete .dir{font-size:12px;color:#555;margin-top:1px}
+    h1{font-size:16px;margin:0 0 4px} .sub{color:#666;font-size:12px;margin-bottom:14px}
+    .remito{margin-bottom:14px;break-inside:avoid}
+    .rem-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;background:#f3f0ea;border:1px solid #ddd;border-bottom:none;padding:5px 8px;font-size:13px}
+    .rem-num{font-weight:700} .rem-fecha{color:#555} .rem-total{font-weight:700;margin-left:auto}
+    table.items{width:100%;border-collapse:collapse;font-size:12px;border:1px solid #ddd}
+    table.items th,table.items td{padding:4px 8px;border-bottom:1px solid #eee;text-align:left}
+    table.items th{text-transform:uppercase;font-size:10px;color:#666;background:#fafafa}
+    td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .sin-items{border:1px solid #ddd;padding:5px 8px;font-size:12px;color:#666}
+    .obs{font-size:11px;color:#777;padding:3px 8px;border:1px solid #ddd;border-top:none}
+    .total{font-size:17px;font-weight:bold;text-align:right;margin-top:16px}
+    /* Pie de página en cada hoja impresa */
+    .pie{position:fixed;bottom:8px;left:0;right:0;text-align:center;font-size:10px;color:#888}
+    </style></head>
+    <body>
+    <div class="membrete">
+      <div class="nombre">Santa Teresita Pastas</div>
+      <div class="desc">Fábrica de pastas artesanales</div>
+      <div class="dir">Av. 44 e/ 12 y Plaza Paso · La Plata, Buenos Aires</div>
+    </div>
+    <h1>${o.encabezado}</h1>
+    <div class="sub">${o.subtitulo}</div>
+    ${o.cuerpo}
+    <div class="total">TOTAL: $ ${money(o.total)}</div>
+    <div class="pie">Santa Teresita Pastas · Av. 44 e/ 12 y Plaza Paso, La Plata</div>
+    <script>window.onload=function(){window.print()}</script></body></html>`;
+}
+
+/**
+ * Abre el documento como una pestaña navegable (Blob).
+ *
+ * NO usar window.open('', '_blank', 'width=...'): ese string de features hace
+ * que el navegador lo trate como POPUP y lo bloquee → "no pasaba nada" al hacer
+ * click. Sin features es una pestaña normal. Si aun así la bloquean, se cae a
+ * descargar el archivo.
+ */
+function abrirImpresion(html: string, nombreArchivo: string) {
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, '_blank');
+  if (!w) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${nombreArchivo}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 export default function MayoristaDetallePage({
   params,
 }: {
@@ -70,6 +189,8 @@ export default function MayoristaDetallePage({
   const [error, setError] = useState<string | null>(null);
   const [showCobro, setShowCobro] = useState(false);
   const [showEditar, setShowEditar] = useState(false);
+  // Remito abierto en el modal de detalle (null = cerrado).
+  const [verRemito, setVerRemito] = useState<Remito | null>(null);
   // Filtro de período para el resumen a facturar.
   const [desde, setDesde] = useState(inicioMesISO());
   const [hasta, setHasta] = useState(hoyISO());
@@ -93,9 +214,22 @@ export default function MayoristaDetallePage({
     if (!confirm(`¿Anular el remito #${numero}? Deja de contar en la cuenta corriente.`)) return;
     try {
       await api.post(`/admin/mayoristas/remitos/${remitoId}/anular`, {});
+      setVerRemito(null);
       void fetchData();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo anular el remito');
+    }
+  }
+
+  // Marca/desmarca el remito como cobrado. NO mueve plata: el dinero entra por
+  // "Registrar cobro". Esto sólo dice QUÉ remitos quedaron saldados.
+  async function marcarPagado(remitoId: string, pagado: boolean) {
+    try {
+      await api.post(`/admin/mayoristas/remitos/${remitoId}/pagar`, { pagado });
+      setVerRemito(null);
+      void fetchData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo cambiar el estado del remito');
     }
   }
 
@@ -113,103 +247,41 @@ export default function MayoristaDetallePage({
   });
   const totalRango = enRango.reduce((acc, r) => acc + Number(r.total), 0);
 
+  // Documento imprimible del PERÍODO (el "resumen de cuenta" de siempre).
   function imprimirResumen() {
-    // Escape HTML — nombre/cuit del cliente van a un document.write same-origin;
-    // sin escapar, un nombre con <img onerror=...> ejecuta JS y roba el token
-    // de localStorage. Seguridad: stored XSS via document.write.
-    const esc = (v: unknown) =>
-      String(v ?? '')
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    const money = (v: unknown) =>
-      Number(v ?? 0).toLocaleString('es-AR', { minimumFractionDigits: 2 });
-    const cant = (v: unknown) => Number(v ?? 0).toLocaleString('es-AR');
-    // Bloque por remito: encabezado (nº · fecha · total) + tabla de productos
-    // con cantidades, valores unitarios y total por línea.
-    const bloques = enRango
-      .map((r) => {
-        const items = r.items ?? [];
-        const filasItems = items
-          .map(
-            (it) =>
-              `<tr><td>${esc(it.nombre)}</td><td class="num">${cant(it.cantidad)}</td><td class="num">$ ${money(it.precioUnitario)}</td><td class="num">$ ${money(it.subtotal)}</td></tr>`,
-          )
-          .join('');
-        return `<section class="remito">
-          <div class="rem-head">
-            <span class="rem-num">Remito #${r.numero}</span>
-            <span class="rem-fecha">${new Date(r.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</span>
-            <span class="rem-total">$ ${money(r.total)}</span>
-          </div>
-          ${
-            items.length > 0
-              ? `<table class="items"><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">P. unitario</th><th class="num">Total</th></tr></thead><tbody>${filasItems}</tbody></table>`
-              : `<div class="sin-items">${r.itemsCount} ítems (sin detalle)</div>`
-          }
-          ${r.observaciones ? `<div class="obs">Obs: ${esc(r.observaciones)}</div>` : ''}
-        </section>`;
-      })
-      .join('');
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Resumen ${esc(c.nombre)}</title>
-      <style>
-      body{font-family:system-ui,sans-serif;padding:24px 28px 60px;color:#1a1a1a}
-      /* Membrete de la fábrica — centrado a página */
-      .membrete{text-align:center;margin-bottom:18px;padding-bottom:12px;border-bottom:2px solid #1a1a1a}
-      .membrete .nombre{font-size:20px;font-weight:700;letter-spacing:2px;text-transform:uppercase}
-      .membrete .desc{font-size:12px;color:#555;margin-top:2px}
-      .membrete .dir{font-size:12px;color:#555;margin-top:1px}
-      h1{font-size:16px;margin:0 0 4px} .sub{color:#666;font-size:12px;margin-bottom:14px}
-      .remito{margin-bottom:14px;break-inside:avoid}
-      .rem-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;background:#f3f0ea;border:1px solid #ddd;border-bottom:none;padding:5px 8px;font-size:13px}
-      .rem-num{font-weight:700} .rem-fecha{color:#555} .rem-total{font-weight:700;margin-left:auto}
-      table.items{width:100%;border-collapse:collapse;font-size:12px;border:1px solid #ddd}
-      table.items th,table.items td{padding:4px 8px;border-bottom:1px solid #eee;text-align:left}
-      table.items th{text-transform:uppercase;font-size:10px;color:#666;background:#fafafa}
-      td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-      .sin-items{border:1px solid #ddd;padding:5px 8px;font-size:12px;color:#666}
-      .obs{font-size:11px;color:#777;padding:3px 8px;border:1px solid #ddd;border-top:none}
-      .total{font-size:17px;font-weight:bold;text-align:right;margin-top:16px}
-      /* Pie de página en cada hoja impresa */
-      .pie{position:fixed;bottom:8px;left:0;right:0;text-align:center;font-size:10px;color:#888}
-      </style></head>
-      <body>
-      <div class="membrete">
-        <div class="nombre">Santa Teresita Pastas</div>
-        <div class="desc">Fábrica de pastas artesanales</div>
-        <div class="dir">Av. 44 e/ 12 y Plaza Paso · La Plata, Buenos Aires</div>
-      </div>
-      <h1>Resumen de cuenta — ${esc(c.nombre)}</h1>
-      <div class="sub">${c.cuit ? 'CUIT ' + esc(c.cuit) + ' · ' : ''}Período ${new Date(
-        desde,
-      ).toLocaleDateString('es-AR', { timeZone: 'UTC' })} a ${new Date(hasta).toLocaleDateString('es-AR', { timeZone: 'UTC' })} · ${
-      enRango.length
-    } remitos</div>
-      ${bloques}
-      <div class="total">TOTAL: $ ${totalRango.toLocaleString('es-AR', {
-        minimumFractionDigits: 2,
-      })}</div>
-      <div class="pie">Santa Teresita Pastas · Av. 44 e/ 12 y Plaza Paso, La Plata</div>
-      <script>window.onload=function(){window.print()}</script></body></html>`;
-    // Abrimos el resumen como un documento navegable (Blob) en una pestaña
-    // nueva. Antes se usaba window.open('', '_blank', 'width=...,height=...'):
-    // ese string de features hace que el navegador lo trate como POPUP y lo
-    // bloquee → "no pasaba nada" al hacer click. Sin features, es una pestaña
-    // normal (no se bloquea). El doc trae un script que abre el diálogo de
-    // impresión; desde ahí se imprime o se "Guarda como PDF". Si aún así el
-    // navegador bloquea la pestaña, caemos a descargar el archivo.
-    const blob = new Blob([html], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const w = window.open(url, '_blank');
-    if (!w) {
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `resumen-${c.nombre}.html`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    }
-    // Liberamos el Blob después de un rato (ya cargado en la pestaña nueva).
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    abrirImpresion(
+      documentoHtml({
+        titulo: `Resumen ${c.nombre}`,
+        encabezado: `Resumen de cuenta — ${esc(c.nombre)}`,
+        subtitulo: `${c.cuit ? 'CUIT ' + esc(c.cuit) + ' · ' : ''}Período ${fechaCorta(
+          desde,
+        )} a ${fechaCorta(hasta)} · ${enRango.length} remitos`,
+        cuerpo: enRango.map(bloqueRemito).join(''),
+        total: totalRango,
+      }),
+      `resumen-${c.nombre}`,
+    );
+  }
+
+  // Documento imprimible de UN remito. Mismo membrete y mismo estilo que el
+  // resumen —para que en el mostrador se vean como la misma papelería—, pero
+  // encabezado "Remito #N" con su fecha de emisión en vez de "Resumen de
+  // cuenta". Es lo que se le deja al cliente cuando se le entrega el pedido.
+  function imprimirRemito(r: Remito) {
+    abrirImpresion(
+      documentoHtml({
+        titulo: `Remito ${r.numero} — ${c.nombre}`,
+        encabezado: `Remito #${r.numero}`,
+        subtitulo: `${esc(c.nombre)}${c.cuit ? ' · CUIT ' + esc(c.cuit) : ''} · Emitido el ${fechaLarga(
+          r.fecha,
+        )}`,
+        // Un remito solo no repite su propio encabezado: el número y la fecha
+        // ya están arriba, así que va derecho a la tabla de productos.
+        cuerpo: tablaItems(r),
+        total: Number(r.total),
+      }),
+      `remito-${r.numero}-${c.nombre}`,
+    );
   }
 
   return (
@@ -320,6 +392,7 @@ export default function MayoristaDetallePage({
                 <th className="text-left px-4 py-2">Detalle</th>
                 <th className="text-right px-4 py-2">Total</th>
                 <th className="text-center px-4 py-2">Estado</th>
+                <th className="text-center px-4 py-2">Imprimir</th>
                 <th className="px-4 py-2"></th>
               </tr>
             </thead>
@@ -330,9 +403,16 @@ export default function MayoristaDetallePage({
                   <td className="px-4 py-2 text-ink-700 text-xs">
                     {new Date(r.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                   </td>
-                  <td className="px-4 py-2 text-ink-500 text-xs">
-                    {r.itemsCount} ítems
-                    {r.observaciones && ` · ${r.observaciones}`}
+                  {/* La celda de detalle abre el remito: es lo que se buscaba
+                      al hacer click sobre "N ítems" y antes no hacía nada. */}
+                  <td className="px-4 py-2 text-xs">
+                    <button
+                      onClick={() => setVerRemito(r)}
+                      className="text-teresita-700 hover:underline text-left"
+                    >
+                      {r.itemsCount} ítems
+                      {r.observaciones && ` · ${r.observaciones}`}
+                    </button>
                   </td>
                   <td className="px-4 py-2 text-right">
                     <MoneyAmount
@@ -341,13 +421,26 @@ export default function MayoristaDetallePage({
                     />
                   </td>
                   <td className="px-4 py-2 text-center text-2xs uppercase tracking-wider">
-                    {r.estado === 'ANULADO' ? (
-                      <span className="text-pomodoro-600">anulado</span>
-                    ) : (
-                      <span className="text-basil-600">pendiente</span>
-                    )}
+                    <EstadoRemitoBadge remito={r} />
                   </td>
-                  <td className="px-4 py-2 text-right">
+                  {/* Imprimir está SIEMPRE disponible, incluso anulado: el papel
+                      pudo haberse entregado y a veces hay que reponerlo. */}
+                  <td className="px-4 py-2 text-center">
+                    <button
+                      onClick={() => imprimirRemito(r)}
+                      title={`Imprimir remito #${r.numero}`}
+                      className="text-ink-500 hover:text-teresita-700 px-2 py-1 rounded hover:bg-cream-100"
+                    >
+                      🖨
+                    </button>
+                  </td>
+                  <td className="px-4 py-2 text-right whitespace-nowrap">
+                    <button
+                      onClick={() => setVerRemito(r)}
+                      className="text-teresita-700 hover:underline text-xs mr-3"
+                    >
+                      Ver
+                    </button>
                     {r.estado !== 'ANULADO' && (
                       <button
                         onClick={() => anularRemito(r.id, r.numero)}
@@ -372,10 +465,13 @@ export default function MayoristaDetallePage({
                       <span className="font-mono text-ink-700">#{r.numero}</span> ·{' '}
                       {new Date(r.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
                     </div>
-                    <div className="text-2xs font-mono text-ink-500 truncate">
+                    <button
+                      onClick={() => setVerRemito(r)}
+                      className="text-2xs font-mono text-teresita-700 truncate hover:underline text-left"
+                    >
                       {r.itemsCount} ítems
                       {r.observaciones && ` · ${r.observaciones}`}
-                    </div>
+                    </button>
                   </div>
                   <div className="shrink-0 text-right">
                     <MoneyAmount
@@ -383,20 +479,23 @@ export default function MayoristaDetallePage({
                       className={cn(r.estado === 'ANULADO' && 'line-through')}
                     />
                     <div className="text-2xs uppercase tracking-wider">
-                      {r.estado === 'ANULADO' ? (
-                        <span className="text-pomodoro-600">anulado</span>
-                      ) : (
-                        <span className="text-basil-600">pendiente</span>
-                      )}
+                      <EstadoRemitoBadge remito={r} />
                     </div>
-                    {r.estado !== 'ANULADO' && (
+                    <div className="flex items-center justify-end gap-2 mt-0.5">
                       <button
-                        onClick={() => anularRemito(r.id, r.numero)}
-                        className="text-pomodoro-600 hover:underline text-xs mt-0.5"
+                        onClick={() => imprimirRemito(r)}
+                        title={`Imprimir remito #${r.numero}`}
+                        className="text-ink-500 hover:text-teresita-700 text-xs"
                       >
-                        Anular
+                        🖨
                       </button>
-                    )}
+                      <button
+                        onClick={() => setVerRemito(r)}
+                        className="text-teresita-700 hover:underline text-xs"
+                      >
+                        Ver
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -469,6 +568,7 @@ export default function MayoristaDetallePage({
         <ModalCobro
           clienteId={id}
           saldoSugerido={data.saldo}
+          remitosPendientes={data.remitos.filter((r) => r.estado === 'PENDIENTE')}
           onClose={() => setShowCobro(false)}
           onCreated={() => {
             setShowCobro(false);
@@ -486,6 +586,16 @@ export default function MayoristaDetallePage({
           }}
         />
       )}
+      {verRemito && (
+        <ModalRemito
+          clienteId={id}
+          remito={verRemito}
+          onClose={() => setVerRemito(null)}
+          onImprimir={() => imprimirRemito(verRemito)}
+          onPagar={(pagado) => void marcarPagado(verRemito.id, pagado)}
+          onAnular={() => void anularRemito(verRemito.id, verRemito.numero)}
+        />
+      )}
     </div>
   );
 }
@@ -497,15 +607,20 @@ export default function MayoristaDetallePage({
 function ModalCobro({
   clienteId,
   saldoSugerido,
+  remitosPendientes,
   onClose,
   onCreated,
 }: {
   clienteId: string;
   saldoSugerido: string;
+  remitosPendientes: Remito[];
   onClose: () => void;
   onCreated: () => void;
 }) {
   const [monto, setMonto] = useState(Number(saldoSugerido) > 0 ? saldoSugerido : '');
+  // Remitos que este cobro salda. Vacío = cobro "a cuenta", sin imputar (que es
+  // como funcionaba antes de existir esta opción).
+  const [imputados, setImputados] = useState<Set<string>>(new Set());
   const [cuentaId, setCuentaId] = useState('');
   const [metodo, setMetodo] = useState<
     'EFECTIVO' | 'TRANSFERENCIA' | 'DEPOSITO' | 'CHEQUE' | 'MERCADOPAGO_QR' | 'OTRO'
@@ -539,6 +654,7 @@ function ModalCobro({
         metodo,
         numeroReferencia: numeroReferencia || undefined,
         observacion: observacion || undefined,
+        remitoIds: imputados.size ? [...imputados] : undefined,
       });
       onCreated();
     } catch (e) {
@@ -549,6 +665,24 @@ function ModalCobro({
   }
 
   const necesitaRef = ['TRANSFERENCIA', 'CHEQUE', 'DEPOSITO'].includes(metodo);
+  const totalImputado = remitosPendientes
+    .filter((r) => imputados.has(r.id))
+    .reduce((acc, r) => acc + Number(r.total), 0);
+
+  function toggleRemito(remitoId: string, total: string) {
+    // El cálculo va FUERA de los updaters: React puede ejecutarlos dos veces
+    // (StrictMode) y sumar el total del remito por duplicado.
+    const estaba = imputados.has(remitoId);
+    const next = new Set(imputados);
+    if (estaba) next.delete(remitoId);
+    else next.add(remitoId);
+    setImputados(next);
+    // El monto sigue a la selección: en la práctica se cobra lo que suman los
+    // remitos elegidos, y tipearlo aparte es una fuente de errores. Sigue
+    // siendo editable a mano para pagos parciales o con descuento.
+    const delta = estaba ? -Number(total) : Number(total);
+    setMonto(Math.max(0, Number(monto || 0) + delta).toFixed(2));
+  }
 
   return (
     <div className="fixed inset-0 bg-ink-900/50 flex items-center justify-center z-40 p-4">
@@ -618,6 +752,48 @@ function ModalCobro({
                 onChange={(e) => setNumeroReferencia(e.target.value)}
                 className="input font-mono"
               />
+            </div>
+          )}
+          {remitosPendientes.length > 0 && (
+            <div>
+              <label className="block text-xs font-medium text-ink-700 mb-1">
+                ¿Qué remitos salda este cobro? (opcional)
+              </label>
+              <div className="max-h-40 overflow-y-auto border border-cream-300 rounded divide-y divide-cream-200">
+                {remitosPendientes.map((r) => (
+                  <label
+                    key={r.id}
+                    className="flex items-center gap-2 px-2 py-1.5 hover:bg-cream-100 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={imputados.has(r.id)}
+                      onChange={() => toggleRemito(r.id, r.total)}
+                    />
+                    <span className="font-mono text-xs text-ink-700">#{r.numero}</span>
+                    <span className="text-2xs text-ink-500">
+                      {new Date(r.fecha).toLocaleDateString('es-AR', {
+                        timeZone: 'America/Argentina/Buenos_Aires',
+                      })}
+                    </span>
+                    <span className="ml-auto font-mono text-xs text-ink-900">
+                      ${Number(r.total).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {imputados.size > 0 && (
+                <p className="text-2xs text-ink-500 mt-1">
+                  {imputados.size} remito{imputados.size > 1 ? 's' : ''} · $
+                  {totalImputado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                  {Math.abs(totalImputado - Number(monto || 0)) > 0.009 && (
+                    <span className="text-saffron-600">
+                      {' '}
+                      · el monto cobrado no coincide con lo seleccionado
+                    </span>
+                  )}
+                </p>
+              )}
             </div>
           )}
           <div>
@@ -813,6 +989,123 @@ function ModalEditar({
           <Button onClick={() => void submit()} disabled={guardando}>
             {guardando ? 'Guardando...' : 'Guardar'}
           </Button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Estado del remito
+// ────────────────────────────────────────────────────────────────────────
+
+function EstadoRemitoBadge({ remito }: { remito: Remito }) {
+  if (remito.estado === 'ANULADO') return <span className="text-pomodoro-600">anulado</span>;
+  if (remito.estado === 'PAGADO') return <span className="text-basil-600">cobrado</span>;
+  // Pendiente es el estado que pide acción: saffron lo destaca sin la carga
+  // de alarma del rojo (que acá significa anulado).
+  return <span className="text-saffron-600">pendiente</span>;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Modal detalle de remito — ver qué se cargó, editar, cobrar, imprimir
+// ────────────────────────────────────────────────────────────────────────
+
+function ModalRemito({
+  clienteId,
+  remito,
+  onClose,
+  onImprimir,
+  onPagar,
+  onAnular,
+}: {
+  clienteId: string;
+  remito: Remito;
+  onClose: () => void;
+  onImprimir: () => void;
+  onPagar: (pagado: boolean) => void;
+  onAnular: () => void;
+}) {
+  const items = remito.items ?? [];
+  const editable = remito.estado === 'PENDIENTE';
+
+  return (
+    <div className="fixed inset-0 bg-ink-900/50 flex items-center justify-center z-40 p-4">
+      <div className="card w-full max-w-2xl p-5 shadow-modal max-h-[90vh] flex flex-col">
+        <header className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <h2 className="font-display text-lg text-teresita-700">Remito #{remito.numero}</h2>
+            <p className="text-xs text-ink-500">
+              {fechaLarga(remito.fecha)} · <EstadoRemitoBadge remito={remito} />
+              {remito.pagadoAt && ` · cobrado el ${fechaLarga(remito.pagadoAt)}`}
+            </p>
+          </div>
+          <MoneyAmount value={remito.total} hero className="text-lg text-ink-900" />
+        </header>
+
+        <div className="flex-1 overflow-y-auto">
+          {items.length === 0 ? (
+            <p className="text-sm text-ink-500 py-6 text-center">
+              {remito.itemsCount} ítems — sin detalle cargado.
+            </p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="text-2xs uppercase tracking-wider text-ink-500 border-b border-cream-200">
+                <tr>
+                  <th className="text-left py-2">Producto</th>
+                  <th className="text-right py-2">Cant.</th>
+                  <th className="text-right py-2">P. unit.</th>
+                  <th className="text-right py-2">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-cream-200">
+                {items.map((it, i) => (
+                  <tr key={i}>
+                    <td className="py-2 text-ink-700">{it.nombre}</td>
+                    <td className="py-2 text-right font-mono text-ink-700">
+                      {Number(it.cantidad).toLocaleString('es-AR')}
+                    </td>
+                    <td className="py-2 text-right font-mono text-ink-500">
+                      ${money(it.precioUnitario)}
+                    </td>
+                    <td className="py-2 text-right font-mono text-ink-900">
+                      ${money(it.subtotal)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {remito.observaciones && (
+            <p className="mt-3 text-xs text-ink-500">Obs: {remito.observaciones}</p>
+          )}
+        </div>
+
+        <footer className="mt-4 pt-3 border-t border-cream-300 flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cerrar
+          </Button>
+          <Button variant="secondary" onClick={onImprimir}>
+            🖨 Imprimir
+          </Button>
+          {editable && (
+            <Link href={`/admin/mayoristas/${clienteId}/remito?editar=${remito.id}`}>
+              <Button variant="secondary">Editar</Button>
+            </Link>
+          )}
+          {remito.estado !== 'ANULADO' &&
+            (remito.estado === 'PAGADO' ? (
+              <Button variant="secondary" onClick={() => onPagar(false)}>
+                Volver a pendiente
+              </Button>
+            ) : (
+              <Button onClick={() => onPagar(true)}>Marcar cobrado</Button>
+            ))}
+          {remito.estado !== 'ANULADO' && (
+            <button onClick={onAnular} className="text-pomodoro-600 hover:underline text-sm px-2">
+              Anular
+            </button>
+          )}
         </footer>
       </div>
     </div>
