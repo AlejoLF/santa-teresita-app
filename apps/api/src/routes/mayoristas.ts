@@ -5,6 +5,7 @@ import type { Prisma } from '@sta/db';
 import { RolUsuario, EstadoMovimiento, TipoCategoriaMovimiento } from '@sta/db';
 import { subtotalItem } from '@sta/shared';
 import { recordAudit } from '../services/audit.js';
+import { encolarTicketRemito } from '../services/impresion.js';
 
 /**
  * MAYORISTAS — Clientes con cuenta corriente.
@@ -688,6 +689,25 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         valorNuevo: { estado: destino },
       });
       return updated;
+    },
+  );
+
+  // ── Imprimir el remito como TICKET (comandera térmica) ──
+  //
+  // Distinto del "resumen de cuenta": ese es un A4 del período que se arma en
+  // el navegador y va al contador. Esto es el papel que se le entrega a la
+  // empresa con la mercadería, en formato de ticket de mostrador.
+  fastify.post(
+    '/admin/mayoristas/remitos/:remitoId/imprimir',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ remitoId: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const { remitoId } = req.params as { remitoId: string };
+      const out = await encolarTicketRemito(remitoId);
+      if (!out) return reply.code(404).send({ error: 'Remito no encontrado' });
+      return reply.code(202).send({ encolado: true, ...out });
     },
   );
 

@@ -1,0 +1,12 @@
+-- Remito de mayorista impreso como TICKET térmico.
+--
+-- Hasta acá el remito individual sólo se podía imprimir como A4 (el mismo
+-- formato del "resumen de cuenta"), que es lo que se le entrega al contador a
+-- fin de mes. Pero el remito que se le da a la empresa cuando se le entrega la
+-- mercadería es un ticket de mostrador — mismo papel, misma comandera y mismo
+-- formato que una venta, con el nombre de la empresa en lugar del cliente.
+--
+-- El "resumen de cuenta" del período NO cambia: sigue siendo A4.
+--
+-- Aditiva e idempotente: se puede correr varias veces sin efecto.
+ALTER TYPE "TipoTrabajoImpresion" ADD VALUE IF NOT EXISTS 'TICKET_REMITO';

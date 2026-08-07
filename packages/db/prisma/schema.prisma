@@ -1527,6 +1527,10 @@ enum TipoTrabajoImpresion {
   TICKET_DELIVERY
   TICKET_REIMPRESION
   COMANDA_ENCARGO
+  /// Remito de mayorista impreso como ticket térmico (formato de venta de
+  /// mostrador, con la empresa en el lugar del cliente). Distinto del
+  /// "resumen de cuenta", que es un A4 del período y se arma en el navegador.
+  TICKET_REMITO
   TEST
 }
 

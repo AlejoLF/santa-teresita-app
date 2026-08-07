@@ -630,7 +630,15 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: 'La venta no está en estado PROCESADA' });
       }
 
-      // Calcular descuento efectivo si aplica.
+      // Calcular el descuento manual si aplica.
+      //
+      // Aplica a CUALQUIER medio de pago, no sólo efectivo: el local hace
+      // promos por día con tarjeta/débito y antes eso no se podía cargar
+      // (había que bajar los precios a mano). Los nombres `aplicarDescuento
+      // Efectivo` / `descuentoPctEfectivo` quedan por compatibilidad de
+      // contrato — web y API deployan por separado y renombrarlos rompería la
+      // ventana entre los dos deploys.
+      //
       // El frontend manda los pagos con el monto NETO (post-descuento). Para
       // reconstruir el descuento aplicado conociendo el % `pct`:
       //   bruto = neto / (1 - pct/100)
@@ -659,10 +667,11 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
             .code(400)
             .send({ error: `Porcentaje de descuento inválido: ${pct}%` });
         }
-        const efectivoNeto = body.pagos
-          .filter((p) => p.metodo === 'EFECTIVO')
-          .reduce((acc, p) => acc + Number(p.monto), 0);
-        descuento = Math.round(((efectivoNeto * pct) / (100 - pct)) * 100) / 100;
+        // TODOS los pagos, no sólo los de efectivo. Filtrar por EFECTIVO hacía
+        // que un cobro con tarjeta calculara descuento 0 y el total quedara sin
+        // descontar, aunque el cajero lo hubiera aplicado en pantalla.
+        const netoCobrado = body.pagos.reduce((acc, p) => acc + Number(p.monto), 0);
+        descuento = Math.round(((netoCobrado * pct) / (100 - pct)) * 100) / 100;
         total = Number(venta.subtotal) - descuento + recargoCanal;
       }
 

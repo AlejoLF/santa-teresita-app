@@ -22,6 +22,9 @@ const destinoConfigSchema = z.object({
   canales: z.array(z.enum(CANALES_ENRUTABLES)).optional(),
   // ¿Esta comandera imprime los tickets de ENCARGO? (panel dedicado).
   encargos: z.boolean().optional(),
+  // ¿Y los REMITOS de mayorista? Por defecto sólo MOSTRADOR: el remito se
+  // entrega junto con la mercadería, como el ticket de una venta.
+  remitos: z.boolean().optional(),
   // Nombre visible editable. Solo presentación — el ruteo usa la key del
   // destino, así que renombrar no puede romper a dónde sale cada ticket.
   nombre: z.string().trim().max(40).optional(),
