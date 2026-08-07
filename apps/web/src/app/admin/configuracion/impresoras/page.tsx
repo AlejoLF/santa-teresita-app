@@ -16,6 +16,8 @@ interface ConfigImpresora {
   canales: string[];
   /** ¿Esta comandera imprime los tickets de ENCARGO? (panel dedicado). */
   encargos?: boolean;
+  /** ¿Y los REMITOS de mayorista? Por defecto sólo Mostrador. */
+  remitos?: boolean;
   /** Nombre visible editable. Vacío = se usa el título por defecto. */
   nombre?: string;
 }
@@ -454,6 +456,32 @@ export default function ImpresorasConfigPage() {
                     Recomendado apagado: así el encargo no sale en cocina al cobrarlo.
                   </p>
                 )}
+
+                {/* Remitos de mayorista: se entregan junto con la mercadería,
+                    igual que el ticket de una venta, así que por defecto salen
+                    en Mostrador. Configurable por si el punto de entrega de los
+                    mayoristas no es el mostrador. */}
+                <label
+                  className={cn(
+                    'mt-2 flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs transition-colors',
+                    !cfg.activa && 'opacity-50 cursor-not-allowed',
+                    cfg.remitos ? 'bg-wood-100 text-wood-900' : 'text-ink-500 hover:bg-cream-100',
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={cfg.remitos ?? false}
+                    disabled={!cfg.activa}
+                    onChange={(e) => setField(d, { remitos: e.target.checked })}
+                    className="w-4 h-4 shrink-0"
+                  />
+                  <span aria-hidden>🧾</span>
+                  <span className="font-medium">Imprime REMITOS de mayorista</span>
+                </label>
+                <p className="text-2xs text-ink-400 mt-1 italic px-2">
+                  Si hay más de una marcada, el remito sale en la primera de la
+                  lista (Mostrador → Delivery → Cocina).
+                </p>
               </div>
             </section>
           );

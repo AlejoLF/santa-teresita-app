@@ -34,6 +34,19 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.59',
+    fecha: '7 de agosto',
+    titulo: 'El remito ahora sale por la comandera, y el descuento vale con cualquier pago',
+    cambios: [
+      'Los remitos de mayorista se imprimen como ticket en la comandera del mostrador, igual que una venta. Antes salía una hoja A4 desde el navegador.',
+      'En el ticket del remito va el nombre de la empresa donde iría el cliente, y queda un espacio para la firma de quien recibe.',
+      'El resumen de cuenta del período no cambió: sigue siendo la hoja grande de siempre, con todos los remitos juntos.',
+      'Si querés que los remitos salgan por otra comandera, se elige en Configuración → Impresoras (cada comandera tiene un check 🧾).',
+      'El descuento al cobrar ya no es solo para efectivo: se puede aplicar con débito, crédito, transferencia o QR. Sirve para los días que hay promo con tarjeta.',
+      'En el pago dividido el descuento se aplica sobre todo lo cobrado, no solo sobre la parte en efectivo.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.58',
     fecha: '5 de agosto',
     titulo: 'Remitos: imprimirlos de a uno, ver qué tienen adentro y marcarlos cobrados',

@@ -1018,3 +1018,111 @@ export async function testPrinter(destino: PrinterConfig['destino']): Promise<bo
   await printer.execute();
   return true;
 }
+
+// ─── Ticket de REMITO de mayorista ────────────────────────────────────
+//
+// Mismo formato que el ticket de una venta de mostrador: es el papel que se le
+// entrega a la empresa junto con la mercadería, y quien lo recibe espera algo
+// que se lea igual que cualquier otro ticket del local.
+//
+// Dos diferencias con el ticket de venta:
+//   - En el lugar del cliente va la EMPRESA mayorista (+ CUIT si lo tiene).
+//   - No hay forma de pago: el remito no se cobra en el momento, va a la
+//     cuenta corriente y se salda con un cobro aparte.
+//
+// El "resumen de cuenta" del período es otra cosa: A4, se arma en el navegador
+// y es lo que va al contador a fin de mes.
+export interface TicketRemitoPayload {
+  numeroRemito: number;
+  /** Nombre de la empresa mayorista. */
+  cliente: string;
+  cuit?: string;
+  direccion?: string;
+  estado?: string;
+  observaciones?: string;
+  items: Array<{ cantidad: string; nombre: string; precio: string; subtotal: string }>;
+  total: string;
+  /** ISO — se formatea a DD/MM/YYYY HH:MM en TZ Argentina. */
+  fecha: string;
+}
+
+export async function imprimirTicketRemito(
+  payload: TicketRemitoPayload,
+  destino: DestinoImpresora,
+): Promise<void> {
+  const printer = makePrinter(destino);
+
+  // ── Header ──
+  printer.alignCenter();
+  printer.bold(true);
+  printer.println('Santa Teresita Pastas');
+  printer.bold(false);
+  printer.println('Av. 44 e. 12 y Plaza Paso');
+  printer.newLine();
+  printer.bold(true);
+  printer.setTextDoubleHeight();
+  printer.println(`REMITO #${payload.numeroRemito}`);
+  printer.setTextNormal();
+  printer.bold(false);
+  printer.drawLine();
+
+  // ── Datos del remito ──
+  printer.alignLeft();
+  printer.bold(true);
+  printer.println(`Cliente: ${limpiar(payload.cliente)}`);
+  printer.bold(false);
+  if (payload.cuit) printer.println(`CUIT: ${limpiar(payload.cuit)}`);
+  if (payload.direccion) printer.println(`Dir.: ${limpiar(payload.direccion)}`);
+  printer.println(`Fecha: ${formatFechaAR(payload.fecha)}`);
+  // Un remito ANULADO no debería entregarse: si alguien lo re-imprime por
+  // error, que se vea en el papel y no sólo en pantalla.
+  if (payload.estado && payload.estado !== 'PENDIENTE') {
+    printer.bold(true);
+    printer.println(`*** ${limpiar(payload.estado)} ***`);
+    printer.bold(false);
+  }
+  printer.drawLine();
+
+  // ── Tabla de items ──
+  printer.println(rowTabular('Cant.', 'Descripción', 'Unitario', 'Monto')[0]!);
+  printer.newLine();
+  for (const it of payload.items) {
+    const lineas = rowTabular(
+      it.cantidad,
+      limpiar(it.nombre),
+      formatARS(it.precio),
+      formatARS(it.subtotal),
+    );
+    for (const linea of lineas) printer.println(linea);
+  }
+  printer.drawLine();
+
+  // ── Total ──
+  printer.alignRight();
+  printer.bold(true);
+  printer.setTextDoubleHeight();
+  printer.println(`TOTAL: $${formatARS(payload.total)}`);
+  printer.setTextNormal();
+  printer.bold(false);
+  printer.newLine();
+
+  if (payload.observaciones) {
+    printer.alignLeft();
+    printer.println(`Obs: ${limpiar(payload.observaciones)}`);
+    printer.newLine();
+  }
+
+  // ── Pie ──
+  printer.alignCenter();
+  printer.drawLine();
+  printer.println('Documento no fiscal');
+  printer.println('Cuenta corriente — no cobrado');
+  printer.newLine();
+  printer.newLine();
+  printer.println('..............................');
+  printer.println('Firma y aclaración');
+  printer.drawLine();
+  printer.cut();
+
+  await printer.execute();
+}

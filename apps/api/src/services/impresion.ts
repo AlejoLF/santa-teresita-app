@@ -1064,6 +1064,13 @@ export interface PrinterDestinoConfig {
    * redirige a la primera comandera habilitada (prefiere Mostrador).
    */
   encargos: boolean;
+  /**
+   * ¿Esta comandera imprime los REMITOS de mayorista? Por defecto sólo
+   * MOSTRADOR: el remito se le entrega a la empresa junto con la mercadería,
+   * igual que el ticket de una venta de mostrador. Se deja configurable porque
+   * el mostrador puede no ser el punto de entrega de los mayoristas.
+   */
+  remitos: boolean;
 }
 
 /** Los 8 canales de venta enrutables (mismo orden que el enum CanalVenta). */
@@ -1083,7 +1090,15 @@ export const CANALES_ENRUTABLES = [
 // cocción → Comandera 3. El mostrador imprime el ticket del cliente por otro
 // camino, así que su comandera no recibe comandas por defecto (canales: []).
 const DEFAULT_CONFIG: Record<DestinoImpresion, PrinterDestinoConfig> = {
-  MOSTRADOR: { host: '192.168.1.50', port: 9100, width: 42, activa: true, canales: [], encargos: true },
+  MOSTRADOR: {
+    host: '192.168.1.50',
+    port: 9100,
+    width: 42,
+    activa: true,
+    canales: [],
+    encargos: true,
+    remitos: true,
+  },
   DELIVERY: {
     host: '192.168.1.51',
     port: 9100,
@@ -1091,6 +1106,7 @@ const DEFAULT_CONFIG: Record<DestinoImpresion, PrinterDestinoConfig> = {
     activa: true,
     canales: ['TELEFONO', 'WHATSAPP', 'WEB'],
     encargos: true,
+    remitos: false,
   },
   COCINA: {
     host: '192.168.1.52',
@@ -1100,6 +1116,8 @@ const DEFAULT_CONFIG: Record<DestinoImpresion, PrinterDestinoConfig> = {
     canales: [...CANALES_ENRUTABLES],
     // Por defecto la cocina NO imprime encargos (evita la confusión al cobrar).
     encargos: false,
+    // Ni remitos: el remito se entrega en el mostrador, no en la cocina.
+    remitos: false,
   },
 };
 
@@ -1122,4 +1140,65 @@ export async function getConfigImpresion(
     }
   }
   return result;
+}
+
+/**
+ * Encola el TICKET de un remito de mayorista.
+ *
+ * Formato de **venta de mostrador**, no de resumen A4: es el papel que se le
+ * entrega a la empresa junto con la mercadería. En el lugar donde el ticket de
+ * venta dice "Cliente" va el nombre de la empresa mayorista.
+ *
+ * El "resumen de cuenta" del período es otra cosa y no pasa por acá: se arma en
+ * el navegador como A4 y es lo que se factura a fin de mes.
+ *
+ * Destino: la primera comandera con `remitos: true` (por defecto MOSTRADOR).
+ * Si ninguna lo tiene habilitado, cae a MOSTRADOR — preferimos que salga en la
+ * comandera equivocada a que el operador toque "Imprimir" y no pase nada.
+ */
+export async function encolarTicketRemito(
+  remitoId: string,
+  client: DbClient = prisma,
+): Promise<{ destino: DestinoImpresion; numero: number } | null> {
+  const remito = await client.remito.findUnique({
+    where: { id: remitoId },
+    include: {
+      items: { orderBy: { orden: 'asc' } },
+      clienteMayorista: { select: { nombre: true, cuit: true, direccion: true } },
+    },
+  });
+  if (!remito) return null;
+
+  const cfg = await getConfigImpresion(client);
+  const destino: DestinoImpresion =
+    (['MOSTRADOR', 'DELIVERY', 'COCINA'] as const).find((d) => cfg[d]?.remitos) ?? 'MOSTRADOR';
+
+  const payload = {
+    numeroRemito: remito.numero,
+    // La empresa ocupa el lugar del cliente del ticket de venta.
+    cliente: remito.clienteMayorista.nombre,
+    cuit: remito.clienteMayorista.cuit ?? undefined,
+    direccion: remito.clienteMayorista.direccion ?? undefined,
+    estado: remito.estado,
+    observaciones: remito.observaciones ?? undefined,
+    items: remito.items.map((it) => ({
+      cantidad: it.cantidad.toString(),
+      nombre: it.nombreSnapshot,
+      precio: Number(it.precioUnitario).toFixed(2),
+      subtotal: Number(it.subtotal).toFixed(2),
+    })),
+    total: Number(remito.total).toFixed(2),
+    // ISO — el renderer del local-agent lo formatea como DD/MM/YYYY HH:MM AR.
+    fecha: remito.fecha.toISOString(),
+  };
+
+  await encolarTrabajo({
+    tipo: TipoTrabajoImpresion.TICKET_REMITO,
+    destino,
+    payload,
+    // `ventaId` queda en null: un remito NO es una venta. La FK apunta a
+    // `ventas` y meter acá el id del remito rompería la integridad referencial.
+    ventaId: null,
+  });
+  return { destino, numero: remito.numero };
 }

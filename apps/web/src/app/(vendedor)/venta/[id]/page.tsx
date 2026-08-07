@@ -73,7 +73,8 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
   const [efectivoRecibido, setEfectivoRecibido] = useState('');
   const [mostrarSplit, setMostrarSplit] = useState(false);
   const [metodoSeleccionado, setMetodoSeleccionado] = useState<PagoLinea['metodo'] | null>(null);
-  // % de descuento al efectivo en cobro simple (default 10, configurable)
+  // % de descuento en cobro simple (default 10, configurable). Aplica a
+  // cualquier medio de pago.
   const [descuentoPctSimple, setDescuentoPctSimple] = useState<number>(10);
   const [descuentoPctSimpleInput, setDescuentoPctSimpleInput] = useState('');
   // Tope que el cajero puede aplicar (config descuento_manual_max_vendedor_pct).
@@ -217,7 +218,9 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
   const totalNum = Number(venta.total);
   // descuento aplicado al efectivo en cobro simple, según el % seleccionado
   const conDescuentoSimple = calcularDescuentoEfectivo(venta.subtotal, descuentoPctSimple);
-  const habilitaDescuentoEfectivo = venta.canal === 'MOSTRADOR';
+  // El descuento manual es una decisión de mostrador: los canales de
+  // plataforma traen su propio precio y recargo, no se tocan.
+  const habilitaDescuento = venta.canal === 'MOSTRADOR';
   const editable = venta.estado === 'PROCESADA';
 
   async function quitarItem(itemId: string) {
@@ -245,9 +248,12 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
       }
       // Solo aplicamos descuento si el % es > 0. Si la cajera deseleccionó
       // los chips (descuentoPctSimple===0) o tipeó 0 en el custom, se finaliza
-      // sin descuento aunque sea EFECTIVO.
-      const aplicaDescuento =
-        metodo === 'EFECTIVO' && habilitaDescuentoEfectivo && descuentoPctSimple > 0;
+      // sin descuento.
+      //
+      // Vale para CUALQUIER medio de pago: el local hace promos por día con
+      // tarjeta/débito, y antes el descuento estaba atado a EFECTIVO — la
+      // única forma de cargarlas era bajar los precios a mano.
+      const aplicaDescuento = habilitaDescuento && descuentoPctSimple > 0;
       // SIEMPRE formatear con toFixed(2) — el backend rechaza con "Bad Request"
       // si el monto no matchea regex /^\d+(\.\d{1,2})?$/. Cuando un item tiene
       // modificadores (ej. porciones calientes con salsa), el venta.total que
@@ -554,9 +560,9 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
               {venta.estado === 'PROCESADA' ? 'Total a cobrar' : 'Total'}
             </div>
             <MoneyAmount value={totalNum} hero fit className="text-3xl text-teresita-900" />
-            {habilitaDescuentoEfectivo && editable && (
+            {habilitaDescuento && editable && (
               <div className="text-xs text-basil-600 mt-2">
-                Si paga en efectivo: <MoneyAmount value={conDescuentoSimple.total} className="font-semibold" /> ·
+                Con descuento: <MoneyAmount value={conDescuentoSimple.total} className="font-semibold" /> ·
                 ahorra <MoneyAmount value={conDescuentoSimple.descuento} />
               </div>
             )}
@@ -605,17 +611,18 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
                 onAgregado={refetch}
               />
 
-              {/* Selector de % de descuento al efectivo (solo mostrador) */}
-              {habilitaDescuentoEfectivo && (
+              {/* Selector de % de descuento (solo mostrador). Aplica a
+                  cualquier medio de pago: el local hace promos por día con
+                  tarjeta/débito, no sólo con efectivo. */}
+              {habilitaDescuento && (
                 <div className="bg-basil-100 px-3 py-2 rounded mb-3">
                   <div className="text-2xs text-basil-600 font-medium uppercase tracking-wider mb-1.5">
-                    Descuento al efectivo
+                    Descuento
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {/* Chip "Sin descuento": click → descuento 0%, queda
-                        seleccionado mientras pct=0. Para casos en que el
-                        cliente paga efectivo pero no aplica el 10% (precio
-                        promocional, pedido especial, etc.). */}
+                        seleccionado mientras pct=0. Para cuando no corresponde
+                        descuento (precio promocional, pedido especial, etc.). */}
                     <button
                       type="button"
                       onClick={() => {
@@ -681,8 +688,9 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
 
               <div className="grid grid-cols-2 gap-2">
                 {METODOS.map((m) => {
-                  const esEfectivoConDesc =
-                    m.key === 'EFECTIVO' && habilitaDescuentoEfectivo;
+                  // El badge "−X% off" ahora sale en TODOS los métodos: el
+                  // descuento dejó de estar atado al efectivo.
+                  const conDescuento = habilitaDescuento && descuentoPctSimple > 0;
                   const seleccionado = metodoSeleccionado === m.key;
                   return (
                     <button
@@ -693,7 +701,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
                         'card py-4 flex flex-col items-center gap-1 transition-all disabled:opacity-50 border-2',
                         seleccionado
                           ? 'border-teresita-700 bg-teresita-50 shadow-md ring-2 ring-teresita-700/20'
-                          : esEfectivoConDesc
+                          : conDescuento
                             ? 'border-basil-600/30 bg-basil-100 hover:shadow-md'
                             : 'border-cream-300 hover:shadow-md hover:border-teresita-700/30',
                       )}
@@ -705,7 +713,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
                       )}>
                         {m.label}
                       </span>
-                      {esEfectivoConDesc && (
+                      {conDescuento && (
                         <span className="text-2xs text-basil-600 font-medium">
                           −{descuentoPctSimple}% off
                         </span>
@@ -731,7 +739,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
               </div>
 
               {/* Vuelto en efectivo (opcional) */}
-              {habilitaDescuentoEfectivo && (
+              {habilitaDescuento && (
                 <div className="mt-3 bg-cream-100 rounded-md p-3 border border-cream-300">
                   <label className="block text-2xs font-medium text-ink-700 mb-1">
                     Si paga en efectivo, ¿cuánto recibís? (opcional)
@@ -778,7 +786,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
               ventaId={venta.id}
               total={venta.total}
               subtotal={venta.subtotal}
-              habilitaDescuentoEfectivo={habilitaDescuentoEfectivo}
+              habilitaDescuento={habilitaDescuento}
               onCancel={() => setMostrarSplit(false)}
               onCobrado={() => router.push(venta?.esEncargo ? '/encargos' : '/cargar-pedido')}
             />
@@ -1472,21 +1480,22 @@ function sugerirCuenta(metodo: PagoLinea['metodo'], cuentas: CuentaShort[]): Cue
  * Panel de pago dividido:
  *   - Cada línea declara cuánto del subtotal cubre con un método.
  *   - Para EFECTIVO se puede ingresar lo recibido en billetes para calcular vuelto.
- *   - Si hay 1+ pago en efectivo y canal mostrador, se puede aplicar 10% off
- *     SOLO sobre la porción efectivo (no sobre todo el pedido).
+ *   - En canal mostrador se puede aplicar un descuento % sobre TODAS las
+ *     líneas, cualquiera sea el medio de pago (antes era sólo la porción en
+ *     efectivo, y las promos con tarjeta no se podían cargar).
  */
 function SplitPagoPanel({
   ventaId,
   total,
   subtotal,
-  habilitaDescuentoEfectivo,
+  habilitaDescuento,
   onCancel,
   onCobrado,
 }: {
   ventaId: string;
   total: string;
   subtotal: string;
-  habilitaDescuentoEfectivo: boolean;
+  habilitaDescuento: boolean;
   onCancel: () => void;
   onCobrado: () => void;
 }) {
@@ -1536,36 +1545,37 @@ function SplitPagoPanel({
   //   - Ahorro del cliente = monto_bruto - monto_neto = monto_neto * (pct/(100-pct))
   const factor = (100 - descuentoPct) / 100;
   const totalEntregado = pagos.reduce((acc, p) => acc + Number(p.monto || 0), 0);
-  const efectivoNeto = pagos
-    .filter((p) => p.metodo === 'EFECTIVO')
-    .reduce((acc, p) => acc + Number(p.monto || 0), 0);
-  const hayEfectivo = pagos.some((p) => p.metodo === 'EFECTIVO' && Number(p.monto || 0) > 0);
-  const aplicaDescuento = aplicarDescuentoEfectivo && habilitaDescuentoEfectivo && hayEfectivo;
-  const ahorroEfectivo = aplicaDescuento ? (efectivoNeto * descuentoPct) / (100 - descuentoPct) : 0;
-  // Cubierto del subtotal: efectivo cuenta como bruto (neto/factor), tarjeta cuenta nominal
+  // El descuento aplica a TODAS las líneas, no sólo a las de efectivo: el local
+  // hace promos por día con tarjeta/débito. Antes, un pago mixto descontaba
+  // sólo la porción en efectivo y el resto quedaba a precio de lista.
+  const netoCobrado = totalEntregado;
+  const hayMonto = pagos.some((p) => Number(p.monto || 0) > 0);
+  const aplicaDescuento = aplicarDescuentoEfectivo && habilitaDescuento && hayMonto;
+  const ahorroEfectivo = aplicaDescuento ? (netoCobrado * descuentoPct) / (100 - descuentoPct) : 0;
+  // Cubierto del subtotal: con descuento cada línea cuenta por su BRUTO
+  // (neto/factor), que es lo que realmente descuenta del pedido.
   const cubiertoSubtotal = pagos.reduce((acc, p) => {
     const m = Number(p.monto || 0);
-    if (p.metodo === 'EFECTIVO' && aplicaDescuento) return acc + m / factor;
-    return acc + m;
+    return acc + (aplicaDescuento ? m / factor : m);
   }, 0);
   const diferencia = totalSinDescuento - cubiertoSubtotal;
   const cuadra = Math.abs(diferencia) < 0.5;
 
   /**
    * Cuando el usuario cambia el % o activa/desactiva el descuento, hay que
-   * reescalar los montos de las líneas EFECTIVO al nuevo factor.
+   * reescalar los montos de TODAS las líneas al nuevo factor (antes sólo las
+   * de efectivo, y las de tarjeta quedaban sin descontar).
    */
   function reescalarEfectivo(opts: { pctViejo: number; pctNuevo: number; activarDescuento: boolean | null }) {
     const factorViejo = (100 - opts.pctViejo) / 100;
     const factorNuevo = (100 - opts.pctNuevo) / 100;
     setPagos((arr) =>
       arr.map((p) => {
-        if (p.metodo !== 'EFECTIVO') return p;
         const m = Number(p.monto || 0);
         if (m === 0) return p;
         // Reconstruir bruto desde lo que está actualmente
         const bruto =
-          aplicarDescuentoEfectivo && hayEfectivo ? m / factorViejo : m;
+          aplicarDescuentoEfectivo && hayMonto ? m / factorViejo : m;
         const debeAplicar =
           opts.activarDescuento === null ? aplicarDescuentoEfectivo : opts.activarDescuento;
         const nuevoMonto = debeAplicar ? bruto * factorNuevo : bruto;
@@ -1666,7 +1676,7 @@ function SplitPagoPanel({
           <span className="text-ink-700">Total del pedido:</span>
           <MoneyAmount value={totalSinDescuento.toFixed(2)} className="font-semibold" />
         </div>
-        {habilitaDescuentoEfectivo && (
+        {habilitaDescuento && (
           <p className="text-2xs text-ink-500 mt-1">
             Si paga 100% efectivo con {descuentoPct}% off:{' '}
             <MoneyAmount
@@ -1683,7 +1693,8 @@ function SplitPagoPanel({
       <div className="space-y-2 mb-3">
         {pagos.map((p, idx) => {
           const declarado = Number(p.monto || 0);
-          const esEfectivoConDesc = p.metodo === 'EFECTIVO' && aplicaDescuento;
+          // El descuento ya no depende del método: cualquier línea lo lleva.
+          const esEfectivoConDesc = aplicaDescuento;
           // El campo `monto` ya está en NETO (con el 10% descontado) cuando el checkbox está activo,
           // porque el handler del checkbox modifica los montos al activarse.
           // Lo que el cliente paga = lo que está en el campo, no hay que volver a multiplicar.
@@ -1754,14 +1765,10 @@ function SplitPagoPanel({
                     const cubiertoOtras = pagos.reduce((acc, op, i) => {
                       if (i === idx) return acc;
                       const m = Number(op.monto || 0);
-                      if (op.metodo === 'EFECTIVO' && aplicaDescuento) return acc + m / factor;
-                      return acc + m;
+                      return acc + (aplicaDescuento ? m / factor : m);
                     }, 0);
                     const restoBruto = Math.max(0, totalSinDescuento - cubiertoOtras);
-                    const restoNeto =
-                      p.metodo === 'EFECTIVO' && aplicaDescuento
-                        ? restoBruto * factor
-                        : restoBruto;
+                    const restoNeto = aplicaDescuento ? restoBruto * factor : restoBruto;
                     const yaCubierto = Math.abs(Number(p.monto || 0) - restoNeto) < 0.5;
                     if (restoNeto <= 0 || yaCubierto) return null;
                     return (
@@ -1878,9 +1885,10 @@ function SplitPagoPanel({
         )}
       </div>
 
-      {/* Descuento al efectivo (mostrador) — toggle + selector de %.
-          Al cambiar el %, los montos efectivo se reescalan automáticamente. */}
-      {habilitaDescuentoEfectivo && hayEfectivo && (
+      {/* Descuento manual (mostrador) — toggle + selector de %.
+          Al cambiar el %, TODOS los montos se reescalan automáticamente.
+          Aplica a cualquier medio de pago, no sólo efectivo. */}
+      {habilitaDescuento && hayMonto && (
         <div className="bg-basil-100 px-3 py-3 rounded mb-3 space-y-2">
           <label className="flex items-start gap-2 cursor-pointer text-xs">
             <input
@@ -1898,9 +1906,10 @@ function SplitPagoPanel({
               className="w-4 h-4 mt-0.5"
             />
             <span className="text-basil-600 font-medium">
-              Aplicar descuento al efectivo
+              Aplicar descuento
               <span className="block text-2xs text-ink-700 font-normal">
-                Reescala automáticamente los montos en efectivo según el %.
+                Reescala automáticamente todos los montos según el %,
+                cualquiera sea el medio de pago.
               </span>
             </span>
           </label>
@@ -1992,7 +2001,7 @@ function SplitPagoPanel({
               className="text-right text-teresita-700 font-bold text-md"
             />
             <span className="col-span-2 text-2xs text-basil-600 text-right">
-              (ahorra <MoneyAmount value={ahorroEfectivo.toFixed(2)} /> en efectivo)
+              (ahorra <MoneyAmount value={ahorroEfectivo.toFixed(2)} />)
             </span>
           </>
         )}

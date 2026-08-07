@@ -22,6 +22,7 @@ import {
   imprimirComandaEncargo,
   imprimirTicketCliente,
   imprimirTicketDelivery,
+  imprimirTicketRemito,
   testPrinter,
   setPrinterConfig,
   getPrinterConfig,
@@ -53,6 +54,7 @@ interface TrabajoImpresion {
     | 'TICKET_DELIVERY'
     | 'TICKET_REIMPRESION'
     | 'COMANDA_ENCARGO'
+    | 'TICKET_REMITO'
     | 'TEST';
   destino: DestinoImpresora;
   payload: Record<string, unknown>;
@@ -214,6 +216,12 @@ async function procesar(t: TrabajoImpresion): Promise<void> {
       case 'COMANDA_ENCARGO':
         await imprimirComandaEncargo(
           t.payload as unknown as Parameters<typeof imprimirComandaEncargo>[0],
+          t.destino,
+        );
+        break;
+      case 'TICKET_REMITO':
+        await imprimirTicketRemito(
+          t.payload as unknown as Parameters<typeof imprimirTicketRemito>[0],
           t.destino,
         );
         break;

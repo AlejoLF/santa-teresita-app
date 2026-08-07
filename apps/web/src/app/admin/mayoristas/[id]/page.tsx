@@ -191,6 +191,9 @@ export default function MayoristaDetallePage({
   const [showEditar, setShowEditar] = useState(false);
   // Remito abierto en el modal de detalle (null = cerrado).
   const [verRemito, setVerRemito] = useState<Remito | null>(null);
+  // Confirmación de que el ticket se encoló (la impresión es asincrónica:
+  // el agente lo levanta en el próximo poll, así que no hay feedback del papel).
+  const [avisoImpresion, setAvisoImpresion] = useState<string | null>(null);
   // Filtro de período para el resumen a facturar.
   const [desde, setDesde] = useState(inicioMesISO());
   const [hasta, setHasta] = useState(hoyISO());
@@ -263,25 +266,21 @@ export default function MayoristaDetallePage({
     );
   }
 
-  // Documento imprimible de UN remito. Mismo membrete y mismo estilo que el
-  // resumen —para que en el mostrador se vean como la misma papelería—, pero
-  // encabezado "Remito #N" con su fecha de emisión en vez de "Resumen de
-  // cuenta". Es lo que se le deja al cliente cuando se le entrega el pedido.
-  function imprimirRemito(r: Remito) {
-    abrirImpresion(
-      documentoHtml({
-        titulo: `Remito ${r.numero} — ${c.nombre}`,
-        encabezado: `Remito #${r.numero}`,
-        subtitulo: `${esc(c.nombre)}${c.cuit ? ' · CUIT ' + esc(c.cuit) : ''} · Emitido el ${fechaLarga(
-          r.fecha,
-        )}`,
-        // Un remito solo no repite su propio encabezado: el número y la fecha
-        // ya están arriba, así que va derecho a la tabla de productos.
-        cuerpo: tablaItems(r),
-        total: Number(r.total),
-      }),
-      `remito-${r.numero}-${c.nombre}`,
-    );
+  // El remito individual se imprime como TICKET en la comandera, igual que una
+  // venta de mostrador: es el papel que se le entrega a la empresa junto con la
+  // mercadería. NO es un A4 — el A4 es el "resumen de cuenta" del período, que
+  // va al contador y se sigue armando en el navegador.
+  async function imprimirRemito(r: Remito) {
+    setAvisoImpresion(null);
+    try {
+      const out = await api.post<{ destino: string; numero: number }>(
+        `/admin/mayoristas/remitos/${r.id}/imprimir`,
+        {},
+      );
+      setAvisoImpresion(`Remito #${out.numero} enviado a la comandera ${out.destino}.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo imprimir el remito');
+    }
   }
 
   return (
@@ -373,6 +372,21 @@ export default function MayoristaDetallePage({
         </div>
       </section>
 
+      {/* La impresión es asincrónica: el agente levanta el trabajo en su próximo
+          poll (~3s). Sin este aviso, tocar 🖨 no da ninguna señal en pantalla y
+          se termina imprimiendo tres veces el mismo remito. */}
+      {avisoImpresion && (
+        <div className="bg-basil-100 text-basil-700 px-4 py-2 rounded text-sm flex items-center justify-between gap-3">
+          <span>🖨 {avisoImpresion}</span>
+          <button
+            onClick={() => setAvisoImpresion(null)}
+            className="text-basil-700 hover:underline text-xs shrink-0"
+          >
+            Cerrar
+          </button>
+        </div>
+      )}
+
       {/* Remitos */}
       <section className="card overflow-hidden">
         <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken">
@@ -427,7 +441,7 @@ export default function MayoristaDetallePage({
                       pudo haberse entregado y a veces hay que reponerlo. */}
                   <td className="px-4 py-2 text-center">
                     <button
-                      onClick={() => imprimirRemito(r)}
+                      onClick={() => void imprimirRemito(r)}
                       title={`Imprimir remito #${r.numero}`}
                       className="text-ink-500 hover:text-teresita-700 px-2 py-1 rounded hover:bg-cream-100"
                     >
@@ -483,7 +497,7 @@ export default function MayoristaDetallePage({
                     </div>
                     <div className="flex items-center justify-end gap-2 mt-0.5">
                       <button
-                        onClick={() => imprimirRemito(r)}
+                        onClick={() => void imprimirRemito(r)}
                         title={`Imprimir remito #${r.numero}`}
                         className="text-ink-500 hover:text-teresita-700 text-xs"
                       >
@@ -591,7 +605,7 @@ export default function MayoristaDetallePage({
           clienteId={id}
           remito={verRemito}
           onClose={() => setVerRemito(null)}
-          onImprimir={() => imprimirRemito(verRemito)}
+          onImprimir={() => void imprimirRemito(verRemito)}
           onPagar={(pagado) => void marcarPagado(verRemito.id, pagado)}
           onAnular={() => void anularRemito(verRemito.id, verRemito.numero)}
         />
