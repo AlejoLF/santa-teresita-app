@@ -34,6 +34,16 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.60',
+    fecha: '7 de agosto',
+    titulo: 'Elegís si el remito se imprime al guardarlo',
+    cambios: [
+      'Al cargar o editar un remito hay una casilla "Imprimir al guardar", arriba del botón. Viene marcada.',
+      'Si la destildás, el remito se guarda y no sale por la comandera. Después lo podés imprimir cuando quieras desde la ficha del cliente.',
+      'El botón te avisa qué va a hacer: dice "Guardar remito e imprimir" o solo "Guardar remito".',
+    ],
+  },
+  {
     version: '2.0.0-alpha.59',
     fecha: '7 de agosto',
     titulo: 'El remito ahora sale por la comandera, y el descuento vale con cualquier pago',

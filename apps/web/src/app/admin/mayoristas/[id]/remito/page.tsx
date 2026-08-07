@@ -7,6 +7,7 @@ import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { coincideBusqueda } from '@/lib/busqueda';
+import { cn } from '@/lib/cn';
 
 interface ProductoCat {
   id: string;
@@ -77,6 +78,10 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
   const [lineas, setLineas] = useState<Linea[]>([]);
   const [observaciones, setObservaciones] = useState('');
   const [numeroEditado, setNumeroEditado] = useState<number | null>(null);
+  // Default prendido: el flujo normal es entregarle el remito a la empresa
+  // junto con la mercadería. La encargada lo destilda cuando sólo quiere
+  // dejarlo cargado (o cuando está corrigiendo uno y no hace falta el papel).
+  const [imprimirAlGuardar, setImprimirAlGuardar] = useState(true);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -184,16 +189,35 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
       ...(l.productoId ? {} : { precioUnitario: Number(l.precioUnitario).toFixed(2) }),
     }));
     try {
+      let guardadoId = remitoId;
       if (remitoId) {
         await api.put(`/admin/mayoristas/remitos/${remitoId}`, {
           observaciones: observaciones || null,
           items,
         });
       } else {
-        await api.post(`/admin/mayoristas/${id}/remitos`, {
+        const creado = await api.post<{ id: string }>(`/admin/mayoristas/${id}/remitos`, {
           observaciones: observaciones || undefined,
           items,
         });
+        guardadoId = creado.id;
+      }
+
+      // La impresión va DESPUÉS de guardar y en su propio try: si la comandera
+      // falla, el remito ya quedó guardado y no se pierde el trabajo de
+      // cargarlo. Avisamos y seguimos — desde la ficha del cliente se puede
+      // re-imprimir cuando quiera.
+      if (imprimirAlGuardar && guardadoId) {
+        try {
+          await api.post(`/admin/mayoristas/remitos/${guardadoId}/imprimir`, {});
+        } catch {
+          setError(
+            'El remito se guardó, pero no se pudo mandar a imprimir. ' +
+              'Podés imprimirlo desde la ficha del cliente.',
+          );
+          setGuardando(false);
+          return;
+        }
       }
       router.push(`/admin/mayoristas/${id}`);
     } catch (e) {
@@ -318,12 +342,34 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
               <span className="text-sm text-ink-500 uppercase tracking-wide">Total</span>
               <MoneyAmount value={total.toFixed(2)} hero className="text-lg text-teresita-700" />
             </div>
+            <label
+              className={cn(
+                'flex items-center gap-2 px-2 py-2 rounded cursor-pointer text-sm transition-colors',
+                imprimirAlGuardar
+                  ? 'bg-wood-100 text-wood-900'
+                  : 'text-ink-500 hover:bg-cream-100',
+              )}
+            >
+              <input
+                type="checkbox"
+                checked={imprimirAlGuardar}
+                onChange={(e) => setImprimirAlGuardar(e.target.checked)}
+                className="w-4 h-4 shrink-0"
+              />
+              <span aria-hidden>🖨</span>
+              <span className="font-medium">Imprimir al guardar</span>
+            </label>
+
             <Button
               fullWidth
               onClick={() => void guardar()}
               disabled={guardando || lineas.length === 0}
             >
-              {guardando ? 'Guardando...' : editando ? 'Guardar cambios' : 'Guardar remito'}
+              {guardando
+                ? 'Guardando...'
+                : `${editando ? 'Guardar cambios' : 'Guardar remito'}${
+                    imprimirAlGuardar ? ' e imprimir' : ''
+                  }`}
             </Button>
           </div>
         </section>
