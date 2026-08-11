@@ -127,14 +127,15 @@ cd C:\sta\santa-teresita-app\tools\n8n
   -TelegramBotToken   '<token de @BotFather>' `
   -TelegramAllowedIds '<id de la encargada>,<id de Julio>' `
   -LlamaCloudApiKey   'llx-...' `
-  -IngestToken        '<el INGEST_API_TOKEN del server>' `
-  -LlamaExtractUrl    '<endpoint de extracción de LlamaCloud>'
+  -IngestToken        '<el INGEST_API_TOKEN del server>'
 ```
 
-Instala n8n, genera la clave de cifrado, escribe el entorno con permisos
-restringidos, registra el servicio NSSM (arranque automático + reinicio ante
-caída), importa credenciales y workflow, lo activa y verifica que todo responda.
-Es **idempotente**: se puede volver a correr.
+Instala n8n, instala el **nodo oficial de LlamaCloud**, genera la clave de
+cifrado, escribe el entorno con permisos restringidos, registra el servicio NSSM
+(arranque automático + reinicio ante caída), importa credenciales y workflow, lo
+activa y verifica que todo responda — incluido un chequeo de que la API key de
+LlamaCloud y el token del bot son válidos. Es **idempotente**: se puede volver a
+correr.
 
 > ⚠️ **La clave de cifrado**. Se guarda en `C:\sta\n8n\encryption-key.txt`.
 > Perderla inutiliza las credenciales guardadas en n8n. Hacé una copia fuera de
@@ -157,27 +158,40 @@ puede) y consulta `getUpdates` cada minuto. El offset se guarda en la static dat
 del workflow, así que sobrevive reinicios y cortes de luz sin reprocesar
 mensajes. El costo es hasta 60s de latencia, irrelevante para facturas.
 
-### ⚠️ Lo único sin verificar: el endpoint de LlamaCloud
+### El OCR usa el nodo oficial de LlamaCloud, no un HTTP Request a mano
 
-Todo el resto del workflow está armado contra contratos verificados (la API de
-Telegram y `POST /ingest/facturas` de este repo). El endpoint de extracción de
-LlamaCloud **no se pudo confirmar**: su documentación está bloqueada desde el
-entorno donde se armó esto, y hay una señal fuerte de que cambió — **LlamaExtract
-v2 reemplazó los "extraction agents" por "saved configurations"**, así que la
-descripción del §2 de abajo quedó vieja.
+`@llamaindex/n8n-nodes-llamacloud` ("LlamaParse Platform") es un community node
+**verificado**, publicado por LlamaIndex. El instalador lo pone en
+`C:\sta\n8n\.n8n\nodes` (que es de donde n8n carga los community nodes) y crea
+la credencial del tipo `llamaParseApi` con la API key.
 
-Qué hacer:
+Se usa la acción **Extract structured data** en modo **Schema**: el schema de la
+factura va *inline* en el workflow, así que **no hay que crear nada en el panel
+de LlamaCloud** — ni extraction agent ni saved configuration. Esto resuelve el
+lío de la v2 (LlamaExtract reemplazó los "extraction agents" por "saved
+configurations"): en modo Schema no aplica ninguna de las dos.
 
-1. Entrá a `https://cloud.llamaindex.ai` y fijate el endpoint de extracción
-   vigente para tu cuenta.
-2. Pasalo en `-LlamaExtractUrl`. Está parametrizado justamente por esto: **no
-   hay que tocar el workflow**, es una variable de entorno.
-3. Si la respuesta viene con otra forma, se ajusta **una sola función** —
-   `leer()` dentro del nodo *Armar factura*. Ya tolera varias formas comunes
-   (`data`, `result`, `extraction` en la raíz; `montos.total`, `total`,
-   `importe_total` para el importe).
+Qué hace el nodo por dentro, verificado leyendo el paquete (v6.7.2):
 
-El resto del pipeline no depende de esa forma.
+1. Sube el binario a LlamaCloud y obtiene un `file_id`.
+2. `POST /api/v2/extract` con `{ file_input, configuration: { data_schema } }`.
+3. Poletea `GET /api/v2/extract/<job>` hasta `COMPLETED`.
+4. Devuelve **`{ result: "<JSON stringificado>" }`** — un string, no un objeto.
+
+Ese último detalle importa: el nodo *Armar factura* hace `JSON.parse` y recupera
+el `chatId`/`hash` del nodo anterior por `pairedItem`, porque el nodo de
+LlamaCloud **no arrastra los campos de entrada**.
+
+El schema pedido está en el parámetro `dataSchema` del nodo, en el JSON del
+workflow: `proveedor{nombre,cuit}`, `comprobante{tipo,puntoVenta,numero,
+fechaEmision,fechaVencimiento}`, `montos{neto,iva21,iva10_5,ivaTotal,total}` e
+`items[]`. Si querés cambiar qué se extrae, se toca ahí y punto — el mapeo al
+contrato del §1 tolera campos faltantes.
+
+**Lo que queda sin verificar**: nadie corrió todavía una factura real de punta a
+punta. Los contratos están confirmados (API de Telegram, el nodo de LlamaCloud
+leído del paquete, `POST /ingest/facturas` de este repo), pero la precisión del
+OCR sobre facturas argentinas hay que medirla con 5-10 reales.
 
 ---
 
@@ -203,29 +217,17 @@ El resto del pipeline no depende de esa forma.
   return [{ json: { hash: crypto.createHash('sha256').update(buf).digest('hex') } }];
   ```
 
-### OCR — LlamaCloud (recomendado: **LlamaExtract**)
-LlamaCloud tiene dos servicios; para facturas conviene **LlamaExtract** (extrae directo
-a un schema). API key en `https://cloud.llamaindex.ai` (formato `llx-...`). Base:
-`https://api.cloud.llamaindex.ai`. Auth: `Authorization: Bearer llx-...`.
+### OCR — nodo **LlamaParse Platform**
+- Acción: **Extract structured data**. Configuration mode: **Schema** (inline).
+- Input type: **Binary File**, campo `data` (el que deja *Bajar archivo*).
+- Credencial: `LlamaParse API` (API key `llx-...` + base `https://api.cloud.llamaindex.ai`).
+- **No hace falta convertir PDF a imagen** — LlamaCloud come PDF e imagen directo.
+- Retry On Fail: 3 intentos, 5s. `onError: continueRegularOutput` para que un
+  fallo del OCR no mate la ejecución y la encargada reciba el aviso.
 
-**Opción A — LlamaExtract (estructurado directo, ideal facturas):**
-1. Una vez, definí un *extraction agent* con el schema de la factura (en la UI de
-   LlamaCloud o por API): proveedor{nombre,cuit}, comprobante{tipo,puntoVenta,numero,
-   fechaEmision}, montos{neto,iva21,total}, items[{descripcion,cantidad,unidad,
-   precioUnitario,subtotal}].
-2. En n8n, **HTTP Request** subiendo el archivo al agente → devuelve el JSON del schema.
-3. Ese JSON ya es casi el contrato del §1 → mapealo en un Code node.
-
-**Opción B — LlamaParse + un LLM (si preferís markdown):**
-1. **HTTP Request** (multipart) `POST https://api.cloud.llamaindex.ai/api/v1/parsing/upload`
-   con el binario y el header de auth → devuelve `{ id }` (job).
-2. **Poll**: `GET /api/v1/parsing/job/{id}` hasta `status=SUCCESS` (Wait + IF loop, o el
-   nodo con retry). Luego `GET /api/v1/parsing/job/{id}/result/markdown` → markdown.
-3. Pasá el markdown a un LLM (OpenAI/Anthropic/lo que uses) con un prompt que devuelva
-   SOLO el JSON del contrato. (LlamaParse lee bien las tablas → el LLM extrae fácil.)
-
-> Verificá los paths exactos en la doc vigente de LlamaCloud — la API evoluciona.
-> El patrón (upload → job → result, o extract-con-schema) es estable.
+Alternativa si algún día conviene: acción **Parse a document** (devuelve markdown)
+y pasarle el markdown a un LLM. Más piezas, más costo, misma salida — no vale la
+pena mientras Extract funcione.
 
 ### Parse + validación
 - **Code node**: asegurate de tener el JSON del contrato. Sanity checks:
@@ -305,8 +307,8 @@ Editor de n8n en `http://localhost:5678` (desde S1) para armar el workflow.
 
 ### 4.2 Credenciales en n8n
 - **Telegram API**: el token de @BotFather (§5).
-- **LlamaCloud**: la API key `llx-...` (en un header `Authorization: Bearer` de los
-  HTTP Request, o como credencial genérica). Sacala de `https://cloud.llamaindex.ai`.
+- **LlamaParse API** (tipo `llamaParseApi`, lo aporta el community node): la API key
+  `llx-...` de `https://cloud.llamaindex.ai` + base `https://api.cloud.llamaindex.ai`.
 
 ### 4.3 El token de ingesta (en el server)
 Agregar al `.env` del `sta-server` en S1 y reiniciar el servicio:
@@ -334,8 +336,10 @@ el API, el primer POST reintenta (Retry On Fail) → se autocorrige. LlamaCloud 
 ## 6. Checklist de puesta en marcha
 - [ ] `INGEST_API_TOKEN` en el `.env` del server (S1) + reiniciar `sta-server`.
 - [ ] Deploy del server con el endpoint de ingesta (release del server).
-- [ ] Cuenta de LlamaCloud + API key `llx-...` + (si LlamaExtract) el extraction agent con schema.
-- [ ] n8n instalado + servicio NSSM corriendo + credenciales Telegram y LlamaCloud + INGEST_API_TOKEN.
+- [ ] Cuenta de LlamaCloud + API key `llx-...`. (El schema va inline en el workflow:
+      **no** hay que crear extraction agent ni saved configuration en el panel.)
+- [ ] n8n instalado + community node `@llamaindex/n8n-nodes-llamacloud` + servicio NSSM
+      corriendo + credenciales `LlamaParse API` e `Ingesta STA` + INGEST_API_TOKEN.
 - [ ] Bot de @BotFather + whitelist de usuarios.
 - [ ] Workflow armado y probado con 5-10 facturas reales (medir costo LlamaCloud y precisión).
 - [ ] UI de validación visible para la encargada (Admin → Facturas de compra → Sin validar).
@@ -343,6 +347,10 @@ el API, el primer POST reintenta (Retry On Fail) → se autocorrige. LlamaCloud 
 ---
 
 *Creado 2026-06-10. Actualizado 2026-08-11: el workflow y el instalador están
-escritos (`tools/n8n/`). El endpoint de ingesta, el flujo de validación y la UI de
-bandeja ya estaban implementados y verificados. Falta: confirmar el endpoint de
-LlamaCloud contra la cuenta y correr el instalador en S1.*
+escritos (`tools/n8n/`). El tramo de OCR pasó de un HTTP Request armado a mano
+(endpoint sin confirmar) al **nodo oficial `@llamaindex/n8n-nodes-llamacloud`**
+en modo schema inline — los nombres de nodo, parámetros y credencial se
+verificaron leyendo el paquete v6.7.2, y el instalador lo instala solo. El
+endpoint de ingesta, el flujo de validación y la UI de bandeja ya estaban
+implementados y verificados. Falta: correr el instalador en S1 y medir precisión
+y costo con 5-10 facturas reales.*

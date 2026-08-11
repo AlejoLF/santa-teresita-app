@@ -7,12 +7,13 @@
   Hace, en orden:
     1. Verifica Node 22 y NSSM.
     2. Instala n8n global.
-    3. Genera (o reusa) la clave de cifrado de n8n.
-    4. Escribe el archivo de entorno con los tokens.
-    5. Registra el servicio `n8n` con NSSM (arranca solo tras corte de luz).
+    3. Instala el nodo oficial de LlamaCloud (community node).
+    4. Genera (o reusa) la clave de cifrado de n8n.
+    5. Escribe el archivo de entorno con los tokens.
     6. Importa las credenciales y el workflow.
-    7. Activa el workflow y arranca el servicio.
-    8. Verifica que responde.
+    7. Registra el servicio `n8n` con NSSM (arranca solo tras corte de luz).
+    8. Activa el workflow y arranca el servicio.
+    9. Verifica que responde.
 
   IDEMPOTENTE: se puede volver a correr. Reusa la clave de cifrado existente
   (perderla inutiliza las credenciales guardadas) y re-importa el workflow
@@ -26,19 +27,14 @@
   no le contesta a nadie — un bot es público y cualquiera puede escribirle.
 
 .PARAMETER LlamaCloudApiKey
-  API key de LlamaCloud (`llx-...`).
+  API key de LlamaCloud (`llx-...`), de https://cloud.llamaindex.ai.
 
 .PARAMETER IngestToken
   El INGEST_API_TOKEN del server (el mismo que está en el .env de sta-server).
 
-.PARAMETER LlamaExtractUrl
-  Endpoint de extracción de LlamaCloud. Ver la nota en docs/N8N-FACTURAS-OCR.md:
-  hay que confirmarlo contra la cuenta porque la API cambió en la v2.
-
 .EXAMPLE
   .\setup-n8n.ps1 -TelegramBotToken '123:ABC' -TelegramAllowedIds '111,222' `
-                  -LlamaCloudApiKey 'llx-...' -IngestToken '...' `
-                  -LlamaExtractUrl 'https://api.cloud.llamaindex.ai/api/v1/...'
+                  -LlamaCloudApiKey 'llx-...' -IngestToken '...'
 #>
 [CmdletBinding()]
 param(
@@ -46,8 +42,8 @@ param(
   [Parameter(Mandatory = $true)][string]$TelegramAllowedIds,
   [Parameter(Mandatory = $true)][string]$LlamaCloudApiKey,
   [Parameter(Mandatory = $true)][string]$IngestToken,
-  [Parameter(Mandatory = $true)][string]$LlamaExtractUrl,
   [string]$IngestUrl = 'http://localhost:3001/api/v1/ingest/facturas',
+  [string]$LlamaBaseUrl = 'https://api.cloud.llamaindex.ai',
   [string]$N8nDir    = 'C:\sta\n8n'
 )
 
@@ -96,8 +92,30 @@ if ($yaEsta) {
 
 New-Item -ItemType Directory -Force -Path $N8nDir | Out-Null
 
-# ── 3. Clave de cifrado ────────────────────────────────────────────────
-Paso 3 'Clave de cifrado'
+# ── 3. Nodo de LlamaCloud ──────────────────────────────────────────────
+# Es un community node: n8n los carga desde <userFolder>\.n8n\nodes\node_modules.
+# Instalarlo por npm ahí es la vía manual documentada — equivale a apretar
+# "Install" en el panel, y funciona headless (que es como corre el servicio).
+Paso 3 'Instalando el nodo de LlamaCloud'
+$nodesDir = Join-Path $N8nDir '.n8n\nodes'
+New-Item -ItemType Directory -Force -Path $nodesDir | Out-Null
+Push-Location $nodesDir
+try {
+  # Rango ^6.7.2: la versión contra la que se armó el workflow. Un major nuevo
+  # podría renombrar parámetros del nodo y romperlo en silencio.
+  & npm install '@llamaindex/n8n-nodes-llamacloud@^6.7.2' --no-audit --no-fund
+  if ($LASTEXITCODE -ne 0) { throw 'Falló la instalación del nodo de LlamaCloud' }
+} finally {
+  Pop-Location
+}
+$nodePkg = Join-Path $nodesDir 'node_modules\@llamaindex\n8n-nodes-llamacloud\package.json'
+if (-not (Test-Path $nodePkg)) {
+  throw "El nodo no quedó en $nodesDir. Instalalo desde el panel de n8n (Settings -> Community nodes -> @llamaindex/n8n-nodes-llamacloud)."
+}
+Ok "Nodo LlamaParse Platform v$((Get-Content $nodePkg -Raw | ConvertFrom-Json).version)"
+
+# ── 4. Clave de cifrado ────────────────────────────────────────────────
+Paso 4 'Clave de cifrado'
 $claveFile = Join-Path $N8nDir 'encryption-key.txt'
 if (Test-Path $claveFile) {
   $clave = (Get-Content $claveFile -Raw).Trim()
@@ -113,8 +131,8 @@ if (Test-Path $claveFile) {
   Aviso "GUARDÁ UNA COPIA de $claveFile — sin ella, las credenciales de n8n no se pueden descifrar."
 }
 
-# ── 4. Entorno ─────────────────────────────────────────────────────────
-Paso 4 'Escribiendo el entorno'
+# ── 5. Entorno ─────────────────────────────────────────────────────────
+Paso 5 'Escribiendo el entorno'
 $envFile = Join-Path $N8nDir 'n8n.env'
 @"
 N8N_ENCRYPTION_KEY=$clave
@@ -126,9 +144,9 @@ N8N_HOST=127.0.0.1
 N8N_LISTEN_ADDRESS=127.0.0.1
 N8N_DIAGNOSTICS_ENABLED=false
 N8N_RUNNERS_ENABLED=true
+N8N_COMMUNITY_PACKAGES_ENABLED=true
 TELEGRAM_BOT_TOKEN=$TelegramBotToken
 TELEGRAM_ALLOWED_IDS=$TelegramAllowedIds
-LLAMA_EXTRACT_URL=$LlamaExtractUrl
 INGEST_URL=$IngestUrl
 "@ | Set-Content -Path $envFile -Encoding ascii
 
@@ -142,8 +160,8 @@ foreach ($id in @('BUILTIN\Administrators', 'NT AUTHORITY\SYSTEM')) {
 Set-Acl -Path $envFile -AclObject $acl
 Ok "Entorno en $envFile (solo Administradores y SYSTEM)"
 
-# ── 5. Credenciales + workflow ─────────────────────────────────────────
-Paso 5 'Importando credenciales y workflow'
+# ── 6. Credenciales + workflow ─────────────────────────────────────────
+Paso 6 'Importando credenciales y workflow'
 $aqui = Split-Path -Parent $MyInvocation.MyCommand.Path
 $wf   = Join-Path $aqui 'workflow-facturas-ocr.json'
 if (-not (Test-Path $wf)) { throw "No encuentro $wf" }
@@ -152,9 +170,11 @@ if (-not (Test-Path $wf)) { throw "No encuentro $wf" }
 # importarlas, pero el archivo plano no puede quedar en disco.
 $credFile = Join-Path $env:TEMP "n8n-creds-$([guid]::NewGuid()).json"
 try {
+  # 'llamaParseApi' es el tipo que define el community node del paso 3 — por eso
+  # se instala ANTES de importar: si no, n8n no sabe qué es esta credencial.
   @(
-    @{ name = 'LlamaCloud API'; type = 'httpHeaderAuth';
-       data = @{ name = 'Authorization'; value = "Bearer $LlamaCloudApiKey" } },
+    @{ name = 'LlamaParse API'; type = 'llamaParseApi';
+       data = @{ apiKey = $LlamaCloudApiKey; baseURL = $LlamaBaseUrl } },
     @{ name = 'Ingesta STA';    type = 'httpHeaderAuth';
        data = @{ name = 'Authorization'; value = "Bearer $IngestToken" } }
   ) | ConvertTo-Json -Depth 5 | Set-Content -Path $credFile -Encoding utf8
@@ -176,8 +196,8 @@ try {
   if (Test-Path $credFile) { Remove-Item $credFile -Force }
 }
 
-# ── 6. Servicio ────────────────────────────────────────────────────────
-Paso 6 'Registrando el servicio'
+# ── 7. Servicio ────────────────────────────────────────────────────────
+Paso 7 'Registrando el servicio'
 $existe = (& nssm status n8n 2>$null)
 if ($existe) {
   & nssm stop n8n 2>$null | Out-Null
@@ -202,8 +222,8 @@ Ok 'Servicio configurado (arranque automático + reinicio ante caída)'
 & nssm start n8n | Out-Null
 Start-Sleep -Seconds 8
 
-# ── 7. Activar el workflow ─────────────────────────────────────────────
-Paso 7 'Activando el workflow'
+# ── 8. Activar el workflow ─────────────────────────────────────────────
+Paso 8 'Activando el workflow'
 & n8n update:workflow --all --active=true
 if ($LASTEXITCODE -ne 0) {
   Aviso 'No pude activarlo por CLI. Activalo a mano en http://localhost:5678'
@@ -213,8 +233,8 @@ if ($LASTEXITCODE -ne 0) {
 & nssm restart n8n | Out-Null
 Start-Sleep -Seconds 8
 
-# ── 8. Verificación ────────────────────────────────────────────────────
-Paso 8 'Verificando'
+# ── 9. Verificación ────────────────────────────────────────────────────
+Paso 9 'Verificando'
 $estado = (& nssm status n8n)
 if ($estado -match 'SERVICE_RUNNING') { Ok 'Servicio corriendo' }
 else { Aviso "Estado del servicio: $estado — mirá $N8nDir\n8n.err.log" }
@@ -234,6 +254,15 @@ try {
   else { Aviso 'El token del bot no validó.' }
 } catch {
   Aviso 'No pude verificar el bot de Telegram (¿sin internet?).'
+}
+
+# La API key tambien se valida aca y no cuando llegue la primera factura.
+try {
+  Invoke-RestMethod -Uri "$LlamaBaseUrl/api/v1/projects" -TimeoutSec 15 `
+    -Headers @{ Authorization = "Bearer $LlamaCloudApiKey"; Accept = 'application/json' } | Out-Null
+  Ok 'API key de LlamaCloud válida'
+} catch {
+  Aviso "La API key de LlamaCloud no validó contra $LlamaBaseUrl/api/v1/projects. Revisala en https://cloud.llamaindex.ai"
 }
 
 Write-Host "`n═══ Listo ═══" -ForegroundColor Green
