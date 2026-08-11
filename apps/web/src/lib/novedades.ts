@@ -34,6 +34,17 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.61',
+    fecha: '11 de agosto',
+    titulo: 'Las aclaraciones de los movimientos ahora se ven en la tabla',
+    cambios: [
+      'En Movimientos hay una columna nueva "Aclaración" con el comentario que escribiste al cargar el aporte o el egreso.',
+      'Aparecen también las aclaraciones de TODOS los movimientos viejos: siempre se guardaron, lo que faltaba era mostrarlas.',
+      'En la caja del turno, cada egreso muestra su aclaración debajo de la categoría. Sirve para distinguir dos pagos de la misma categoría.',
+      'Si la aclaración es larga se corta para que la fila no se desarme; pasando el mouse por encima se ve completa.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.60',
     fecha: '7 de agosto',
     titulo: 'Elegís si el remito se imprime al guardarlo',
