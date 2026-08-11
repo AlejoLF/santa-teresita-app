@@ -311,12 +311,36 @@ Editor de n8n en `http://localhost:5678` (desde S1) para armar el workflow.
   `llx-...` de `https://cloud.llamaindex.ai` + base `https://api.cloud.llamaindex.ai`.
 
 ### 4.3 El token de ingesta (en el server)
-Agregar al `.env` del `sta-server` en S1 y reiniciar el servicio:
+
+**No existe todavía: hay que generarlo.** No viene de ningún lado — es un token
+de máquina que inventás vos. Mínimo 24 chars (lo valida zod en `config.ts`), y
+**distinto del `AUTH_SECRET`**: su único permiso es crear facturas sin validar,
+que no mueven plata hasta que un humano las acepte.
+
+```powershell
+# 1. Generarlo
+$b = New-Object byte[] 32
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+[Convert]::ToBase64String($b)
+
+# 2. Pegarlo en C:\sta-server\.env
+#    INGEST_API_TOKEN=<lo de arriba>
+
+# 3. NSSM congela el env al registrar el servicio: reiniciar NO alcanza.
+cd C:\sta-server
+.\update-server.ps1 -SyncEnv
+
+# 4. Verificar
+curl.exe -s -o NUL -w "%{http_code}" -X POST http://localhost:3001/api/v1/ingest/facturas
 ```
-INGEST_API_TOKEN=<generá uno: 32+ chars aleatorios, distinto del AUTH_SECRET>
-```
-Verificar: `curl -s -o NUL -w "%{http_code}" http://localhost:3001/api/v1/ingest/facturas`
-→ debe dar `401` (vivo, pero sin token en el request). Con el body+token correcto → `201`.
+
+`401` = habilitado y pidiendo token (correcto). `503` = el token no llegó al
+proceso → volvé al paso 3. Con body+token correctos → `201`.
+
+> ⚠️ El paso 3 es el que se olvida. `update-server.ps1:93-95` lo explica: NSSM
+> guarda un snapshot del `.env` en `AppEnvironmentExtra` cuando se registra el
+> servicio, y dotenv **no pisa** lo que NSSM ya inyectó en `process.env`. Editar
+> el `.env` y reiniciar deja el valor viejo (o ninguno) sin avisar.
 
 ### 4.4 Orden de arranque tras corte de luz
 Servicios `SERVICE_AUTO_START`: PostgreSQL → sta-server → n8n. Si n8n arranca antes que
