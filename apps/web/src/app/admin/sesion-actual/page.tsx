@@ -31,7 +31,13 @@ interface SesionData {
     usuarioCierre: string | null;
   } | null;
   cobrosPorMetodo: Array<{ metodo: string; monto: string; cantidad: number }>;
-  movimientos: Array<{ id: string; tipo: string; monto: string; categoria: string }>;
+  movimientos: Array<{
+    id: string;
+    tipo: string;
+    monto: string;
+    categoria: string;
+    observacion?: string | null;
+  }>;
   ventasCount: number;
   ventasAbiertas: number;
   // Encargos A_PAGAR de la sesión: informativo, NO bloquean el cierre (se cobran
@@ -344,8 +350,18 @@ export default function SesionActualPage() {
                 .filter((m) => m.tipo === 'EGRESO')
                 .map((m) => (
                   <tr key={m.id}>
-                    <td className="py-2 text-ink-700">{m.categoria}</td>
-                    <td className="py-2 text-right">
+                    <td className="py-2 text-ink-700">
+                      {m.categoria}
+                      {/* La aclaración distingue dos egresos de la misma
+                          categoría — ej. dos pagos a "Sueldos" donde uno es
+                          por un servicio puntual. */}
+                      {m.observacion && (
+                        <div className="text-2xs text-ink-500" title={m.observacion}>
+                          {m.observacion}
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-2 text-right align-top">
                       <MoneyAmount value={m.monto} className="text-pomodoro-600" />
                     </td>
                   </tr>

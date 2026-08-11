@@ -378,6 +378,7 @@ export default function AdminMovimientosPage() {
               <th className="text-left px-4 py-2">Fecha</th>
               <th className="text-left px-4 py-2">Tipo</th>
               <th className="text-left px-4 py-2">Categoría</th>
+              <th className="text-left px-4 py-2">Aclaración</th>
               <th className="text-left px-4 py-2">Cuenta</th>
               <th className="text-right px-4 py-2">Monto</th>
               <th className="text-left px-4 py-2">Usuario</th>
@@ -388,14 +389,14 @@ export default function AdminMovimientosPage() {
           <tbody className="divide-y divide-cream-200">
             {loading && (
               <tr>
-                <td colSpan={8} className="text-center text-ink-500 py-8">
+                <td colSpan={9} className="text-center text-ink-500 py-8">
                   Cargando...
                 </td>
               </tr>
             )}
             {!loading && data?.movimientos.length === 0 && (
               <tr>
-                <td colSpan={8} className="text-center text-ink-500 py-8">
+                <td colSpan={9} className="text-center text-ink-500 py-8">
                   Sin movimientos
                 </td>
               </tr>
@@ -459,6 +460,12 @@ export default function AdminMovimientosPage() {
                     {m.entidadNombre && (
                       <span className="text-ink-500"> ({m.entidadNombre})</span>
                     )}
+                  </td>
+                  <td
+                    className="px-4 py-2 text-ink-500 text-xs max-w-[16rem] truncate"
+                    title={m.observacion ?? ''}
+                  >
+                    {m.observacion ?? '—'}
                   </td>
                   <td className="px-4 py-2 text-ink-700 text-xs">{cuenta}</td>
                   <td className="px-4 py-2 text-right">
@@ -558,6 +565,14 @@ export default function AdminMovimientosPage() {
                         <span className="text-ink-500"> ({m.entidadNombre})</span>
                       )}
                     </div>
+                    {m.observacion && (
+                      <div
+                        className="text-2xs text-ink-500 truncate"
+                        title={m.observacion}
+                      >
+                        {m.observacion}
+                      </div>
+                    )}
                     <div className="text-2xs font-mono text-ink-500 truncate">
                       {cuenta} ·{' '}
                       {new Date(m.fechaComputo).toLocaleDateString('es-AR', {

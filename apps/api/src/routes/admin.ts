@@ -1869,6 +1869,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           id: true,
           tipo: true,
           monto: true,
+          observacion: true,
           categoria: { select: { nombre: true } },
           cuentaOrigen: { select: { tipo: true, nombre: true, excluidaDeCierreCaja: true } },
           cuentaDestino: { select: { tipo: true, nombre: true, excluidaDeCierreCaja: true } },
@@ -1974,6 +1975,10 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             categoria: m.categoria.nombre,
             cuentaOrigen: m.cuentaOrigen?.nombre ?? null,
             cuentaDestino: m.cuentaDestino?.nombre ?? null,
+            // La aclaración que escribió la encargada al cargarlo. Sin esto,
+            // dos egresos de la misma categoría se ven idénticos en la tabla
+            // del turno y no hay forma de distinguirlos al cerrar caja.
+            observacion: m.observacion,
             afectaCaja: sale || entra,
           };
         }),
