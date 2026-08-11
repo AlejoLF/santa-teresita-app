@@ -35,7 +35,7 @@ export interface Novedad {
 export const NOVEDADES: Novedad[] = [
   {
     version: '2.0.0-alpha.61',
-    fecha: '7 de agosto',
+    fecha: '11 de agosto',
     titulo: 'Las aclaraciones de los movimientos ahora se ven en la tabla',
     cambios: [
       'En Movimientos hay una columna nueva "Aclaración" con el comentario que escribiste al cargar el aporte o el egreso.',
