@@ -1,0 +1,322 @@
+{
+  "name": "Facturas por OCR (Telegram → LlamaCloud → STA)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "name": "Cada minuto",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -620,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Long-polling de Telegram. El offset vive en la static data del workflow, asi\n// que sobrevive reinicios y cortes de luz: cada mensaje se procesa UNA vez.\n//\n// POR QUE POLLING Y NO EL NODO \"Telegram Trigger\": ese nodo registra un webhook\n// y Telegram necesita ENTRAR a n8n desde internet. S1 esta detras del router del\n// local, sin IP publica. Con polling S1 SALE a internet (que ya puede) y no hay\n// que abrir puertos ni depender de un tunel que se caiga.\nconst est = $getWorkflowStaticData('global');\nconst token = $env.TELEGRAM_BOT_TOKEN;\nif (!token) throw new Error('Falta TELEGRAM_BOT_TOKEN en el entorno de n8n');\n\nconst offset = est.offset ?? 0;\nconst resp = await this.helpers.httpRequest({\n  url: `https://api.telegram.org/bot${token}/getUpdates`,\n  qs: { offset, timeout: 0, allowed_updates: JSON.stringify(['message']) },\n  json: true,\n});\nif (!resp.ok) throw new Error('getUpdates fallo: ' + JSON.stringify(resp));\n\nconst permitidos = String($env.TELEGRAM_ALLOWED_IDS || '')\n  .split(',').map((s) => s.trim()).filter(Boolean);\n\nconst out = [];\nlet maxId = offset - 1;\nfor (const up of resp.result || []) {\n  maxId = Math.max(maxId, up.update_id);\n  const msg = up.message;\n  if (!msg) continue;\n  const chatId = msg.chat?.id;\n  const fromId = String(msg.from?.id ?? '');\n  // Whitelist. Sin lista configurada NO se acepta a nadie: un bot de Telegram\n  // es publico y cualquiera que adivine el nombre puede escribirle.\n  if (!permitidos.length || !permitidos.includes(fromId)) continue;\n\n  let fileId = null;\n  if (Array.isArray(msg.photo) && msg.photo.length) {\n    fileId = msg.photo[msg.photo.length - 1].file_id;   // mayor resolucion\n  } else if (msg.document) {\n    const mt = msg.document.mime_type || '';\n    if (mt.startsWith('image/') || mt === 'application/pdf') fileId = msg.document.file_id;\n  }\n  out.push({ json: { chatId, fromId, fileId, sinArchivo: !fileId } });\n}\n// El offset avanza SIEMPRE, aun si un mensaje falla despues: si no, una factura\n// ilegible se reprocesaria en loop cada minuto para siempre.\nest.offset = maxId + 1;\nreturn out;\n"
+      },
+      "name": "Traer mensajes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.sinArchivo }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "¿Trae archivo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// getFile devuelve un file_path; el binario se baja de /file/bot<token>/<path>.\n// Se hace en un Code node (y no en dos HTTP Request) para tener el buffer en\n// memoria y calcular el sha256 sin pasar por disco.\nconst token = $env.TELEGRAM_BOT_TOKEN;\nconst out = [];\nfor (const item of $input.all()) {\n  const { fileId, chatId } = item.json;\n  const meta = await this.helpers.httpRequest({\n    url: `https://api.telegram.org/bot${token}/getFile`,\n    qs: { file_id: fileId }, json: true,\n  });\n  if (!meta.ok) throw new Error('getFile fallo: ' + JSON.stringify(meta));\n  const filePath = meta.result.file_path;\n  const buf = await this.helpers.httpRequest({\n    url: `https://api.telegram.org/file/bot${token}/${filePath}`,\n    encoding: 'arraybuffer',\n  });\n  const bin = Buffer.from(buf);\n  const crypto = require('crypto');\n  const hash = crypto.createHash('sha256').update(bin).digest('hex');\n  const nombre = filePath.split('/').pop() || 'factura';\n  const mime = nombre.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg';\n  out.push({\n    json: { chatId, hash, nombre, mime },\n    binary: { data: await this.helpers.prepareBinaryData(bin, nombre, mime) },\n  });\n}\nreturn out;\n"
+      },
+      "name": "Bajar archivo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        60,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LLAMA_EXTRACT_URL }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "name": "OCR (LlamaCloud)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        280,
+        200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "LlamaCloud API"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "URL desde LLAMA_EXTRACT_URL. Confirmar el endpoint exacto contra la cuenta de LlamaCloud (ver doc)."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Mapea la salida del OCR al contrato de POST /api/v1/ingest/facturas.\n// El contrato del programa SI esta verificado (apps/api/src/routes/ingest.ts);\n// lo que puede cambiar es la FORMA en que LlamaCloud devuelve los datos: si\n// cambia, se toca SOLO la funcion `leer()` de abajo.\nconst out = [];\nfor (const item of $input.all()) {\n  const { chatId, hash } = item.json;\n  const crudo = item.json.body ?? item.json;\n  const fallo = item.json.statusCode && item.json.statusCode >= 400;\n\n  // Aplana la respuesta: LlamaCloud anida los campos segun la version.\n  const d = crudo?.data ?? crudo?.result ?? crudo?.extraction ?? crudo ?? {};\n  const leer = (...rutas) => {\n    for (const r of rutas) {\n      let v = d;\n      for (const k of r.split('.')) v = v?.[k];\n      if (v !== undefined && v !== null && v !== '') return v;\n    }\n    return undefined;\n  };\n  const num = (v) => {\n    if (v === undefined || v === null || v === '') return undefined;\n    const n = Number(String(v).replace(/[^0-9.,-]/g, '').replace(/\\.(?=\\d{3}\\b)/g, '').replace(',', '.'));\n    return Number.isFinite(n) ? n : undefined;\n  };\n\n  const total = num(leer('montos.total', 'total', 'importe_total'));\n  const proveedor = leer('proveedor.nombre', 'proveedor', 'razon_social', 'emisor.nombre');\n  const numero = leer('comprobante.numero', 'numero', 'nro_comprobante');\n\n  const problemas = [];\n  if (fallo) problemas.push('el OCR devolvio error');\n  if (!total || total <= 0) problemas.push('no se leyo el total');\n  if (!proveedor) problemas.push('no se leyo el proveedor');\n  if (!numero) problemas.push('no se leyo el numero de comprobante');\n\n  // Sin estos tres no se puede crear la factura: se avisa y se corta.\n  if (problemas.length) {\n    out.push({ json: { chatId, error: true, problemas } });\n    continue;\n  }\n\n  const items = (leer('items', 'detalle', 'lineas') || []).map((it) => ({\n    descripcion: String(it.descripcion ?? it.description ?? it.detalle ?? '').slice(0, 300),\n    cantidad: num(it.cantidad ?? it.quantity),\n    unidad: it.unidad ?? it.unit,\n    precioUnitario: num(it.precioUnitario ?? it.precio_unitario ?? it.unit_price),\n    alicuotaIva: num(it.alicuotaIva ?? it.iva),\n    subtotal: num(it.subtotal ?? it.importe),\n  })).filter((it) => it.descripcion);\n\n  // Descuadre: no bloquea (el humano valida igual) pero baja la confianza y\n  // deja la razon escrita para que quien revisa sepa donde mirar.\n  const suma = items.reduce((a, it) => a + (it.subtotal || 0), 0);\n  const descuadra = items.length > 0 && Math.abs(total - suma) > total * 0.05;\n  const confianza = num(leer('ocr.confianza', 'confidence')) ?? (descuadra ? 0.5 : 0.8);\n\n  out.push({ json: {\n    chatId,\n    _resumen: { proveedor, total },\n    payload: {\n      adjunto: { hash },\n      proveedor: { nombre: String(proveedor).slice(0, 120), cuit: leer('proveedor.cuit', 'cuit') },\n      comprobante: {\n        tipo: leer('comprobante.tipo', 'tipo') ?? 'OTRO',\n        puntoVenta: leer('comprobante.puntoVenta', 'punto_venta'),\n        numero: String(numero).slice(0, 40),\n        fechaEmision: leer('comprobante.fechaEmision', 'fecha_emision', 'fecha')\n                      ?? new Date().toISOString().slice(0, 10),\n        fechaVencimiento: leer('comprobante.fechaVencimiento', 'fecha_vencimiento'),\n      },\n      montos: {\n        neto: num(leer('montos.neto', 'neto')),\n        ivaTotal: num(leer('montos.ivaTotal', 'iva')),\n        iva21: num(leer('montos.iva21')),\n        iva10_5: num(leer('montos.iva10_5')),\n        total,\n      },\n      items,\n      ocr: { confianza, payload: crudo },\n      observaciones: descuadra ? 'revisar: los items no suman el total' : undefined,\n    },\n  }});\n}\nreturn out;\n"
+      },
+      "name": "Armar factura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "¿Se pudo leer?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        720,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.INGEST_URL }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "name": "Cargar en el programa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        120
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Ingesta STA"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Un solo nodo arma TODAS las respuestas y las manda. Centralizarlo evita que\n// una rama quede muda (que es como se pierde una factura sin que nadie note).\nconst token = $env.TELEGRAM_BOT_TOKEN;\nconst plata = (n) => Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 });\n\nfor (const item of $input.all()) {\n  const j = item.json;\n  const chatId = j.chatId;\n  if (!chatId) continue;\n  let texto;\n\n  if (j.sinArchivo) {\n    texto = 'Mandame una *foto* o un *PDF* de la factura.';\n  } else if (j.error) {\n    texto = '⚠️ No pude leer la factura (' + (j.problemas || []).join('; ') + ').\\n'\n          + 'Probá con una foto más nítida y derecha, o cargala a mano en el sistema.';\n  } else {\n    const code = j.statusCode;\n    const body = j.body ?? {};\n    const r = j._resumen ?? {};\n    if (code === 201) {\n      texto = `✅ Factura de *${r.proveedor}* por $${plata(r.total)} cargada.\\n`\n            + 'Queda *sin validar*: revisala y aceptala en Admin → Facturas.';\n    } else if (code === 200 && body.duplicate) {\n      texto = 'ℹ️ Esa factura ya estaba cargada.';\n    } else if (code === 503) {\n      texto = '⚠️ La ingesta está deshabilitada en el servidor (falta INGEST_API_TOKEN).';\n    } else if (code === 401) {\n      texto = '⚠️ El token de ingesta es inválido. Avisale al que administra el sistema.';\n    } else {\n      texto = `⚠️ El sistema rechazó la factura (${code}). Cargala a mano por ahora.`;\n    }\n  }\n\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: `https://api.telegram.org/bot${token}/sendMessage`,\n    body: { chat_id: chatId, text: texto, parse_mode: 'Markdown' },\n    json: true,\n  });\n}\nreturn $input.all();\n"
+      },
+      "name": "Responder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Cada minuto": {
+      "main": [
+        [
+          {
+            "node": "Traer mensajes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Traer mensajes": {
+      "main": [
+        [
+          {
+            "node": "¿Trae archivo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Trae archivo?": {
+      "main": [
+        [
+          {
+            "node": "Bajar archivo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bajar archivo": {
+      "main": [
+        [
+          {
+            "node": "OCR (LlamaCloud)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OCR (LlamaCloud)": {
+      "main": [
+        [
+          {
+            "node": "Armar factura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar factura": {
+      "main": [
+        [
+          {
+            "node": "¿Se pudo leer?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Se pudo leer?": {
+      "main": [
+        [
+          {
+            "node": "Cargar en el programa",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cargar en el programa": {
+      "main": [
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/Argentina/Buenos_Aires"
+  },
+  "active": false
+}

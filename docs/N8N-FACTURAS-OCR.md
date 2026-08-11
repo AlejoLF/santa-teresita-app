@@ -116,6 +116,71 @@ En ambos casos devuelve `200 duplicate` (no error) → n8n responde "ya estaba c
 
 ---
 
+## 1.bis Instalación — un solo comando
+
+Todo lo de las secciones 2 y 4 está automatizado en `tools/n8n/setup-n8n.ps1`.
+Desde S1, en PowerShell **como Administrador**:
+
+```powershell
+cd C:\sta\santa-teresita-app\tools\n8n
+.\setup-n8n.ps1 `
+  -TelegramBotToken   '<token de @BotFather>' `
+  -TelegramAllowedIds '<id de la encargada>,<id de Julio>' `
+  -LlamaCloudApiKey   'llx-...' `
+  -IngestToken        '<el INGEST_API_TOKEN del server>' `
+  -LlamaExtractUrl    '<endpoint de extracción de LlamaCloud>'
+```
+
+Instala n8n, genera la clave de cifrado, escribe el entorno con permisos
+restringidos, registra el servicio NSSM (arranque automático + reinicio ante
+caída), importa credenciales y workflow, lo activa y verifica que todo responda.
+Es **idempotente**: se puede volver a correr.
+
+> ⚠️ **La clave de cifrado**. Se guarda en `C:\sta\n8n\encryption-key.txt`.
+> Perderla inutiliza las credenciales guardadas en n8n. Hacé una copia fuera de
+> S1. El script la reusa si ya existe, nunca la pisa.
+
+> ⚠️ **`-TelegramAllowedIds` no es opcional en la práctica.** Un bot de Telegram
+> es público: cualquiera que sepa su nombre puede escribirle. Sin lista blanca el
+> workflow **no le contesta a nadie** (falla cerrado, a propósito). Para conseguir
+> un ID: que la persona le escriba al bot y mirá el log, o usá @userinfobot.
+
+### El trigger es POLLING, no webhook
+
+El §2 de abajo describe el nodo **Telegram Trigger**, que registra un webhook:
+Telegram tiene que poder **entrar** a n8n desde internet. S1 está detrás del
+router del local, sin IP pública — eso obligaría a un túnel, que es una pieza más
+que se cae.
+
+El workflow implementado usa **long-polling**: S1 **sale** a internet (que ya
+puede) y consulta `getUpdates` cada minuto. El offset se guarda en la static data
+del workflow, así que sobrevive reinicios y cortes de luz sin reprocesar
+mensajes. El costo es hasta 60s de latencia, irrelevante para facturas.
+
+### ⚠️ Lo único sin verificar: el endpoint de LlamaCloud
+
+Todo el resto del workflow está armado contra contratos verificados (la API de
+Telegram y `POST /ingest/facturas` de este repo). El endpoint de extracción de
+LlamaCloud **no se pudo confirmar**: su documentación está bloqueada desde el
+entorno donde se armó esto, y hay una señal fuerte de que cambió — **LlamaExtract
+v2 reemplazó los "extraction agents" por "saved configurations"**, así que la
+descripción del §2 de abajo quedó vieja.
+
+Qué hacer:
+
+1. Entrá a `https://cloud.llamaindex.ai` y fijate el endpoint de extracción
+   vigente para tu cuenta.
+2. Pasalo en `-LlamaExtractUrl`. Está parametrizado justamente por esto: **no
+   hay que tocar el workflow**, es una variable de entorno.
+3. Si la respuesta viene con otra forma, se ajusta **una sola función** —
+   `leer()` dentro del nodo *Armar factura*. Ya tolera varias formas comunes
+   (`data`, `result`, `extraction` en la raíz; `montos.total`, `total`,
+   `importe_total` para el importe).
+
+El resto del pipeline no depende de esa forma.
+
+---
+
 ## 2. El flujo de n8n — nodo por nodo
 
 ### Trigger
@@ -277,5 +342,7 @@ el API, el primer POST reintenta (Retry On Fail) → se autocorrige. LlamaCloud 
 
 ---
 
-*Creado 2026-06-10. El endpoint de ingesta, el flujo de validación y la UI de bandeja
-están implementados y verificados. Falta: armar el workflow en n8n (este doc).*
+*Creado 2026-06-10. Actualizado 2026-08-11: el workflow y el instalador están
+escritos (`tools/n8n/`). El endpoint de ingesta, el flujo de validación y la UI de
+bandeja ya estaban implementados y verificados. Falta: confirmar el endpoint de
+LlamaCloud contra la cuenta y correr el instalador en S1.*
