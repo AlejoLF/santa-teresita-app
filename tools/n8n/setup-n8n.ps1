@@ -108,7 +108,10 @@ Ok 'NSSM presente'
 # El API tiene que estar arriba: si no, el workflow importa igual pero la
 # primera factura va a fallar y no se va a entender por que.
 try {
-  $salud = Invoke-RestMethod -Uri 'http://localhost:3001/api/v1/health' -TimeoutSec 5
+  # /health va en la RAIZ, no bajo /api/v1 (server.ts lo registra sobre `app`,
+  # antes del prefijo). Con la URL equivocada esto daba 404 y el script avisaba
+  # "el API no responde" con sta-server corriendo perfecto.
+  $salud = Invoke-RestMethod -Uri 'http://localhost:3001/health' -TimeoutSec 5
   Ok 'API del server respondiendo'
 } catch {
   Aviso 'El API (localhost:3001) no responde: el servicio sta-server esta caido.'
