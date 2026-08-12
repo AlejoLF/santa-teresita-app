@@ -330,12 +330,26 @@ $b = New-Object byte[] 32
 cd C:\sta-server
 .\update-server.ps1 -SyncEnv
 
-# 4. Verificar
-curl.exe -s -o NUL -w "%{http_code}" -X POST http://localhost:3001/api/v1/ingest/facturas
+# 4. Verificar (con body VALIDO y un token a proposito invalido)
+$body = '{"proveedor":{"nombre":"PRUEBA"},"comprobante":{"numero":"1","fechaEmision":"2026-08-12"},"montos":{"total":1}}'
+try {
+  Invoke-RestMethod -Uri 'http://localhost:3001/api/v1/ingest/facturas' -Method POST `
+    -ContentType 'application/json' -Body $body `
+    -Headers @{ Authorization = 'Bearer token-a-proposito-invalido' }
+} catch { "HTTP " + [int]$_.Exception.Response.StatusCode }
 ```
 
-`401` = habilitado y pidiendo token (correcto). `503` = el token no llegó al
-proceso → volvé al paso 3. Con body+token correctos → `201`.
+`401` = el token está configurado, todo bien. `503` = falta `INGEST_API_TOKEN`
+en el `.env` → volvé al paso 3.
+
+> **El body tiene que ser válido, y esto no es un detalle.** La ruta declara
+> `schema: { body: BodySchema }`, y Fastify valida el body **antes** de entrar
+> al handler — que es donde viven los chequeos de 503 y 401. Un `POST` vacío
+> devuelve **400** y nunca llega a mirar el token: no distingue "token puesto"
+> de "token faltante". Lo único que prueba es que la ruta existe.
+>
+> El token inválido es a propósito: si mandaras el correcto, crearías una
+> factura de prueba de verdad en la bandeja.
 
 > ⚠️ El paso 3 es el que se olvida. `update-server.ps1:93-95` lo explica: NSSM
 > guarda un snapshot del `.env` en `AppEnvironmentExtra` cuando se registra el
