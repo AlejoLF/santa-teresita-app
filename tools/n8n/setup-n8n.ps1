@@ -184,12 +184,18 @@ $credFile = Join-Path $env:TEMP "n8n-creds-$([guid]::NewGuid()).json"
 try {
   # 'llamaParseApi' es el tipo que define el community node del paso 3 - por eso
   # se instala ANTES de importar: si no, n8n no sabe que es esta credencial.
-  @(
+  $credJson = @(
     @{ name = 'LlamaParse API'; type = 'llamaParseApi';
        data = @{ apiKey = $LlamaCloudApiKey; baseURL = $LlamaBaseUrl } },
     @{ name = 'Ingesta STA';    type = 'httpHeaderAuth';
        data = @{ name = 'Authorization'; value = "Bearer $IngestToken" } }
-  ) | ConvertTo-Json -Depth 5 | Set-Content -Path $credFile -Encoding utf8
+  ) | ConvertTo-Json -Depth 5
+  # WriteAllText con UTF8Encoding($false) = SIN BOM. `Set-Content -Encoding utf8`
+  # en Windows PowerShell 5.1 escribe BOM (3 bytes invisibles al principio), y
+  # el parser de JSON de Node se atraganta: "Unexpected token ... is not valid
+  # JSON", sin decir que el problema es el encoding. Pasado en S1, 2026-08-12.
+  [System.IO.File]::WriteAllText(
+    $credFile, $credJson, (New-Object System.Text.UTF8Encoding($false)))
 
   Get-Content $envFile | ForEach-Object {
     if ($_ -match '^\s*([^#=]+)=(.*)$') {
