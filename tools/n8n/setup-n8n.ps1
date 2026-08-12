@@ -237,15 +237,28 @@ try {
 Paso 7 'Registrando el servicio'
 # Get-Service y no `nssm status`: es un cmdlet, no escribe en stderr, y con
 # -ErrorAction SilentlyContinue devuelve $null limpio si el servicio no existe.
+# NSSM tiene que arrancar un EJECUTABLE de verdad. `Get-Command n8n` devuelve
+# el shim .cmd/.ps1 que crea npm: NSSM lo lanza, el shim arranca node como
+# proceso HIJO y termina, NSSM ve morir el proceso que vigilaba y deja el
+# servicio en Stopped. Hay que apuntar a node.exe + el .js real de n8n.
+$nodeExe = (Get-Command node).Source
+$npmRoot = (Nativo { & npm root -g } | Select-Object -Last 1).ToString().Trim()
+$n8nJs   = Join-Path $npmRoot 'n8n\bin\n8n'
+if (-not (Test-Path $n8nJs)) { throw "No encuentro el entrypoint de n8n en $n8nJs" }
+
 $existe = Get-Service -Name n8n -ErrorAction SilentlyContinue
 if ($existe) {
   Nativo { & nssm stop n8n } | Out-Null
   Ok 'Servicio existente detenido'
 } else {
-  $n8nCmd = (Get-Command n8n).Source
-  & nssm install n8n $n8nCmd start
+  & nssm install n8n $nodeExe
   if ($LASTEXITCODE -ne 0) { throw 'Fallo nssm install' }
 }
+# Application/AppParameters se setean SIEMPRE, no solo al instalar: asi una
+# instalacion previa mal registrada (apuntando al shim) se corrige sola al
+# volver a correr el script.
+& nssm set n8n Application $nodeExe          | Out-Null
+& nssm set n8n AppParameters "`"$n8nJs`" start" | Out-Null
 & nssm set n8n AppDirectory $N8nDir              | Out-Null
 & nssm set n8n AppEnvironmentExtra (Get-Content $envFile) | Out-Null
 & nssm set n8n Start SERVICE_AUTO_START          | Out-Null
@@ -263,9 +276,15 @@ Start-Sleep -Seconds 8
 
 # -- 8. Activar el workflow ---------------------------------------------
 Paso 8 'Activando el workflow'
-Nativo { & n8n update:workflow --all --active=true }
-if ($LASTEXITCODE -ne 0) {
-  Aviso 'No pude activarlo por CLI. Activalo a mano en http://localhost:5678'
+# `update:workflow --all` esta deprecado: en n8n 2.x IMPRIME que ya no publica
+# nada pero SALE CON CODIGO 0, asi que chequear solo $LASTEXITCODE daba un "OK
+# Workflow activo" falso con el workflow desactivado. Se usa publish:workflow
+# --id y ademas se mira la salida, no solo el codigo de salida.
+# El id es el mismo de workflow-facturas-ocr.json.
+$salidaPub = (Nativo { & n8n publish:workflow --id=staFacturasOCR01 } | Out-String)
+if ($salidaPub.Trim()) { Write-Host $salidaPub.Trim() }
+if ($LASTEXITCODE -ne 0 -or $salidaPub -match 'no longer supported|is deprecated|not found') {
+  Aviso 'No quedo activo por CLI. Activalo a mano: http://localhost:5678 -> abri el workflow -> switch "Active" arriba a la derecha.'
 } else {
   Ok 'Workflow activo'
 }
@@ -278,7 +297,16 @@ $svc = Get-Service -Name n8n -ErrorAction SilentlyContinue
 if ($svc -and $svc.Status -eq 'Running') { Ok 'Servicio corriendo' }
 else {
   $estado = if ($svc) { $svc.Status } else { 'el servicio no existe' }
-  Aviso "Estado del servicio: $estado - mira $N8nDir\n8n.err.log"
+  Aviso "Estado del servicio: $estado"
+  # El log es lo unico que explica POR QUE no arranco. Mostrarlo aca ahorra
+  # una vuelta entera de ida y vuelta con quien este instalando.
+  $errLog = Join-Path $N8nDir 'n8n.err.log'
+  if (Test-Path $errLog) {
+    Write-Host "    --- ultimas 30 lineas de $errLog ---" -ForegroundColor Yellow
+    Get-Content $errLog -Tail 30 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+  } else {
+    Aviso "No existe $errLog: el proceso no llego ni a arrancar."
+  }
 }
 
 try {
@@ -295,7 +323,19 @@ try {
   if ($me.ok) { Ok "Bot de Telegram: @$($me.result.username)" }
   else { Aviso 'El token del bot no valido.' }
 } catch {
-  Aviso 'No pude verificar el bot de Telegram (sin internet?).'
+  # Telegram devuelve 404 cuando el token no existe. Distinguirlo de un
+  # problema de red importa: decir "sin internet" cuando el token esta mal
+  # manda a mirar el lugar equivocado (y encima la verificacion de LlamaCloud,
+  # dos lineas mas abajo, prueba que internet hay).
+  $codigo = $null
+  if ($_.Exception.Response) { $codigo = [int]$_.Exception.Response.StatusCode }
+  if ($codigo -eq 404) {
+    Aviso 'Token del bot INVALIDO: Telegram devolvio 404. Genera uno nuevo con @BotFather y volve a correr esto.'
+  } elseif ($codigo) {
+    Aviso "Telegram respondio HTTP $codigo al validar el bot."
+  } else {
+    Aviso "No pude contactar api.telegram.org: $($_.Exception.Message)"
+  }
 }
 
 # La API key tambien se valida aca y no cuando llegue la primera factura.
