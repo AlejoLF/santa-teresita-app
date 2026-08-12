@@ -305,7 +305,10 @@ else {
     Write-Host "    --- ultimas 30 lineas de $errLog ---" -ForegroundColor Yellow
     Get-Content $errLog -Tail 30 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
   } else {
-    Aviso "No existe $errLog: el proceso no llego ni a arrancar."
+    # ${errLog} y no $errLog: en un string entrecomillado, "$var:" lo parsea
+    # PowerShell como referencia con drive (la forma de $env:PATH) y el script
+    # ni siquiera compila. Las llaves delimitan donde termina el nombre.
+    Aviso "No existe ${errLog} - el proceso no llego ni a arrancar."
   }
 }
 
