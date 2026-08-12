@@ -172,6 +172,18 @@ if (Test-Path $claveFile) {
 }
 
 # -- 5. Entorno ---------------------------------------------------------
+# N8N_BLOCK_ENV_ACCESS_IN_NODE=false: n8n bloquea $env dentro de los Code
+# nodes por defecto, y los 4 nodos del workflow leen de ahi el token del bot,
+# la lista blanca y la URL de ingesta. Sin esto el workflow falla en 11ms con
+# "access to env vars denied", cada minuto, para siempre.
+#
+# CONTRAPARTIDA REAL: habilitarlo deja que CUALQUIER Code node de CUALQUIER
+# workflow lea TODO el entorno del proceso, incluido N8N_ENCRYPTION_KEY (la
+# que descifra las credenciales guardadas). n8n no ofrece lista blanca por
+# variable. Se acepta porque el panel escucha solo en 127.0.0.1 y esta en S1:
+# para escribir un Code node malicioso ya hay que tener la maquina, y con la
+# maquina el n8n.env se lee igual. Si algun dia el panel se expone a la LAN,
+# esto hay que revisarlo.
 Paso 5 'Escribiendo el entorno'
 $envFile = Join-Path $N8nDir 'n8n.env'
 @"
@@ -185,6 +197,7 @@ N8N_LISTEN_ADDRESS=127.0.0.1
 N8N_DIAGNOSTICS_ENABLED=false
 N8N_RUNNERS_ENABLED=true
 N8N_COMMUNITY_PACKAGES_ENABLED=true
+N8N_BLOCK_ENV_ACCESS_IN_NODE=false
 TELEGRAM_BOT_TOKEN=$TelegramBotToken
 TELEGRAM_ALLOWED_IDS=$TelegramAllowedIds
 INGEST_URL=$IngestUrl
