@@ -1,4 +1,4 @@
-# ====================================================================
+﻿# ====================================================================
 #  Santa Teresita - AUTO-UPDATE del servidor local desde GitHub Releases
 #
 #  Chequea si hay una version nueva (release `server-v*`), y si la hay:

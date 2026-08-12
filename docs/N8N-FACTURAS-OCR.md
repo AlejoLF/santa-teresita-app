@@ -125,7 +125,7 @@ Desde S1, en PowerShell **como Administrador**:
 cd C:\sta\santa-teresita-app\tools\n8n
 .\setup-n8n.ps1 `
   -TelegramBotToken   '<token de @BotFather>' `
-  -TelegramAllowedIds '<id de la encargada>,<id de Julio>' `
+  -TelegramAllowedIds '<id o @usuario de la encargada>,<id o @usuario de Julio>' `
   -LlamaCloudApiKey   'llx-...' `
   -IngestToken        '<el INGEST_API_TOKEN del server>'
 ```
@@ -143,8 +143,14 @@ correr.
 
 > ⚠️ **`-TelegramAllowedIds` no es opcional en la práctica.** Un bot de Telegram
 > es público: cualquiera que sepa su nombre puede escribirle. Sin lista blanca el
-> workflow **no le contesta a nadie** (falla cerrado, a propósito). Para conseguir
-> un ID: que la persona le escriba al bot y mirá el log, o usá @userinfobot.
+> workflow **no le contesta a nadie** (falla cerrado, a propósito).
+>
+> Se acepta **el ID numérico o el `@usuario`**, mezclados y separados por coma:
+> `'8123456789,@julio'`. El `@usuario` es el que tenés a mano; el numérico lo da
+> @userinfobot y es el que conviene, porque un `@usuario` se puede soltar y otro
+> tomarlo después. Si alguien queda afuera de la lista, su mensaje se descarta en
+> silencio **pero el log de la ejecución imprime el `from.id` y el `@usuario` que
+> llegaron** — de ahí se copia el valor que falta.
 
 ### El trigger es POLLING, no webhook
 

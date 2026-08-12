@@ -23,8 +23,10 @@
   Token del bot de @BotFather.
 
 .PARAMETER TelegramAllowedIds
-  IDs de Telegram que pueden usar el bot, separados por coma. SIN esto el bot
-  no le contesta a nadie - un bot es publico y cualquiera puede escribirle.
+  Quienes pueden usar el bot, separados por coma. Vale el ID numerico o el
+  @usuario ('111,@julio'). SIN esto el bot no le contesta a nadie - un bot es
+  publico y cualquiera puede escribirle.
+  Preferir el ID numerico: el @usuario se puede soltar y otro tomarlo.
 
 .PARAMETER LlamaCloudApiKey
   API key de LlamaCloud (`llx-...`), de https://cloud.llamaindex.ai.
@@ -33,7 +35,7 @@
   El INGEST_API_TOKEN del server (el mismo que esta en el .env de sta-server).
 
 .EXAMPLE
-  .\setup-n8n.ps1 -TelegramBotToken '123:ABC' -TelegramAllowedIds '111,222' `
+  .\setup-n8n.ps1 -TelegramBotToken '123:ABC' -TelegramAllowedIds '111,@julio' `
                   -LlamaCloudApiKey 'llx-...' -IngestToken '...'
 #>
 [CmdletBinding()]
