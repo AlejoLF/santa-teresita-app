@@ -184,10 +184,16 @@ $credFile = Join-Path $env:TEMP "n8n-creds-$([guid]::NewGuid()).json"
 try {
   # 'llamaParseApi' es el tipo que define el community node del paso 3 - por eso
   # se instala ANTES de importar: si no, n8n no sabe que es esta credencial.
+  # El 'id' es obligatorio: n8n 2.x NO lo genera al importar y la insercion
+  # revienta con "NOT NULL constraint failed: credentials_entity.id". Van
+  # fijos (no aleatorios) para que re-correr esto ACTUALICE la credencial en
+  # vez de crear una nueva, y para que el workflow pueda referenciarlas por id.
+  # Los mismos ids estan en workflow-facturas-ocr.json: si cambias uno, cambia
+  # el otro o los nodos quedan sin credencial asignada.
   $credJson = @(
-    @{ name = 'LlamaParse API'; type = 'llamaParseApi';
+    @{ id = 'staLlamaParse001'; name = 'LlamaParse API'; type = 'llamaParseApi';
        data = @{ apiKey = $LlamaCloudApiKey; baseURL = $LlamaBaseUrl } },
-    @{ name = 'Ingesta STA';    type = 'httpHeaderAuth';
+    @{ id = 'staIngestaSTA001'; name = 'Ingesta STA';    type = 'httpHeaderAuth';
        data = @{ name = 'Authorization'; value = "Bearer $IngestToken" } }
   ) | ConvertTo-Json -Depth 5
   # WriteAllText con UTF8Encoding($false) = SIN BOM. `Set-Content -Encoding utf8`

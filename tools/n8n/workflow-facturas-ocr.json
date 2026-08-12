@@ -1,4 +1,5 @@
 {
+  "id": "staFacturasOCR01",
   "name": "Facturas por OCR (Telegram → LlamaCloud → STA)",
   "nodes": [
     {
@@ -91,6 +92,7 @@
       ],
       "credentials": {
         "llamaParseApi": {
+          "id": "staLlamaParse001",
           "name": "LlamaParse API"
         }
       },
@@ -169,6 +171,7 @@
       ],
       "credentials": {
         "httpHeaderAuth": {
+          "id": "staIngestaSTA001",
           "name": "Ingesta STA"
         }
       },
