@@ -58,10 +58,23 @@ function Paso($n, $txt) { Write-Host "`n[$n] $txt" -ForegroundColor Cyan }
 function Ok($txt)       { Write-Host "    OK  $txt" -ForegroundColor Green }
 function Aviso($txt)    { Write-Host "    !   $txt" -ForegroundColor Yellow }
 
+# Un comando nativo que escribe en stderr ABORTA el script cuando
+# $ErrorActionPreference = 'Stop' y su stderr esta redirigido: PowerShell
+# convierte cada linea de stderr en un ErrorRecord. El `2>$null` no protege,
+# es justamente lo que dispara la conversion. Paso con `nssm status n8n`
+# cuando el servicio todavia no existe: nssm escribe "Can't open service!",
+# que es la respuesta CORRECTA a lo que le estabamos preguntando, y el script
+# moria ahi. Esta helper baja la preferencia solo mientras corre el comando.
+function Nativo([scriptblock]$Bloque) {
+  $previo = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & $Bloque 2>&1 } finally { $ErrorActionPreference = $previo }
+}
+
 # -- 1. Prerequisitos ---------------------------------------------------
 Paso 1 'Verificando prerequisitos'
 
-$node = (& node --version 2>$null)
+$node = (Nativo { & node --version })
 if (-not $node) { throw 'Node no esta instalado o no esta en el PATH.' }
 $major = [int]($node -replace '^v(\d+)\..*$', '$1')
 if ($major -lt 20) { throw "n8n necesita Node 20+. Encontre $node." }
@@ -87,7 +100,7 @@ try {
 
 # -- 2. n8n -------------------------------------------------------------
 Paso 2 'Instalando n8n'
-$yaEsta = (& npm ls -g --depth=0 2>$null | Select-String -Pattern '\bn8n@')
+$yaEsta = (Nativo { & npm ls -g --depth=0 } | Select-String -Pattern '\bn8n@')
 if ($yaEsta) {
   Ok "Ya instalado: $($yaEsta.ToString().Trim())"
 } else {
@@ -222,9 +235,11 @@ try {
 
 # -- 7. Servicio --------------------------------------------------------
 Paso 7 'Registrando el servicio'
-$existe = (& nssm status n8n 2>$null)
+# Get-Service y no `nssm status`: es un cmdlet, no escribe en stderr, y con
+# -ErrorAction SilentlyContinue devuelve $null limpio si el servicio no existe.
+$existe = Get-Service -Name n8n -ErrorAction SilentlyContinue
 if ($existe) {
-  & nssm stop n8n 2>$null | Out-Null
+  Nativo { & nssm stop n8n } | Out-Null
   Ok 'Servicio existente detenido'
 } else {
   $n8nCmd = (Get-Command n8n).Source
@@ -243,25 +258,28 @@ if ($existe) {
 & nssm set n8n AppRestartDelay 5000              | Out-Null
 Ok 'Servicio configurado (arranque automatico + reinicio ante caida)'
 
-& nssm start n8n | Out-Null
+Nativo { & nssm start n8n } | Out-Null
 Start-Sleep -Seconds 8
 
 # -- 8. Activar el workflow ---------------------------------------------
 Paso 8 'Activando el workflow'
-& n8n update:workflow --all --active=true
+Nativo { & n8n update:workflow --all --active=true }
 if ($LASTEXITCODE -ne 0) {
   Aviso 'No pude activarlo por CLI. Activalo a mano en http://localhost:5678'
 } else {
   Ok 'Workflow activo'
 }
-& nssm restart n8n | Out-Null
+Nativo { & nssm restart n8n } | Out-Null
 Start-Sleep -Seconds 8
 
 # -- 9. Verificacion ----------------------------------------------------
 Paso 9 'Verificando'
-$estado = (& nssm status n8n)
-if ($estado -match 'SERVICE_RUNNING') { Ok 'Servicio corriendo' }
-else { Aviso "Estado del servicio: $estado - mira $N8nDir\n8n.err.log" }
+$svc = Get-Service -Name n8n -ErrorAction SilentlyContinue
+if ($svc -and $svc.Status -eq 'Running') { Ok 'Servicio corriendo' }
+else {
+  $estado = if ($svc) { $svc.Status } else { 'el servicio no existe' }
+  Aviso "Estado del servicio: $estado - mira $N8nDir\n8n.err.log"
+}
 
 try {
   Invoke-WebRequest -Uri 'http://127.0.0.1:5678/healthz' -TimeoutSec 10 -UseBasicParsing | Out-Null
