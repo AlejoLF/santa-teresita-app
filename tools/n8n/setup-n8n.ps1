@@ -157,9 +157,15 @@ INGEST_URL=$IngestUrl
 "@ | Set-Content -Path $envFile -Encoding ascii
 
 # El archivo tiene tokens: solo Administradores y SYSTEM.
+# Por SID y NO por nombre: 'BUILTIN\Administrators' no existe en un Windows en
+# espanol (ahi es 'BUILTIN\Administradores') y AddAccessRule tira
+# IdentityNotMappedException. Los SIDs son iguales en todos los idiomas.
+#   S-1-5-32-544 = grupo local Administradores
+#   S-1-5-18     = SYSTEM (la cuenta con la que corre el servicio NSSM)
 $acl = Get-Acl $envFile
 $acl.SetAccessRuleProtection($true, $false)
-foreach ($id in @('BUILTIN\Administrators', 'NT AUTHORITY\SYSTEM')) {
+foreach ($sid in @('S-1-5-32-544', 'S-1-5-18')) {
+  $id = New-Object System.Security.Principal.SecurityIdentifier($sid)
   $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
     $id, 'FullControl', 'Allow')))
 }
