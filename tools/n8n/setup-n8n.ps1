@@ -71,6 +71,22 @@ function Nativo([scriptblock]$Bloque) {
   try { & $Bloque 2>&1 } finally { $ErrorActionPreference = $previo }
 }
 
+# Esperar a que n8n conteste, en vez de dormir un rato fijo y preguntar una
+# sola vez. Arrancar n8n lleva bastante mas que unos segundos (migraciones de
+# su base + carga del community node), asi que el chequeo temprano reportaba
+# "no responde" sobre un n8n que un rato despues levantaba perfecto: un aviso
+# que asustaba sin que pasara nada.
+function Esperar-N8n([int]$Segundos = 120) {
+  $fin = (Get-Date).AddSeconds($Segundos)
+  while ((Get-Date) -lt $fin) {
+    try {
+      Invoke-WebRequest -Uri 'http://127.0.0.1:5678/healthz' -TimeoutSec 5 -UseBasicParsing | Out-Null
+      return $true
+    } catch { Start-Sleep -Seconds 3 }
+  }
+  return $false
+}
+
 # -- 1. Prerequisitos ---------------------------------------------------
 Paso 1 'Verificando prerequisitos'
 
@@ -95,7 +111,9 @@ try {
   $salud = Invoke-RestMethod -Uri 'http://localhost:3001/api/v1/health' -TimeoutSec 5
   Ok 'API del server respondiendo'
 } catch {
-  Aviso 'El API (localhost:3001) no responde. n8n se instala igual, pero arranca sta-server antes de mandar la primera factura.'
+  Aviso 'El API (localhost:3001) no responde: el servicio sta-server esta caido.'
+  Aviso 'n8n se instala igual, pero la ULTIMA llamada del workflow va ahi, asi que'
+  Aviso 'las facturas van a fallar al final. Arrancalo con:  nssm start sta-server'
 }
 
 # -- 2. n8n -------------------------------------------------------------
@@ -272,7 +290,6 @@ if ($existe) {
 Ok 'Servicio configurado (arranque automatico + reinicio ante caida)'
 
 Nativo { & nssm start n8n } | Out-Null
-Start-Sleep -Seconds 8
 
 # -- 8. Activar el workflow ---------------------------------------------
 Paso 8 'Activando el workflow'
@@ -288,8 +305,9 @@ if ($LASTEXITCODE -ne 0 -or $salidaPub -match 'no longer supported|is deprecated
 } else {
   Ok 'Workflow activo'
 }
+# El restart NO es opcional: publish:workflow avisa que los cambios no toman
+# efecto hasta reiniciar si n8n ya estaba corriendo.
 Nativo { & nssm restart n8n } | Out-Null
-Start-Sleep -Seconds 8
 
 # -- 9. Verificacion ----------------------------------------------------
 Paso 9 'Verificando'
@@ -312,11 +330,11 @@ else {
   }
 }
 
-try {
-  Invoke-WebRequest -Uri 'http://127.0.0.1:5678/healthz' -TimeoutSec 10 -UseBasicParsing | Out-Null
+Write-Host '    ... esperando a que n8n levante (puede tardar un minuto)' -ForegroundColor Gray
+if (Esperar-N8n 120) {
   Ok 'n8n responde en http://localhost:5678'
-} catch {
-  Aviso "n8n todavia no responde. Espera unos segundos y mira $N8nDir\n8n.err.log"
+} else {
+  Aviso "n8n no respondio en 2 minutos. Mira $N8nDir\n8n.err.log"
 }
 
 # El bot tiene que existir y el token ser valido - se chequea aca y no cuando
