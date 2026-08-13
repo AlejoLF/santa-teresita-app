@@ -152,6 +152,38 @@ correr.
 > silencio **pero el log de la ejecución imprime el `from.id` y el `@usuario` que
 > llegaron** — de ahí se copia el valor que falta.
 
+### Probar en tu PC — `setup-n8n-dev.ps1`
+
+Para armar o retocar el workflow con el editor visual sin tocar S1:
+
+```powershell
+cd C:\sta\santa-teresita-app\tools\n8n
+.\setup-n8n-dev.ps1 -TelegramBotToken '<bot DE PRUEBA>' `
+                    -LlamaCloudApiKey 'llx-...' -ImportarWorkflow
+```
+
+Instala n8n en primer plano (Ctrl+C lo corta), con datos en `C:\sta\n8n-dev`
+— carpeta aparte, para no pisar la de S1 — y el editor en
+`http://localhost:5678`. Cuando termines:
+
+```powershell
+n8n export:workflow --id=<id> --output=workflow-facturas-ocr.json
+```
+
+> 🚨 **Dos n8n contra el mismo bot se pisan.** Telegram admite **un solo**
+> `getUpdates` en vuelo por token. Si el de S1 y el de tu PC poletean el mismo
+> bot: a uno lo corta con **409** (error instantáneo) y al otro lo deja colgado
+> hasta que el gateway lo mata con **504 a los 120s**. Como el trigger dispara
+> cada minuto, para entonces ya hay dos ejecuciones encimadas y **no se
+> recupera solo** — se ve como `Error in 2m 0.6s` repetido, una y otra vez.
+>
+> Usá un bot de prueba aparte de @BotFather, o pará el de S1 (`nssm stop n8n`)
+> mientras probás. El script te avisa si detecta el servicio corriendo.
+>
+> El workflow ahora corta la consulta a los 20s, así que una ejecución nunca
+> llega viva al disparo siguiente y el encavalgamiento no se sostiene solo;
+> pero si hay **dos pollers de verdad**, el choque sigue hasta que apagues uno.
+
 ### El trigger es POLLING, no webhook
 
 El §2 de abajo describe el nodo **Telegram Trigger**, que registra un webhook:
