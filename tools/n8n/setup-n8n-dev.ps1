@@ -87,6 +87,45 @@ function Nativo([scriptblock]$Bloque) {
   try { & $Bloque 2>&1 } finally { $ErrorActionPreference = $previo }
 }
 
+# Corre npm MOSTRANDO por que fallo.
+#
+# La primera version de esto mandaba la salida a Out-Null y, cuando npm fallaba,
+# el script decia "Fallo npm install -g n8n" y nada mas: el error real
+# (permisos, red, un modulo nativo) quedaba tapado justo cuando mas se
+# necesitaba. Ahora se guarda todo en un log y se muestran las ultimas lineas.
+# OJO con el nombre: NO se puede llamar "Npm". PowerShell no distingue
+# mayusculas al resolver comandos, asi que adentro `& npm` volvia a entrar a
+# esta misma funcion en vez de ejecutar el programa -> recursion infinita
+# ("call depth overflow"). Por las dudas, ademas, se resuelve el ejecutable a
+# mano con -CommandType Application.
+function CorrerNpm([string]$Que, [string[]]$Argumentos, [string]$LogPath) {
+  $npmExe = (Get-Command npm -CommandType Application -ErrorAction SilentlyContinue |
+             Select-Object -First 1).Source
+  if (-not $npmExe) { throw 'No encuentro npm en el PATH (viene con Node).' }
+  $salida = Nativo { & $npmExe @Argumentos }
+  $codigo = $LASTEXITCODE
+  if ($LogPath) { $salida | Out-File -FilePath $LogPath -Encoding utf8 }
+  if ($codigo -ne 0) {
+    Write-Host "    npm salio con codigo $codigo. Ultimas lineas:" -ForegroundColor Yellow
+    $salida | Select-Object -Last 25 | ForEach-Object {
+      Write-Host "      $_" -ForegroundColor Gray
+    }
+    if ($LogPath) { Write-Host "    (salida completa en $LogPath)" -ForegroundColor Gray }
+    $texto = ($salida | Out-String)
+    # Las dos causas mas comunes en Windows, con el remedio al lado.
+    if ($texto -match 'EACCES|EPERM|operation not permitted|Access is denied') {
+      Aviso 'Parece un problema de PERMISOS: abri PowerShell como Administrador y repeti.'
+    }
+    if ($texto -match 'ETIMEDOUT|ENOTFOUND|ECONNRESET|network|proxy') {
+      Aviso 'Parece un problema de RED/proxy llegando a registry.npmjs.org.'
+    }
+    if ($texto -match 'EBADENGINE|engine') {
+      Aviso "Version de Node incompatible. n8n pide Node >=22.22 (tenes $nodeV)."
+    }
+  }
+  return $codigo
+}
+
 Write-Host "`n=== n8n de PRUEBAS (tu PC) ===" -ForegroundColor Magenta
 Write-Host "Datos en: $N8nDir  |  editor: http://localhost:5678" -ForegroundColor Gray
 
@@ -127,8 +166,11 @@ $yaEsta = (Nativo { & npm ls -g --depth=0 n8n } | Out-String) -match '\bn8n@'
 if ($yaEsta) {
   Ok 'n8n ya estaba instalado (no lo toco)'
 } else {
-  Nativo { & npm install -g n8n } | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'Fallo npm install -g n8n' }
+  $log = Join-Path $env:TEMP 'n8n-install.log'
+  $codigo = CorrerNpm 'n8n' @('install', '-g', 'n8n') $log
+  if ($codigo -ne 0) {
+    throw "npm install -g n8n fallo (codigo $codigo). Mira las lineas de arriba o $log"
+  }
   Ok 'n8n instalado'
 }
 
@@ -148,8 +190,11 @@ try {
   if ($tieneLlama) {
     Ok 'Nodo de LlamaCloud ya estaba'
   } else {
-    Nativo { & npm install @llamaindex/n8n-nodes-llamacloud } | Out-Null
-    if ($LASTEXITCODE -ne 0) { Aviso 'No se pudo instalar el nodo de LlamaCloud (seguis sin OCR)' }
+    $logLlama = Join-Path $env:TEMP 'n8n-llamacloud-install.log'
+    $codigo = CorrerNpm 'LlamaCloud' @('install', '@llamaindex/n8n-nodes-llamacloud') $logLlama
+    # No corta el script: sin este nodo el editor abre igual y se puede armar
+    # todo lo demas. Solo el paso de OCR queda sin poder ejecutarse.
+    if ($codigo -ne 0) { Aviso 'No se pudo instalar el nodo de LlamaCloud (seguis sin OCR)' }
     else { Ok 'Nodo de LlamaCloud instalado' }
   }
 } finally { Pop-Location }
