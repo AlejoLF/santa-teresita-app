@@ -186,6 +186,14 @@ if (Test-Path $claveFile) {
 # para escribir un Code node malicioso ya hay que tener la maquina, y con la
 # maquina el n8n.env se lee igual. Si algun dia el panel se expone a la LAN,
 # esto hay que revisarlo.
+#
+# NODE_FUNCTION_ALLOW_BUILTIN=crypto: la otra restriccion del sandbox. El Code
+# node corre en el task runner, que arranca con la lista de modulos builtin
+# VACIA (js-task-runner: allowedBuiltInModules = ''), asi que "Bajar archivo"
+# moria con "Module 'crypto' is disallowed" DESPUES de haber bajado la foto.
+# Se habilita solo 'crypto' y solo para el sha256 del archivo. A diferencia de
+# la de arriba, esta no expone nada: es una libreria de hashing, y quien pueda
+# editar un Code node ya tiene todo el entorno por la variable anterior.
 Paso 5 'Escribiendo el entorno'
 $envFile = Join-Path $N8nDir 'n8n.env'
 @"
@@ -200,6 +208,7 @@ N8N_DIAGNOSTICS_ENABLED=false
 N8N_RUNNERS_ENABLED=true
 N8N_COMMUNITY_PACKAGES_ENABLED=true
 N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+NODE_FUNCTION_ALLOW_BUILTIN=crypto
 TELEGRAM_BOT_TOKEN=$TelegramBotToken
 TELEGRAM_ALLOWED_IDS=$TelegramAllowedIds
 INGEST_URL=$IngestUrl

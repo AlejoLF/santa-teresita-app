@@ -222,6 +222,38 @@ OCR sobre facturas argentinas hay que medirla con 5-10 reales.
   const buf = Buffer.from(items[0].binary.data.data, 'base64');
   return [{ json: { hash: crypto.createHash('sha256').update(buf).digest('hex') } }];
   ```
+  Requiere `NODE_FUNCTION_ALLOW_BUILTIN=crypto` — ver abajo. El campo es
+  opcional: si no va, el programa deriva un hash del contenido OCR
+  (`ingest.ts`), que igual frena el duplicado pero recién después de pagar
+  una pasada de OCR.
+
+### El sandbox del Code node bloquea dos cosas por defecto
+
+Los Code nodes de n8n 2.x corren en el **task runner**, no en el proceso
+principal, y arrancan cerrados. Dos restricciones nos pegaron, las dos con el
+mismo síntoma engañoso — la ejecución muere sin que el error mencione al
+sandbox:
+
+| Variable | Sin ella | Por qué la necesitamos |
+|-|-|-|
+| `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` | `access to env vars denied`, a los 11ms | Los 4 Code nodes leen `$env` (token del bot, whitelist, URL de ingesta) |
+| `NODE_FUNCTION_ALLOW_BUILTIN=crypto` | `Module 'crypto' is disallowed` | El sha256 del archivo en "Bajar archivo" |
+
+Las dos las escribe `setup-n8n.ps1` en `n8n.env`, y NSSM las toma al re-correr
+el script (re-setea `AppEnvironmentExtra` siempre).
+
+**No son equivalentes en riesgo.** La primera abre TODO el entorno del proceso
+—incluida `N8N_ENCRYPTION_KEY`— a cualquier Code node de cualquier workflow, y
+n8n no permite filtrar por variable; se acepta porque el panel escucha solo en
+127.0.0.1 y hay que tener S1 para escribir un Code node. La segunda habilita
+una librería de hashing y no expone nada.
+
+Lo que el sandbox **sí** deja pasar sin configurar: `Buffer`, `TextEncoder`,
+`FormData`, `$getWorkflowStaticData`, y de los helpers `httpRequest`,
+`prepareBinaryData`, `getBinaryDataBuffer`, `binaryToString`. Los `Buffer`
+sobreviven el ida y vuelta por RPC (n8n los re-arma con `toBuffer`), así que
+bajar un binario en un Code node y pasarlo como binary funciona. No hay
+`crypto` global ni WebCrypto: sin el `require`, no hay forma de hashear.
 
 ### OCR — nodo **LlamaParse Platform**
 - Acción: **Extract structured data**. Configuration mode: **Schema** (inline).
