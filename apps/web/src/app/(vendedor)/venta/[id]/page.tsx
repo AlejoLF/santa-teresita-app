@@ -1611,12 +1611,22 @@ function SplitPagoPanel({
     setPagos((arr) => arr.map((p, i) => (i === idx ? reescalarLinea(p, opts) : p)));
   }
 
-  /** Aplica el mismo % a TODAS las líneas (atajo del caso parejo, el más común). */
+  /**
+   * Aplica el mismo % a TODAS las líneas (atajo del caso parejo, el más común).
+   *
+   * `activarDescuento === null` = respetar lo que cada línea ya tenía. Lo usan
+   * los chips del % general: si la cajera le sacó el descuento al débito a
+   * propósito y después toca "−15%", ese 15% NO tiene que volver a aparecer en
+   * el débito. Re-activarlo en silencio es regalar plata sin que nadie lo vea.
+   * Para volver a prendérselo a todas está el checkbox de arriba.
+   */
   function reescalarTodas(opts: { pctNuevo: number; activarDescuento: boolean | null }) {
-    const activar = opts.activarDescuento ?? aplicarDescuentoEfectivo;
     setPagos((arr) =>
       arr.map((p) =>
-        reescalarLinea(p, { pctNuevo: opts.pctNuevo, conDescuentoNuevo: activar }),
+        reescalarLinea(p, {
+          pctNuevo: opts.pctNuevo,
+          conDescuentoNuevo: opts.activarDescuento ?? p.conDescuento !== false,
+        }),
       ),
     );
   }
@@ -2024,7 +2034,9 @@ function SplitPagoPanel({
                     onClick={() => {
                       setDescuentoPct(pct);
                       setDescuentoPctInput('');
-                      reescalarTodas({ pctNuevo: pct, activarDescuento: true });
+                      // null = no le devuelve el descuento a la línea que la
+                      // cajera excluyó a mano.
+                      reescalarTodas({ pctNuevo: pct, activarDescuento: null });
                     }}
                     className={cn(
                       'px-2.5 py-1 rounded text-xs font-medium border transition-colors',
@@ -2050,7 +2062,7 @@ function SplitPagoPanel({
                       const n = Number(val);
                       if (val !== '' && Number.isFinite(n) && n >= 0 && n <= maxDescuento) {
                         setDescuentoPct(n);
-                        reescalarTodas({ pctNuevo: n, activarDescuento: true });
+                        reescalarTodas({ pctNuevo: n, activarDescuento: null });
                       }
                     }}
                     className="input text-xs py-1 px-2 w-20 font-mono"
