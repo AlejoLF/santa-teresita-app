@@ -34,6 +34,20 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.62',
+    fecha: '13 de agosto',
+    titulo: 'El descuento ahora se puede poner en un medio de pago y en el otro no',
+    cambios: [
+      'Cuando el cliente paga una parte en efectivo y otra con tarjeta, ya podés hacerle el descuento solo en una de las dos.',
+      'En Pago dividido, al tildar "Aplicar descuento" arranca con el mismo % en todos los métodos, como hasta ahora.',
+      'Debajo de cada método aparece una casilla "Descuento en Efectivo" (o Débito, Crédito, etc.). Si la destildás, esa parte la paga a precio de lista.',
+      'Al lado de la casilla podés poner un % distinto para ese método: por ejemplo 10% en efectivo y 5% en débito.',
+      'Cada método te muestra cuánto cubre del pedido y cuánto ahorra el cliente, así se ve que el pedido cierra.',
+      'El total a cobrar y el vuelto se recalculan solos cada vez que tocás un %.',
+      'Vale igual para los pedidos del día y para los encargos.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.61',
     fecha: '11 de agosto',
     titulo: 'Las aclaraciones de los movimientos ahora se ven en la tabla',

@@ -110,15 +110,36 @@ export const PagoNuevoSchema = z.object({
   numeroReferencia: z.string().max(80).optional(),
   posnetId: z.string().uuid().optional(),
   tarjetaUltimos4: z.string().regex(/^\d{4}$/).optional(),
+  /**
+   * Descuento % que aplica A ESTA LÍNEA de pago.
+   *
+   * El caso real: el cliente paga una parte en efectivo y otra con tarjeta, y
+   * la promo es sólo sobre una de las dos (o distinta en cada una). Con un
+   * único % global eso no se podía cargar: había que elegir descontarle a todo
+   * o a nada.
+   *
+   * `monto` sigue siendo el NETO (lo que el cliente entrega por esta línea).
+   * Lo que la línea cubre del pedido es `monto / (1 - pct/100)`.
+   *
+   * Opcional a propósito: si NINGUNA línea lo trae, el server cae al modo
+   * viejo (`aplicarDescuentoEfectivo` + `descuentoPctEfectivo` global). Eso
+   * mantiene andando a un cliente viejo mientras web y API deployan separado.
+   */
+  descuentoPct: z.number().min(0).max(100).optional(),
 });
 
 export const FinalizarVentaSchema = z.object({
   pagos: z.array(PagoNuevoSchema).min(1),
   aplicarDescuentoEfectivo: z.boolean().default(false),
   /**
-   * Porcentaje de descuento aplicado sobre la parte EFECTIVO en mostrador.
+   * Porcentaje de descuento GLOBAL, aplicado por igual a todas las líneas.
    * Default = 10. Se ignora si `aplicarDescuentoEfectivo=false` o canal≠MOSTRADOR.
-   * Tope blando = 30 (configurable a futuro vía parametros sistema).
+   * El tope real sale de la config `descuento_manual_max_vendedor_pct`.
+   *
+   * LEGADO: sólo se usa si ninguna línea de `pagos` trae `descuentoPct`. Los
+   * clientes nuevos mandan el % por línea y, además, acá el % EQUIVALENTE
+   * (el que da el mismo descuento total) para que un API viejo que ignora
+   * el desglose siga calculando el mismo total.
    */
   descuentoPctEfectivo: z.number().min(0).max(50).default(10),
 });

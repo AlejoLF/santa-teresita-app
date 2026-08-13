@@ -273,6 +273,10 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
             metodo,
             cuentaId: cuenta.id,
             monto,
+            // Cobro simple = un solo método, así que el % de la línea es el
+            // mismo que el general. Va explícito igual para que el server use
+            // siempre el mismo camino de cálculo (el del % por línea).
+            descuentoPct: aplicaDescuento ? descuentoPctSimple : 0,
             ...(cambio && { cambioDado: cambio }),
           },
         ],
@@ -787,6 +791,7 @@ export default function VentaDetallePage({ params }: { params: Promise<{ id: str
               total={venta.total}
               subtotal={venta.subtotal}
               habilitaDescuento={habilitaDescuento}
+              maxDescuento={maxDescuento}
               onCancel={() => setMostrarSplit(false)}
               onCobrado={() => router.push(venta?.esEncargo ? '/encargos' : '/cargar-pedido')}
             />
@@ -883,6 +888,10 @@ interface PagoLinea {
   monto: string;
   numeroReferencia?: string;
   efectivoRecibido?: string;
+  /** ¿Esta línea lleva descuento? Sólo cuenta si el toggle general está activo. */
+  conDescuento?: boolean;
+  /** % de descuento DE ESTA LÍNEA. Si no está, usa el % general del panel. */
+  descuentoPct?: number;
 }
 
 const METODOS_SPLIT: Array<{ value: PagoLinea['metodo']; label: string; icon: string }> = [
@@ -1489,6 +1498,7 @@ function SplitPagoPanel({
   total,
   subtotal,
   habilitaDescuento,
+  maxDescuento,
   onCancel,
   onCobrado,
 }: {
@@ -1496,6 +1506,14 @@ function SplitPagoPanel({
   total: string;
   subtotal: string;
   habilitaDescuento: boolean;
+  /**
+   * Tope que el cajero puede aplicar (config `descuento_manual_max_vendedor_pct`).
+   * El server capea a este valor SIN avisar: si la pantalla dejaba pedir más,
+   * el cobro salía rechazado con "total pagado insuficiente" y nadie entendía
+   * por qué. Acá se usa para que no se pueda ni tipear un % que el server
+   * después va a recortar.
+   */
+  maxDescuento: number;
   onCancel: () => void;
   onCobrado: () => void;
 }) {
@@ -1537,50 +1555,69 @@ function SplitPagoPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cuentas]);
 
-  // Modelo de cálculo (parametrizado por `descuentoPct`):
-  //   - factor = (100 - pct) / 100  (ej: pct=10 → 0.9, pct=20 → 0.8)
-  //   - El campo `monto` es lo que el CLIENTE entrega (neto, ya con descuento si corresponde).
-  //   - Al activar el descuento, monto_neto = monto_bruto * factor
-  //   - "Cubre del pedido" del efectivo = monto_neto / factor (vuelve al bruto)
-  //   - Ahorro del cliente = monto_bruto - monto_neto = monto_neto * (pct/(100-pct))
-  const factor = (100 - descuentoPct) / 100;
-  const totalEntregado = pagos.reduce((acc, p) => acc + Number(p.monto || 0), 0);
-  // El descuento aplica a TODAS las líneas, no sólo a las de efectivo: el local
-  // hace promos por día con tarjeta/débito. Antes, un pago mixto descontaba
-  // sólo la porción en efectivo y el resto quedaba a precio de lista.
-  const netoCobrado = totalEntregado;
+  // Modelo de cálculo, AHORA POR LÍNEA (antes había un único factor global):
+  //   - El campo `monto` es lo que el CLIENTE entrega por esa línea (neto).
+  //   - pct de la línea = el suyo si lo tiene, si no el % general del panel.
+  //     Una línea con `conDescuento=false` va a 0% aunque el toggle esté activo:
+  //     ese es justamente el caso "paga con tarjeta sin promo y el resto en
+  //     efectivo con 10%".
+  //   - factor = (100 - pct)/100 → bruto = neto / factor = lo que cubre del pedido
+  //   - ahorro de la línea = bruto - neto = neto * pct/(100-pct)
   const hayMonto = pagos.some((p) => Number(p.monto || 0) > 0);
-  const aplicaDescuento = aplicarDescuentoEfectivo && habilitaDescuento && hayMonto;
-  const ahorroEfectivo = aplicaDescuento ? (netoCobrado * descuentoPct) / (100 - descuentoPct) : 0;
-  // Cubierto del subtotal: con descuento cada línea cuenta por su BRUTO
-  // (neto/factor), que es lo que realmente descuenta del pedido.
-  const cubiertoSubtotal = pagos.reduce((acc, p) => {
-    const m = Number(p.monto || 0);
-    return acc + (aplicaDescuento ? m / factor : m);
-  }, 0);
+  const descuentoActivo = aplicarDescuentoEfectivo && habilitaDescuento && hayMonto;
+  const pctDeLinea = (p: PagoLinea) =>
+    descuentoActivo && p.conDescuento !== false ? (p.descuentoPct ?? descuentoPct) : 0;
+  const factorDeLinea = (p: PagoLinea) => (100 - pctDeLinea(p)) / 100;
+  const brutoDeLinea = (p: PagoLinea) => Number(p.monto || 0) / factorDeLinea(p);
+  const ahorroDeLinea = (p: PagoLinea) => brutoDeLinea(p) - Number(p.monto || 0);
+
+  const totalEntregado = pagos.reduce((acc, p) => acc + Number(p.monto || 0), 0);
+  const ahorroEfectivo = pagos.reduce((acc, p) => acc + ahorroDeLinea(p), 0);
+  // Cubierto del subtotal: cada línea cuenta por su BRUTO, que es lo que
+  // realmente descuenta del pedido.
+  const cubiertoSubtotal = pagos.reduce((acc, p) => acc + brutoDeLinea(p), 0);
   const diferencia = totalSinDescuento - cubiertoSubtotal;
   const cuadra = Math.abs(diferencia) < 0.5;
+  // ¿Hay % distintos conviviendo? Cambia el texto del resumen, así la cajera
+  // ve de un vistazo que el descuento no es parejo.
+  const aplicaDescuento = descuentoActivo && ahorroEfectivo > 0;
+  const pctsEnUso = Array.from(
+    new Set(pagos.filter((p) => Number(p.monto || 0) > 0).map(pctDeLinea)),
+  );
+  const descuentoDiferenciado = aplicaDescuento && pctsEnUso.length > 1;
 
   /**
-   * Cuando el usuario cambia el % o activa/desactiva el descuento, hay que
-   * reescalar los montos de TODAS las líneas al nuevo factor (antes sólo las
-   * de efectivo, y las de tarjeta quedaban sin descontar).
+   * Reescala el monto de una línea al cambiarle el % (o al prenderle/apagarle
+   * el descuento), MANTENIENDO CONSTANTE lo que esa línea cubre del pedido.
+   *
+   * Es la operación que espera la cajera: "esta parte cubre $10.000 del
+   * pedido; con 10% off el cliente me da $9.000". Si en cambio dejáramos fijo
+   * el neto, cambiar el % descuadraría el pedido en cada click.
    */
-  function reescalarEfectivo(opts: { pctViejo: number; pctNuevo: number; activarDescuento: boolean | null }) {
-    const factorViejo = (100 - opts.pctViejo) / 100;
-    const factorNuevo = (100 - opts.pctNuevo) / 100;
+  function reescalarLinea(
+    p: PagoLinea,
+    opts: { pctNuevo: number; conDescuentoNuevo: boolean },
+  ): PagoLinea {
+    const m = Number(p.monto || 0);
+    const siguiente = { ...p, conDescuento: opts.conDescuentoNuevo, descuentoPct: opts.pctNuevo };
+    if (m === 0) return siguiente;
+    const bruto = m / factorDeLinea(p); // con el pct VIEJO
+    const factorNuevo = (100 - (opts.conDescuentoNuevo ? opts.pctNuevo : 0)) / 100;
+    return { ...siguiente, monto: (bruto * factorNuevo).toFixed(2) };
+  }
+
+  /** Cambia una sola línea. */
+  function setDescuentoLinea(idx: number, opts: { pctNuevo: number; conDescuentoNuevo: boolean }) {
+    setPagos((arr) => arr.map((p, i) => (i === idx ? reescalarLinea(p, opts) : p)));
+  }
+
+  /** Aplica el mismo % a TODAS las líneas (atajo del caso parejo, el más común). */
+  function reescalarTodas(opts: { pctNuevo: number; activarDescuento: boolean | null }) {
+    const activar = opts.activarDescuento ?? aplicarDescuentoEfectivo;
     setPagos((arr) =>
-      arr.map((p) => {
-        const m = Number(p.monto || 0);
-        if (m === 0) return p;
-        // Reconstruir bruto desde lo que está actualmente
-        const bruto =
-          aplicarDescuentoEfectivo && hayMonto ? m / factorViejo : m;
-        const debeAplicar =
-          opts.activarDescuento === null ? aplicarDescuentoEfectivo : opts.activarDescuento;
-        const nuevoMonto = debeAplicar ? bruto * factorNuevo : bruto;
-        return { ...p, monto: Number(nuevoMonto.toFixed(2)).toString() };
-      }),
+      arr.map((p) =>
+        reescalarLinea(p, { pctNuevo: opts.pctNuevo, conDescuentoNuevo: activar }),
+      ),
     );
   }
 
@@ -1588,17 +1625,24 @@ function SplitPagoPanel({
     setPagos((arr) => arr.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
   }
   function addLinea() {
-    const restoSugerido = Math.max(0, diferencia);
+    // `diferencia` está en BRUTO (lo que falta cubrir del pedido). El campo de
+    // la línea es NETO, así que hay que pasarlo por el factor que le va a
+    // tocar a la línea nueva — si no, con descuento activo la línea nace
+    // descuadrada.
+    const restoBruto = Math.max(0, diferencia);
     // Si la primera línea ya es EFECTIVO, sugerimos DEBITO. Si es DEBITO sugerimos EFECTIVO.
     const yaTieneEfectivo = pagos.some((p) => p.metodo === 'EFECTIVO');
     const metodoSugerido: PagoLinea['metodo'] = yaTieneEfectivo ? 'DEBITO' : 'EFECTIVO';
     const sugerida = sugerirCuenta(metodoSugerido, cuentas);
+    const factorNueva = descuentoActivo ? (100 - descuentoPct) / 100 : 1;
     setPagos((arr) => [
       ...arr,
       {
         metodo: metodoSugerido,
         cuentaId: sugerida?.id ?? '',
-        monto: restoSugerido > 0 ? restoSugerido.toFixed(2) : '',
+        monto: restoBruto > 0 ? (restoBruto * factorNueva).toFixed(2) : '',
+        conDescuento: descuentoActivo,
+        descuentoPct,
       },
     ]);
   }
@@ -1607,7 +1651,11 @@ function SplitPagoPanel({
   }
   function completarPrimero() {
     setPagos((arr) =>
-      arr.map((p, i) => (i === 0 ? { ...p, monto: totalSinDescuento.toFixed(2) } : p)),
+      arr.map((p, i) =>
+        i === 0
+          ? { ...p, monto: (totalSinDescuento * factorDeLinea(p)).toFixed(2) }
+          : p,
+      ),
     );
   }
 
@@ -1629,13 +1677,14 @@ function SplitPagoPanel({
     try {
       // Para el backend: el campo `monto` ya está en NETO (post-descuento) si el checkbox está activo,
       // porque el handler del checkbox modificó los montos cuando el usuario lo activó.
-      // Mandamos tal cual lo que el cliente paga.
+      // Mandamos tal cual lo que el cliente paga, más el % de CADA línea.
       const payloadPagos = pagos.map((p) => {
         const declarado = Number(p.monto || 0);
         return {
           metodo: p.metodo,
           cuentaId: p.cuentaId,
           monto: declarado.toFixed(2),
+          descuentoPct: pctDeLinea(p),
           numeroReferencia: p.numeroReferencia,
           // cambioDado: si el cajero ingresó "recibí", calcular vuelto contra el monto neto
           ...(p.metodo === 'EFECTIVO' &&
@@ -1645,9 +1694,21 @@ function SplitPagoPanel({
             }),
         };
       });
+      // Los dos campos viejos van igual, por la ventana entre el deploy de web
+      // (Vercel) y el de API (Railway): si el API todavía no entiende el % por
+      // línea, tiene que llegar al MISMO total igual.
+      //
+      // Para eso no mandamos `descuentoPct` crudo sino el % EQUIVALENTE: el
+      // único global que produce el mismo descuento total. Con N = neto
+      // cobrado y D = ahorro real, el API viejo calcula D' = N·p/(100−p);
+      // despejando p = 100·D/(N+D) da D' = D exacto.
+      const pctEquivalente =
+        aplicaDescuento && totalEntregado + ahorroEfectivo > 0
+          ? (100 * ahorroEfectivo) / (totalEntregado + ahorroEfectivo)
+          : descuentoPct;
       await api.post(`/ventas/${ventaId}/finalizar`, {
         aplicarDescuentoEfectivo: aplicaDescuento,
-        descuentoPctEfectivo: descuentoPct,
+        descuentoPctEfectivo: Number(pctEquivalente.toFixed(4)),
         pagos: payloadPagos,
       });
       onCobrado();
@@ -1678,9 +1739,9 @@ function SplitPagoPanel({
         </div>
         {habilitaDescuento && (
           <p className="text-2xs text-ink-500 mt-1">
-            Si paga 100% efectivo con {descuentoPct}% off:{' '}
+            Si paga todo con {descuentoPct}% off:{' '}
             <MoneyAmount
-              value={(subtotalNum * factor).toFixed(2)}
+              value={(subtotalNum * ((100 - descuentoPct) / 100)).toFixed(2)}
               className="text-basil-600 font-medium"
             />
             · ahorra{' '}
@@ -1693,8 +1754,10 @@ function SplitPagoPanel({
       <div className="space-y-2 mb-3">
         {pagos.map((p, idx) => {
           const declarado = Number(p.monto || 0);
-          // El descuento ya no depende del método: cualquier línea lo lleva.
-          const esEfectivoConDesc = aplicaDescuento;
+          // Cada línea decide: el toggle general la habilita, pero el % es suyo
+          // y puede ser 0 (esa línea paga sin promo).
+          const pctLinea = pctDeLinea(p);
+          const esEfectivoConDesc = pctLinea > 0;
           // El campo `monto` ya está en NETO (con el 10% descontado) cuando el checkbox está activo,
           // porque el handler del checkbox modifica los montos al activarse.
           // Lo que el cliente paga = lo que está en el campo, no hay que volver a multiplicar.
@@ -1743,7 +1806,7 @@ function SplitPagoPanel({
                   <span>{esEfectivoConDesc ? 'Cobra al cliente' : 'Aplicar al pedido'}</span>
                   {esEfectivoConDesc && (
                     <span className="text-2xs text-basil-600 font-normal italic">
-                      ✓ descuento aplicado automático
+                      ✓ −{pctLinea}% aplicado
                     </span>
                   )}
                 </label>
@@ -1762,13 +1825,14 @@ function SplitPagoPanel({
                   {/* Botón "Resto": autocompleta con lo que falta para cubrir el total.
                       Considera el equivalente bruto del efectivo cuando hay descuento. */}
                   {(() => {
-                    const cubiertoOtras = pagos.reduce((acc, op, i) => {
-                      if (i === idx) return acc;
-                      const m = Number(op.monto || 0);
-                      return acc + (aplicaDescuento ? m / factor : m);
-                    }, 0);
+                    const cubiertoOtras = pagos.reduce(
+                      (acc, op, i) => (i === idx ? acc : acc + brutoDeLinea(op)),
+                      0,
+                    );
                     const restoBruto = Math.max(0, totalSinDescuento - cubiertoOtras);
-                    const restoNeto = aplicaDescuento ? restoBruto * factor : restoBruto;
+                    // El resto se convierte con el factor DE ESTA línea, que
+                    // puede no ser el de las otras.
+                    const restoNeto = restoBruto * factorDeLinea(p);
                     const yaCubierto = Math.abs(Number(p.monto || 0) - restoNeto) < 0.5;
                     if (restoNeto <= 0 || yaCubierto) return null;
                     return (
@@ -1785,15 +1849,55 @@ function SplitPagoPanel({
                 </div>
                 {esEfectivoConDesc && declarado > 0 && (
                   <div className="text-2xs text-basil-600 mt-0.5">
-                    ↳ Cubre <MoneyAmount value={(declarado / factor).toFixed(2)} /> del pedido
-                    (cliente ahorra{' '}
-                    <MoneyAmount
-                      value={((declarado * descuentoPct) / (100 - descuentoPct)).toFixed(2)}
-                    />
-                    )
+                    ↳ Cubre <MoneyAmount value={brutoDeLinea(p).toFixed(2)} /> del pedido
+                    (cliente ahorra <MoneyAmount value={ahorroDeLinea(p).toFixed(2)} />)
                   </div>
                 )}
               </div>
+
+              {/* Descuento DE ESTA LÍNEA. Aparece sólo con el descuento general
+                  activo: es el caso "una parte con promo y la otra no". */}
+              {descuentoActivo && (
+                <div className="flex items-center gap-2 flex-wrap bg-basil-100/60 rounded px-2 py-1.5">
+                  <label className="flex items-center gap-1.5 cursor-pointer text-2xs font-medium text-basil-600">
+                    <input
+                      type="checkbox"
+                      checked={p.conDescuento !== false}
+                      onChange={(e) =>
+                        setDescuentoLinea(idx, {
+                          pctNuevo: p.descuentoPct ?? descuentoPct,
+                          conDescuentoNuevo: e.target.checked,
+                        })
+                      }
+                      className="w-3.5 h-3.5"
+                    />
+                    Descuento en {METODOS_SPLIT.find((m) => m.value === p.metodo)?.label}
+                  </label>
+                  {p.conDescuento !== false && (
+                    <div className="flex items-center gap-1 ml-auto">
+                      <input
+                        type="number"
+                        min="0"
+                        max={maxDescuento}
+                        step="1"
+                        value={p.descuentoPct ?? descuentoPct}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          if (!Number.isFinite(n) || n < 0 || n > maxDescuento) return;
+                          setDescuentoLinea(idx, { pctNuevo: n, conDescuentoNuevo: true });
+                        }}
+                        className="input text-2xs py-0.5 px-1.5 w-16 font-mono"
+                      />
+                      <span className="text-2xs text-ink-500">% off</span>
+                    </div>
+                  )}
+                  {p.conDescuento === false && (
+                    <span className="ml-auto text-2xs text-ink-500 italic">
+                      paga precio de lista
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Fila 3: solo efectivo — recibido en billetes */}
               {p.metodo === 'EFECTIVO' && (
@@ -1897,19 +2001,15 @@ function SplitPagoPanel({
               onChange={(e) => {
                 const activar = e.target.checked;
                 setAplicarDescuentoEfectivo(activar);
-                reescalarEfectivo({
-                  pctViejo: descuentoPct,
-                  pctNuevo: descuentoPct,
-                  activarDescuento: activar,
-                });
+                reescalarTodas({ pctNuevo: descuentoPct, activarDescuento: activar });
               }}
               className="w-4 h-4 mt-0.5"
             />
             <span className="text-basil-600 font-medium">
               Aplicar descuento
               <span className="block text-2xs text-ink-700 font-normal">
-                Reescala automáticamente todos los montos según el %,
-                cualquiera sea el medio de pago.
+                Arranca con el mismo % en todos los métodos. Después podés
+                sacárselo a uno o ponerle otro %, arriba en cada método.
               </span>
             </span>
           </label>
@@ -1917,15 +2017,14 @@ function SplitPagoPanel({
           {aplicarDescuentoEfectivo && (
             <div className="space-y-1.5">
               <div className="flex flex-wrap gap-1.5">
-                {[10, 15, 20, 25, 30].map((pct) => (
+                {[10, 15, 20, 25, 30].filter((pct) => pct <= maxDescuento).map((pct) => (
                   <button
                     key={pct}
                     type="button"
                     onClick={() => {
-                      const pctViejo = descuentoPct;
                       setDescuentoPct(pct);
                       setDescuentoPctInput('');
-                      reescalarEfectivo({ pctViejo, pctNuevo: pct, activarDescuento: true });
+                      reescalarTodas({ pctNuevo: pct, activarDescuento: true });
                     }}
                     className={cn(
                       'px-2.5 py-1 rounded text-xs font-medium border transition-colors',
@@ -1941,22 +2040,17 @@ function SplitPagoPanel({
                   <input
                     type="number"
                     min="0"
-                    max="50"
+                    max={maxDescuento}
                     step="1"
-                    placeholder="otro %"
+                    placeholder={`otro % (máx ${maxDescuento})`}
                     value={descuentoPctInput}
                     onChange={(e) => {
                       const val = e.target.value;
                       setDescuentoPctInput(val);
                       const n = Number(val);
-                      if (val !== '' && Number.isFinite(n) && n >= 0 && n <= 50) {
-                        const pctViejo = descuentoPct;
+                      if (val !== '' && Number.isFinite(n) && n >= 0 && n <= maxDescuento) {
                         setDescuentoPct(n);
-                        reescalarEfectivo({
-                          pctViejo,
-                          pctNuevo: n,
-                          activarDescuento: true,
-                        });
+                        reescalarTodas({ pctNuevo: n, activarDescuento: true });
                       }
                     }}
                     className="input text-xs py-1 px-2 w-20 font-mono"
@@ -1965,7 +2059,17 @@ function SplitPagoPanel({
                 </div>
               </div>
               <div className="text-2xs text-basil-600 italic">
-                Aplicando <strong>−{descuentoPct}%</strong> al monto efectivo.
+                {descuentoDiferenciado ? (
+                  <>
+                    Descuento <strong>distinto por método</strong> — mirá el % de
+                    cada uno arriba.
+                  </>
+                ) : (
+                  <>
+                    Aplicando <strong>−{descuentoPct}%</strong> a todos los métodos.
+                    Para diferenciarlo, cambiá el % arriba en cada método.
+                  </>
+                )}
               </div>
             </div>
           )}
