@@ -1,0 +1,212 @@
+/**
+ * Diagnostica y repara la cola de replicación local → Supabase.
+ *
+ * ── El problema que resuelve ──────────────────────────────────────────────
+ * El replicador manda filas a la nube a partir de los eventos de `outbox_events`,
+ * que los genera `recordAudit`. Si una fila se crea SIN auditar, nunca viaja: y
+ * cuando después llega un hijo que la referencia, la nube rechaza el INSERT por
+ * violación de FK. Ese evento reintenta 25 veces y queda abandonado.
+ *
+ * A partir de ahí el registro existe SOLO en S1: en el programa se ve, en la
+ * nube no. Es silencioso — nadie se entera hasta que alguien mira la pantalla
+ * equivocada. Incidente real: 2026-08-14, 5 facturas por OCR cuyos proveedores
+ * nuevos no se auditaban.
+ *
+ * ── Por qué no alcanza con reintentar ─────────────────────────────────────
+ * Resetear `intentos = 0` NO arregla nada por sí solo: el padre sigue sin
+ * existir en la nube y la FK vuelve a fallar. Y auditar el padre ahora tampoco
+ * alcanza, porque el replicador ordena cada lote por `secuencia`: el evento
+ * nuevo del padre tendría una secuencia MÁS ALTA que la del hijo viejo, así que
+ * el hijo se intentaría primero y fallaría igual.
+ *
+ * Por eso este script copia los padres faltantes directamente a la nube (el
+ * mismo upsert por PK que hace el replicador) ANTES de reactivar los eventos.
+ * Se hace en forma recursiva: un padre puede tener a su vez un padre faltante.
+ *
+ * ── Uso (en S1, desde C:\sta-server) ──────────────────────────────────────
+ *   node api\reparar-replicacion.mjs             → diagnóstico, no escribe nada
+ *   node api\reparar-replicacion.mjs --aplicar   → repara
+ *
+ * Es idempotente: correrlo dos veces no duplica nada (todo es upsert por PK).
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { PrismaClient, Prisma } from '@prisma/client';
+
+const APLICAR = process.argv.slice(2).includes('--aplicar');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ── .env ────────────────────────────────────────────────────────────────────
+// El script vive en C:\sta-server\api\, el .env en C:\sta-server\. Se prueban
+// las dos ubicaciones para que ande igual corriéndolo desde cualquiera de las
+// dos carpetas.
+function cargarEnv() {
+  const candidatos = [
+    path.join(process.cwd(), '.env'),
+    path.join(__dirname, '..', '.env'),
+    path.join(__dirname, '.env'),
+  ];
+  for (const p of candidatos) {
+    if (!fs.existsSync(p)) continue;
+    for (const linea of fs.readFileSync(p, 'utf8').split(/\r?\n/)) {
+      if (/^\s*(#|$)/.test(linea)) continue;
+      const i = linea.indexOf('=');
+      if (i < 0) continue;
+      const k = linea.slice(0, i).trim();
+      const v = linea.slice(i + 1).trim();
+      if (!(k in process.env)) process.env[k] = v;
+    }
+    return p;
+  }
+  return null;
+}
+
+const envPath = cargarEnv();
+const LOCAL_URL = process.env.DATABASE_URL;
+const CLOUD_URL = process.env.REPLICATE_TO_URL;
+if (!LOCAL_URL) {
+  console.error('Falta DATABASE_URL' + (envPath ? ` (leí ${envPath})` : ' y no encontré ningún .env'));
+  process.exit(1);
+}
+if (!CLOUD_URL) {
+  console.error('Falta REPLICATE_TO_URL: este server no replica a la nube, no hay nada que reparar.');
+  process.exit(1);
+}
+
+const local = new PrismaClient({ datasources: { db: { url: LOCAL_URL } } });
+const nube = new PrismaClient({ datasources: { db: { url: CLOUD_URL } } });
+
+// ── Mapas del DMMF (cubren TODOS los modelos, sin hardcodear) ───────────────
+const porTabla = new Map(); // nombre de tabla (@@map) → modelo del DMMF
+const porModelo = new Map(); // nombre del modelo → modelo del DMMF
+for (const m of Prisma.dmmf.datamodel.models) {
+  porTabla.set(m.dbName ?? m.name, m);
+  porModelo.set(m.name, m);
+}
+const delegado = (m) => m.name.charAt(0).toLowerCase() + m.name.slice(1);
+
+/**
+ * Padres de una fila: por cada relación saliente, qué modelo y qué id.
+ * `relationFromFields` son los campos escalares que forman la FK; si están en
+ * null, la relación es opcional y no hay padre que verificar.
+ */
+function padresDe(modelo, fila) {
+  const out = [];
+  for (const f of modelo.fields) {
+    if (f.kind !== 'object' || !f.relationFromFields?.length) continue;
+    // Guarda defensiva: hoy el schema no tiene ni una FK compuesta (verificado
+    // sobre el DMMF), así que esto nunca descarta nada. Si algún día aparece
+    // una, este script la ignora en vez de romperse — y hay que extenderlo.
+    if (f.relationFromFields.length !== 1) continue;
+    const id = fila[f.relationFromFields[0]];
+    if (id == null) continue;
+    const destino = porModelo.get(f.type);
+    if (destino) out.push({ modelo: destino, id, via: f.relationFromFields[0] });
+  }
+  return out;
+}
+
+/**
+ * ¿Está esta fila en la nube, con todos sus ancestros? Si `escribir`, la copia.
+ * Recursivo: un padre faltante puede tener a su vez un padre faltante.
+ * `vistos` corta los ciclos (una tabla puede referenciarse a sí misma).
+ */
+async function asegurar(modelo, id, escribir, vistos, copiadas) {
+  const clave = `${modelo.name}:${id}`;
+  if (vistos.has(clave)) return true;
+  vistos.add(clave);
+
+  const d = delegado(modelo);
+  const enNube = await nube[d].findUnique({ where: { id } }).catch(() => null);
+  if (enNube) return true;
+
+  const fila = await local[d].findUnique({ where: { id } });
+  if (!fila) {
+    console.log(`    ⚠ ${modelo.name} ${id} tampoco existe en S1 — se borró después. Nada que copiar.`);
+    return false;
+  }
+
+  // Primero los ancestros, después esta fila: es el orden que respeta la FK.
+  for (const p of padresDe(modelo, fila)) {
+    await asegurar(p.modelo, p.id, escribir, vistos, copiadas);
+  }
+
+  copiadas.push(`${modelo.name} ${id}`);
+  if (escribir) {
+    await nube[d].upsert({ where: { id }, create: fila, update: fila });
+  }
+  return true;
+}
+
+// ── Main ────────────────────────────────────────────────────────────────────
+const pendientes = await local.outboxEvent.findMany({
+  where: { publicadoAt: null },
+  orderBy: { agregadoAt: 'asc' },
+});
+
+if (pendientes.length === 0) {
+  console.log('✅ No hay eventos pendientes. La replicación está al día.');
+  await local.$disconnect();
+  await nube.$disconnect();
+  process.exit(0);
+}
+
+console.log(
+  `${pendientes.length} evento(s) pendiente(s)` +
+    (APLICAR ? ' — modo APLICAR (va a escribir en la nube)\n' : ' — solo diagnóstico, no se escribe nada\n'),
+);
+
+const faltantes = []; // filas que hay que copiar a la nube
+const aReactivar = []; // ids de eventos a resetear
+
+for (const ev of pendientes) {
+  const { tabla, registroId } = ev.payload ?? {};
+  const modelo = porTabla.get(tabla);
+  const edadMin = Math.round((Date.now() - ev.agregadoAt.getTime()) / 60000);
+  console.log(`─ ${tabla} ${registroId}  (${ev.intentos} intentos, hace ${edadMin} min)`);
+  if (ev.ultimoError) console.log(`    error: ${ev.ultimoError.slice(0, 200)}`);
+  else console.log('    error: (vacío — es el server viejo, sin describirError)');
+
+  if (!modelo) {
+    console.log('    ⚠ tabla desconocida para el schema actual. Se saltea.');
+    continue;
+  }
+
+  const fila = await local[delegado(modelo)].findUnique({ where: { id: registroId } });
+  if (!fila) {
+    console.log('    la fila ya no existe en S1 — el evento quedó huérfano, se puede publicar y listo.');
+    aReactivar.push(ev.id);
+    continue;
+  }
+
+  const copiadas = [];
+  for (const p of padresDe(modelo, fila)) {
+    await asegurar(p.modelo, p.id, APLICAR, new Set(), copiadas);
+  }
+  if (copiadas.length) {
+    console.log(`    falta(n) en la nube: ${copiadas.join(', ')}`);
+    faltantes.push(...copiadas);
+  } else {
+    console.log('    los padres están en la nube — el evento debería aplicar bien al reintentar.');
+  }
+  aReactivar.push(ev.id);
+}
+
+console.log('');
+if (!APLICAR) {
+  console.log(`Resumen: ${faltantes.length} fila(s) para copiar a la nube, ${aReactivar.length} evento(s) para reactivar.`);
+  console.log('Para aplicarlo:  node api\\reparar-replicacion.mjs --aplicar');
+} else {
+  const r = await local.outboxEvent.updateMany({
+    where: { id: { in: aReactivar } },
+    data: { intentos: 0, ultimoError: null },
+  });
+  console.log(`✅ ${faltantes.length} fila(s) copiada(s) a la nube.`);
+  console.log(`✅ ${r.count} evento(s) reactivado(s) — el replicador los toma en el próximo ciclo (~4s).`);
+  console.log('Verificá con:  Invoke-RestMethod http://127.0.0.1:3001/api/v1/sync/status | ConvertTo-Json -Depth 5');
+}
+
+await local.$disconnect();
+await nube.$disconnect();

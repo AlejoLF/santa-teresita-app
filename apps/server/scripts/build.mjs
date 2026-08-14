@@ -136,6 +136,19 @@ const prismaDest = path.join(apiDest, 'node_modules', '.prisma', 'client');
 fs.mkdirSync(prismaDest, { recursive: true });
 copyDir(realClient, prismaDest);
 
+// ── Herramientas del operador que corren con el Prisma client ──
+// Van DENTRO de api/ a propósito: Node resuelve node_modules desde la ubicación
+// del .mjs, y el @prisma/client con engine vive en api/node_modules. Puestas en
+// la raíz del dist tirarían ERR_MODULE_NOT_FOUND (mismo motivo por el que el
+// seed se lleva su propia copia más abajo). Como update-server.ps1 reemplaza
+// api/ entera en cada update, las herramientas viajan solas.
+step('Copiando herramientas del operador → dist/api/');
+for (const f of fs.readdirSync(path.join(SERVER_DIR, 'scripts'))) {
+  if (f.endsWith('.mjs') && f !== 'build.mjs' && f !== 'release.mjs') {
+    fs.copyFileSync(path.join(SERVER_DIR, 'scripts', f), path.join(apiDest, f));
+  }
+}
+
 // ── Migraciones SQL (orden cronológico por nombre) ──
 step('Copiando migraciones SQL');
 const migSrc = path.join(REPO_ROOT, 'packages', 'db', 'prisma', 'migrations');
