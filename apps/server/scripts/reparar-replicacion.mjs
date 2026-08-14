@@ -140,6 +140,58 @@ async function asegurar(modelo, id, escribir, vistos, copiadas) {
   return true;
 }
 
+/**
+ * Relaciones a-muchos: qué modelo hijo, y con qué campo apunta acá.
+ * Del lado del padre el campo es una lista sin FK; la FK vive en el hijo, así
+ * que se la busca por `relationName`.
+ */
+function hijosDe(modelo) {
+  const out = [];
+  for (const f of modelo.fields) {
+    if (f.kind !== 'object' || !f.isList) continue;
+    const hijo = porModelo.get(f.type);
+    if (!hijo) continue;
+    const vuelta = hijo.fields.find(
+      (g) => g.kind === 'object' && g.relationName === f.relationName && g.relationFromFields?.length === 1,
+    );
+    if (!vuelta) continue; // relación N-N con tabla intermedia: fuera de alcance
+    out.push({ modelo: hijo, fk: vuelta.relationFromFields[0] });
+  }
+  return out;
+}
+
+/**
+ * Los hijos de una fila que existen en S1 y NO en la nube.
+ *
+ * Hace falta porque el agujero no es solo el evento trabado: los renglones de
+ * esas facturas se crearon con el server viejo, que tampoco los auditaba. O sea
+ * que no tienen un evento pendiente — directamente NO TIENEN evento. Reactivar
+ * el de la factura la haría aparecer en la nube con "Productos (0)", que es la
+ * mitad del arreglo y la peor: parece resuelto y no lo está.
+ *
+ * Solo se aplica a la fila del evento, NO a los padres que se copian de paso:
+ * bajar por los hijos de un Proveedor arrastraría todas sus facturas y remitos.
+ */
+async function asegurarHijos(modelo, id, escribir, vistos, copiadas) {
+  const clave = `hijos:${modelo.name}:${id}`;
+  if (vistos.has(clave)) return;
+  vistos.add(clave);
+
+  for (const h of hijosDe(modelo)) {
+    const d = delegado(h.modelo);
+    const locales = await local[d].findMany({ where: { [h.fk]: id } });
+    for (const fila of locales) {
+      const enNube = await nube[d].findUnique({ where: { id: fila.id } }).catch(() => null);
+      if (!enNube) {
+        copiadas.push(`${h.modelo.name} ${fila.id}`);
+        if (escribir) await nube[d].upsert({ where: { id: fila.id }, create: fila, update: fila });
+      }
+      // Nietos: para los ítems no hay, pero termina solo y cubre el caso general.
+      await asegurarHijos(h.modelo, fila.id, escribir, vistos, copiadas);
+    }
+  }
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 const pendientes = await local.outboxEvent.findMany({
   where: { publicadoAt: null },
@@ -188,14 +240,18 @@ for (const ev of pendientes) {
   }
 
   const copiadas = [];
-  for (const p of padresDe(modelo, fila)) {
-    await asegurar(p.modelo, p.id, APLICAR, new Set(), copiadas);
-  }
+  const vistos = new Set();
+  // La fila del evento se copia acá y no se deja para el replicador, por el
+  // orden: los hijos de abajo necesitan que el padre YA esté en la nube. El
+  // reintento posterior del replicador vuelve a upsertear lo mismo — inofensivo.
+  await asegurar(modelo, registroId, APLICAR, vistos, copiadas);
+  await asegurarHijos(modelo, registroId, APLICAR, vistos, copiadas);
+
   if (copiadas.length) {
     console.log(`    falta(n) en la nube: ${copiadas.join(', ')}`);
     for (const c of copiadas) faltantes.add(c);
   } else {
-    console.log('    los padres están en la nube — el evento debería aplicar bien al reintentar.');
+    console.log('    ya está completo en la nube — el evento solo hay que marcarlo.');
   }
   aReactivar.push(ev.id);
 }
