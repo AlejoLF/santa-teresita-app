@@ -255,6 +255,42 @@ puede) y consulta `getUpdates` cada minuto. El offset se guarda en la static dat
 del workflow, así que sobrevive reinicios y cortes de luz sin reprocesar
 mensajes. El costo es hasta 60s de latencia, irrelevante para facturas.
 
+> **Ojo**: el nodo **Telegram Trigger** tampoco tiene salida fácil por acá.
+> `--tunnel` (el túnel que traía n8n para exponer el webhook sin IP pública)
+> **se eliminó en n8n 2.0** — breaking change `tunnel-option-v2`. Para este
+> caso el polling no es el plan B, es el plan.
+
+### El offset se le confirma a Telegram EN EL ACTO, no solo en la static data
+
+Guardar el offset en la static data **no alcanza**, y el motivo es de timing:
+n8n persiste la static data del workflow **al terminar** la ejecución, no cuando
+el Code node se la escribe.
+
+Mandar un álbum de ~20 fotos junto rompe eso: la corrida se estira varios
+minutos encadenando un OCR por foto, el trigger vuelve a disparar al minuto, y
+la ejecución nueva lee de la base el offset **viejo** — así que Telegram le
+entrega los mismos 20 mensajes otra vez. Y otra. Cada foto termina procesándose
+una vez por cada ejecución encimada.
+
+El síntoma es un diluvio de *"Esa factura ya estaba cargada"* en el chat. No
+llega a hacer daño real (la idempotencia del API frena los duplicados antes de
+crear nada), pero desde afuera parece que explotó algo, y se pagan N pasadas de
+OCR por la misma foto.
+
+La solución es usar el offset de Telegram como lo que es: un **ACK**. Apenas se
+lee el lote, se llama `getUpdates` de nuevo con `offset = maxId + 1`, lo que
+confirma esos updates **del lado del servidor de Telegram** — no se los vuelve a
+entregar a nadie, tampoco a una ejecución paralela que todavía tenga el offset
+viejo. La static data queda como red de contención por si el ACK falla.
+
+Complemento: el lote está acotado a **10 mensajes por corrida** (`LOTE` en el
+nodo "Traer mensajes"), para que una sola ejecución no encadene 20 OCR y se
+estire varios minutos. El resto entra en los disparos siguientes.
+
+Incidente real: 2026-08-14, tanda de prueba con ~20 facturas juntas. Es el primo
+hermano del 504 de más abajo: las dos son fallas de **re-entrada** del poller, y
+ninguna de las dos se arregla sola.
+
 ### El OCR usa el nodo oficial de LlamaCloud, no un HTTP Request a mano
 
 `@llamaindex/n8n-nodes-llamacloud` ("LlamaParse Platform") es un community node
