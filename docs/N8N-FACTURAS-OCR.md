@@ -343,6 +343,33 @@ Alternativa si algún día conviene: acción **Parse a document** (devuelve mark
 y pasarle el markdown a un LLM. Más piezas, más costo, misma salida — no vale la
 pena mientras Extract funcione.
 
+### Qué se exige para cargar una factura
+
+Solo dos cosas: **de quién es** (proveedor) y **cuánto es** (total). Nada más
+bloquea.
+
+Buena parte de lo que entra al local no es comprobante fiscal en regla —
+remitos, tickets, papeles sin numerar—. Exigir el número de comprobante
+rebotaba justamente esas, que son la mitad del trabajo que se quería ahorrar.
+
+Todo lo demás (número, fecha, tipo, CUIT, detalle de productos) entra como
+**faltante**: la factura se carga igual **sin validar**, la observación dice
+exactamente qué falta, la confianza baja según cuánto falte, y el bot se lo
+avisa a quien la mandó. La encargada completa lo que haga falta al revisarla.
+
+> El programa exige un número de comprobante (`numero` es NOT NULL y forma
+> parte de `@@unique(proveedor, puntoVenta, numero, tipo)`). Cuando la factura
+> no lo trae, n8n arma uno derivado del contenido: `S/N-<fecha>-<total>`. Se
+> ve claro que es provisorio, y como sale del contenido, la misma factura
+> fotografiada dos veces genera el mismo número y el duplicado se sigue
+> frenando. Un `S/N` fijo no serviría: dos facturas distintas del mismo
+> proveedor chocarían y la segunda se perdería como "duplicada".
+
+**El descuadre de items** se mide contra el neto **o** contra el total. Los
+renglones suelen venir netos y el total con IVA: compararlos solo contra el
+total marcaba descuadre en casi toda factura A bien discriminada, y un aviso
+que salta siempre no lo lee nadie.
+
 ### Parse + validación
 - **Code node**: asegurate de tener el JSON del contrato. Sanity checks:
   - `total > 0`, `numero` no vacío, `proveedor.nombre` no vacío.
