@@ -176,6 +176,21 @@ sesión de PowerShell y se va con ella. Sin las variables, los Code nodes
 vuelven a fallar con `access to env vars denied`. `n8n-dev.ps1` relee el
 archivo de entorno, avisa si el bot quedó con un webhook puesto, y arranca.
 
+### `ECONNREFUSED ::1:3001` al postear la factura
+
+El `::1` es IPv6. El API hace `listen({ host: '0.0.0.0' })` — **solo IPv4** — y
+desde Node 17 `localhost` resuelve **primero a IPv6**. O sea que n8n busca el
+server en una dirección donde nadie atiende, con `sta-server` corriendo
+perfecto.
+
+**Usar siempre `http://127.0.0.1:3001/...` en `INGEST_URL`, nunca
+`localhost`.** Los dos instaladores ya lo hacen por default.
+
+Lo traicionero es que **no se nota probando a mano**: PowerShell/.NET y `curl`
+sí caen a IPv4, así que un `Invoke-RestMethod http://localhost:3001/health`
+devuelve OK mientras el workflow falla. El chequeo del propio instalador tenía
+ese bug y decía "API del server respondiendo" cuando n8n no llegaba.
+
 ### El nodo "Telegram Trigger" NO se puede probar en tu PC
 
 Si lo ponés en el canvas y ejecutás, da:

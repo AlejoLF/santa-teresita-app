@@ -44,7 +44,8 @@ param(
   [Parameter(Mandatory = $true)][string]$TelegramAllowedIds,
   [Parameter(Mandatory = $true)][string]$LlamaCloudApiKey,
   [Parameter(Mandatory = $true)][string]$IngestToken,
-  [string]$IngestUrl = 'http://localhost:3001/api/v1/ingest/facturas',
+  # 127.0.0.1 y NO 'localhost': ver la nota de IPv6 en el chequeo del API.
+  [string]$IngestUrl = 'http://127.0.0.1:3001/api/v1/ingest/facturas',
   [string]$LlamaBaseUrl = 'https://api.cloud.llamaindex.ai',
   [string]$N8nDir    = 'C:\sta\n8n'
 )
@@ -113,10 +114,19 @@ try {
   # /health va en la RAIZ, no bajo /api/v1 (server.ts lo registra sobre `app`,
   # antes del prefijo). Con la URL equivocada esto daba 404 y el script avisaba
   # "el API no responde" con sta-server corriendo perfecto.
-  $salud = Invoke-RestMethod -Uri 'http://localhost:3001/health' -TimeoutSec 5
+  # 127.0.0.1, NO 'localhost'.
+  #
+  # Desde Node 17 'localhost' resuelve PRIMERO a IPv6 (::1), y el API escucha en
+  # 0.0.0.0, que es solo IPv4. Resultado: n8n (axios) se come un
+  # "connect ECONNREFUSED ::1:3001" con el server perfectamente andando.
+  #
+  # Y este chequeo lo tapaba: PowerShell/.NET SI cae a IPv4, asi que decia
+  # "OK el API responde" mientras el workflow no llegaba. Un falso verde.
+  # Se consulta por la misma direccion que va a usar n8n.
+  $salud = Invoke-RestMethod -Uri 'http://127.0.0.1:3001/health' -TimeoutSec 5
   Ok 'API del server respondiendo'
 } catch {
-  Aviso 'El API (localhost:3001) no responde: el servicio sta-server esta caido.'
+  Aviso 'El API (127.0.0.1:3001) no responde: el servicio sta-server esta caido.'
   Aviso 'n8n se instala igual, pero la ULTIMA llamada del workflow va ahi, asi que'
   Aviso 'las facturas van a fallar al final. Arrancalo con:  nssm start sta-server'
 }

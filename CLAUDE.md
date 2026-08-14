@@ -188,6 +188,17 @@ Ver SPEC §1.5. Punteo:
   quedan con la fecha del día anterior. El resolver de `horarios.ts` usa
   `getFullYear/Month/Date` (TZ-local) — correcto solo si la TZ está bien.
 
+- **Para llegar al API desde la MISMA máquina, usar `127.0.0.1`, nunca
+  `localhost`.** El API hace `listen({ host: '0.0.0.0' })`, que es **solo
+  IPv4**; desde Node 17 `localhost` resuelve **primero a IPv6** (`::1`).
+  Cualquier cliente Node/axios local (n8n, un script, un healthcheck) se come
+  un `connect ECONNREFUSED ::1:3001` con el server andando perfecto. Síntoma
+  traicionero: PowerShell/.NET y `curl` **sí** caen a IPv4, así que un chequeo
+  hecho desde ahí dice "OK, el API responde" mientras el que importa falla —
+  un falso verde. Incidente real: la ingesta de facturas por OCR, 2026-08-14.
+  (Si algún día hace falta atender los dos stacks, es `API_HOST=::`, pero eso
+  cambia el binding de producción: preferir arreglar la URL del cliente.)
+
 - **Pooler de Supabase: `aws-1-sa-east-1`, NO `aws-0`.** Supabase migró la
   infra de Supavisor. La URL legacy `aws-0-*` devuelve "tenant not found".
   El default está en `scripts/cloud/_url.mjs`. Si `cloud:migrate`/`status`

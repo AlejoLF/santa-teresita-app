@@ -67,7 +67,9 @@ param(
   [Parameter(Mandatory = $true)][string]$TelegramBotToken,
   [string]$TelegramAllowedIds = '',
   [string]$LlamaCloudApiKey = '',
-  [string]$IngestUrl = 'http://localhost:3001/api/v1/ingest/facturas',
+  # 127.0.0.1 y NO 'localhost': desde Node 17 'localhost' resuelve primero a
+  # IPv6 (::1) y el API escucha en 0.0.0.0, que es solo IPv4 -> ECONNREFUSED.
+  [string]$IngestUrl = 'http://127.0.0.1:3001/api/v1/ingest/facturas',
   [string]$N8nDir = 'C:\sta\n8n-dev',
   [switch]$MismoBotQueS1,
   [switch]$ImportarWorkflow,
