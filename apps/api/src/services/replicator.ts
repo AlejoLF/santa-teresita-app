@@ -47,6 +47,29 @@ function log(msg: string): void {
 }
 
 /**
+ * Texto util de un error de replicacion.
+ *
+ * Los de Prisma traen la info que sirve en `code`/`meta`, no en `message`
+ * (que puede venir vacio). Una FK violada es P2003 + meta.field_name; una
+ * tabla que no existe en el mirror es P2021. Sin eso, el log no dice nada.
+ */
+function describirError(e: unknown): string {
+  if (e instanceof Prisma.PrismaClientKnownRequestError) {
+    const meta = e.meta ? ` meta=${JSON.stringify(e.meta)}` : '';
+    const pista =
+      e.code === 'P2003'
+        ? ' | FK violada: la fila referenciada NO existe en el mirror. Suele ser' +
+          ' que el padre no genero evento de outbox (falta recordAudit donde se crea).'
+        : e.code === 'P2021'
+          ? ' | la tabla no existe en el mirror: falta correr Cloud Migrate.'
+          : '';
+    return `${e.code}: ${e.message || '(sin mensaje)'}${meta}${pista}`;
+  }
+  if (e instanceof Error) return e.message || `${e.name} (sin mensaje)`;
+  return String(e);
+}
+
+/**
  * Aplica UN evento al target. Para DELETE borra por PK; para el resto
  * (INSERT/UPDATE/TRANSITION/APPROVAL/...) re-lee el row completo del local
  * y hace upsert por PK. Idempotente: re-aplicar el mismo evento converge
@@ -118,14 +141,35 @@ async function drainOnce(): Promise<void> {
           data: { publicadoAt: new Date() },
         });
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        // `message` a secas no alcanza. Los errores de Prisma que importan acá
+        // (violación de FK, tabla inexistente en el mirror) llegan con message
+        // vacío o genérico, y el log quedaba como
+        //   "evento <id> falló (intento 12):"
+        // sin una sola pista, repetido 25 veces. Se agregan `code` y `meta`,
+        // que son los que dicen QUE restricción se violó, y la tabla/registro
+        // del evento, que dicen SOBRE QUE fila.
+        const msg = describirError(e);
+        const { tabla, registroId } = (ev.payload ?? {}) as {
+          tabla?: string;
+          registroId?: string;
+        };
         await prisma.outboxEvent.update({
           where: { id: ev.id },
           data: { intentos: { increment: 1 }, ultimoError: msg.slice(0, 500) },
         });
         // Cortamos el batch: preservar orden — no salteamos un evento
         // fallido para no aplicar uno posterior antes que su predecesor.
-        log(`evento ${ev.id} falló (intento ${ev.intentos + 1}): ${msg}`);
+        log(
+          `evento ${ev.id} (${tabla ?? '?'} ${registroId ?? '?'}) falló ` +
+            `(intento ${ev.intentos + 1}/${MAX_INTENTOS}): ${msg}`,
+        );
+        if (ev.intentos + 1 >= MAX_INTENTOS) {
+          log(
+            `ABANDONADO tras ${MAX_INTENTOS} intentos. La cola queda TRABADA ` +
+              `detras de este evento. Ver: select ultimo_error from outbox_events ` +
+              `where id = '${ev.id}';`,
+          );
+        }
         break;
       }
     }

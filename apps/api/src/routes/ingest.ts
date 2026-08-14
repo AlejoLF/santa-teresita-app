@@ -116,6 +116,24 @@ async function resolverProveedor(p: Body['proveedor']): Promise<string> {
       },
       select: { id: true },
     });
+    // El audit NO es decorativo acá: es lo que genera el evento de outbox que
+    // replica la fila a Supabase. Sin esto, el proveedor nuevo se quedaba solo
+    // en el Postgres de S1 y la factura que lo referencia fallaba al replicar
+    // con violación de FK — reintentando 25 veces hasta que el replicator la
+    // abandonaba. Síntoma: la factura entraba bien en S1, el bot contestaba
+    // "cargada", y en la nube no aparecía nunca. Incidente real: 2026-08-14.
+    //
+    // Va ANTES del audit de la factura (menor `secuencia`), así el replicador
+    // aplica primero el proveedor y después la factura, que es el único orden
+    // que respeta la FK.
+    await recordAudit({
+      tabla: 'proveedores',
+      registroId: nuevo.id,
+      accion: 'INSERT',
+      usuarioId: null,
+      valorNuevo: { nombre: p.nombre, cuit: p.cuit ?? null },
+      contexto: { fuente: 'ingest-ocr', motivo: 'proveedor nuevo detectado por OCR' },
+    });
     return nuevo.id;
   } catch (e) {
     // Carrera: otro request creó el mismo nombre (unique). Re-buscamos.
