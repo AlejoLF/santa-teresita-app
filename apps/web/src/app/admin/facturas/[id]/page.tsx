@@ -299,9 +299,7 @@ function ValidacionForm({
       {/* Cabecera editable */}
       <section className="card p-5 space-y-3">
         <h2 className="font-display text-md text-ink-900">Datos del comprobante</h2>
-        <div className="text-sm text-ink-500">
-          Proveedor: <span className="text-ink-900 font-medium">{factura.proveedor.nombre}</span>
-        </div>
+        <SelectorProveedor factura={factura} onReload={onReload} />
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <label className="text-2xs uppercase tracking-wider text-ink-500">
             Tipo
@@ -505,6 +503,132 @@ function ValidacionForm({
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Proveedor de la factura — con memoria
+// ────────────────────────────────────────────────────────────────────────
+
+/**
+ * El nombre impreso en la factura casi nunca es el que usamos en el sistema
+ * ("GRAFIPACK SAN MARTIN S.R.L." contra "Grafipack"). Acá se corrige, y si se
+ * deja tildado "Recordar", la próxima factura con ese mismo nombre impreso
+ * entra derecho al proveedor correcto sin que nadie toque nada.
+ */
+function SelectorProveedor({
+  factura,
+  onReload,
+}: {
+  factura: FacturaDetalle;
+  onReload: () => Promise<void>;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const [proveedores, setProveedores] = useState<Array<{ id: string; nombre: string }>>([]);
+  const [elegido, setElegido] = useState('');
+  const [recordar, setRecordar] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!abierto || proveedores.length) return;
+    void (async () => {
+      try {
+        const res = await api.get<{ proveedores: Array<{ id: string; nombre: string }> }>(
+          '/admin/proveedores',
+        );
+        setProveedores(res.proveedores ?? []);
+      } catch {
+        setMsg('No pude traer la lista de proveedores.');
+      }
+    })();
+  }, [abierto, proveedores.length]);
+
+  async function guardar() {
+    if (!elegido) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await api.patch<{ aliasGuardado: string | null; aliasConflicto: string | null }>(
+        `/admin/facturas/${factura.id}/proveedor`,
+        { proveedorId: elegido, guardarAlias: recordar },
+      );
+      if (r.aliasConflicto) {
+        // No se pisa en silencio: redirigir facturas futuras sin avisar es
+        // peor que no recordar nada.
+        setMsg(
+          `Cambié el proveedor, pero NO guardé el vínculo: "${r.aliasConflicto}" ya está` +
+            ' asociado a otro proveedor. Corregilo desde la ficha del proveedor.',
+        );
+      } else {
+        setAbierto(false);
+      }
+      await onReload();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'No pude cambiar el proveedor.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="text-sm text-ink-500">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span>
+          Proveedor: <span className="text-ink-900 font-medium">{factura.proveedor.nombre}</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => setAbierto((v) => !v)}
+          className="text-2xs text-teresita-700 hover:underline"
+        >
+          {abierto ? 'cancelar' : 'no es este'}
+        </button>
+      </div>
+
+      {abierto && (
+        <div className="mt-2 bg-surface-sunken rounded-md p-3 space-y-2">
+          <p className="text-2xs text-ink-500">
+            Elegí el proveedor que ya tenés cargado. El nombre que trajo la factura fue{' '}
+            <span className="font-medium text-ink-700">{factura.proveedor.nombre}</span>.
+          </p>
+          <select
+            value={elegido}
+            onChange={(e) => setElegido(e.target.value)}
+            className="input text-sm py-1.5 w-full"
+          >
+            <option value="">— elegir proveedor —</option>
+            {proveedores
+              .filter((p) => p.id !== factura.proveedor.id)
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.nombre}
+                </option>
+              ))}
+          </select>
+          <label className="flex items-start gap-2 cursor-pointer text-2xs text-ink-700">
+            <input
+              type="checkbox"
+              checked={recordar}
+              onChange={(e) => setRecordar(e.target.checked)}
+              className="w-3.5 h-3.5 mt-0.5"
+            />
+            <span>
+              Recordar para la próxima
+              <span className="block text-ink-500">
+                Las facturas que vengan con el nombre{' '}
+                <span className="font-medium">{factura.proveedor.nombre}</span> van a ir solas a
+                este proveedor. Se puede cambiar después.
+              </span>
+            </span>
+          </label>
+          {msg && <p className="text-2xs text-pomodoro-600">{msg}</p>}
+          <Button size="sm" onClick={guardar} disabled={busy || !elegido}>
+            {busy ? 'Guardando...' : 'Cambiar proveedor'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

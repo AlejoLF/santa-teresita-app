@@ -318,6 +318,47 @@ OCR sobre facturas argentinas hay que medirla con 5-10 reales.
   (`ingest.ts`), que igual frena el duplicado pero recién después de pagar
   una pasada de OCR.
 
+### Cómo se reconoce al proveedor
+
+El nombre impreso en el comprobante casi nunca es el que el local usa en el
+sistema: `GRAFIPACK SAN MARTIN S.R.L.` contra `Grafipack`. Sin resolverlo, cada
+factura por OCR creaba un proveedor **nuevo y duplicado**, partiendo la cuenta
+corriente en dos.
+
+Se resuelve en cuatro pasos, del más confiable al menos (`resolverProveedor`
+en `ingest.ts`):
+
+1. **CUIT exacto** — sin ambigüedad posible.
+2. **Nombre exacto.**
+3. **Alias guardado** — alguien ya confirmó a mano que ese nombre impreso es ese
+   proveedor. Le gana al paso 4: es una decisión explícita, no una heurística.
+4. **Parecido de nombres** (`services/proveedor-match.ts`).
+
+Recién si nada da, crea un proveedor nuevo.
+
+**El parecido usa contención, no Jaccard.** Con Jaccard, `grafipack san martin`
+contra `grafipack` da 0,33 y no matchea nunca — justo el caso a resolver, porque
+el nombre del sistema suele ser un *subconjunto* del de la factura. Con
+contención (compartido ÷ el más chico de los dos) da 1,00.
+
+Dos guardas para no equivocarse, que importan porque un match errado mezcla la
+cuenta corriente de dos proveedores y se descubre tarde:
+
+- **Alguna palabra compartida tiene que tener ≥5 letras.** Si no,
+  `Panadería Norte` y `Panadería Sur` matchearían por "panaderia".
+- **Ante empate, no elige.** Si dos proveedores puntúan igual, devuelve nada y
+  la factura queda para que la resuelva un humano.
+
+Se compara contra el nombre **y** la razón social: el sistema puede tener el
+nombre corto y la razón social larga, y la factura traer cualquiera de los dos.
+
+**La memoria** la pone la encargada: en el detalle de la factura, al lado del
+proveedor hay un *"no es este"* que abre el selector. Al elegir el correcto con
+"Recordar para la próxima" tildado, se guarda un alias y la siguiente factura
+con ese mismo nombre impreso entra derecho, sin intervención. Si el nombre ya
+estaba asociado a otro proveedor **no se pisa en silencio**: avisa, porque
+redirigir facturas futuras sin que nadie se entere es peor que no recordar nada.
+
 ### El sandbox del Code node bloquea dos cosas por defecto
 
 Los Code nodes de n8n 2.x corren en el **task runner**, no en el proceso

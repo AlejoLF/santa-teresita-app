@@ -5,6 +5,7 @@ import { Prisma } from '@sta/db';
 import { prisma } from '@sta/db/client';
 import { config } from '../config.js';
 import { recordAudit } from '../services/audit.js';
+import { buscarProveedorParecido, normalizarNombre } from '../services/proveedor-match.js';
 
 /**
  * Ingesta de máquina — facturas leídas por OCR (n8n local en el server +
@@ -95,7 +96,21 @@ function tokenOk(req: FastifyRequest): boolean {
   return timingSafeEqual(Buffer.from(got), Buffer.from(expected));
 }
 
-/** Resuelve el proveedor (por CUIT, luego por nombre) o lo crea. Idempotente. */
+/**
+ * Resuelve el proveedor o lo crea. Idempotente.
+ *
+ * Del criterio más confiable al menos:
+ *   1. CUIT exacto      — sin ambigüedad posible.
+ *   2. Nombre exacto.
+ *   3. Alias guardado   — alguien ya confirmó a mano que ese nombre impreso es
+ *                         ese proveedor. Es la memoria del sistema.
+ *   4. Parecido de nombres (ver services/proveedor-match.ts).
+ * Recién si nada da, crea uno nuevo.
+ *
+ * Los pasos 3 y 4 existen porque el nombre impreso en la factura casi nunca es
+ * el que el local usa en el sistema. Sin ellos, cada factura por OCR creaba un
+ * proveedor duplicado y partía la cuenta corriente.
+ */
 async function resolverProveedor(p: Body['proveedor']): Promise<string> {
   if (p.cuit) {
     const porCuit = await prisma.proveedor.findFirst({ where: { cuit: p.cuit }, select: { id: true } });
@@ -106,6 +121,25 @@ async function resolverProveedor(p: Body['proveedor']): Promise<string> {
     select: { id: true },
   });
   if (porNombre) return porNombre.id;
+
+  // 3. Alias confirmado por un humano. Gana sobre el parecido automático:
+  //    es una decisión explícita, no una heurística.
+  const normalizado = normalizarNombre(p.nombre);
+  if (normalizado) {
+    const alias = await prisma.proveedorAlias.findUnique({
+      where: { nombreNormalizado: normalizado },
+      select: { proveedorId: true },
+    });
+    if (alias) return alias.proveedorId;
+  }
+
+  // 4. Parecido. Solo entre los activos, y solo si hay UN candidato claro.
+  const activos = await prisma.proveedor.findMany({
+    where: { activo: true },
+    select: { id: true, nombre: true, razonSocial: true },
+  });
+  const parecido = buscarProveedorParecido(p.nombre, activos);
+  if (parecido) return parecido.id;
   try {
     const nuevo = await prisma.proveedor.create({
       data: {

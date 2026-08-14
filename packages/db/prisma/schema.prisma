@@ -1296,9 +1296,39 @@ model Proveedor {
   insumosVinculo   InsumoProveedor[]
   insumosPrincipal Insumo[]          @relation("InsumoProveedorPrincipal")
   facturas         FacturaRecibida[]
+  alias            ProveedorAlias[]
 
   @@index([activo])
   @@map("proveedores")
+}
+
+/// Nombres alternativos con los que un proveedor aparece en las facturas.
+///
+/// El nombre impreso en el comprobante casi nunca es el que el local usa en el
+/// sistema: la razon social completa ("GRAFIPACK SAN MARTIN S.R.L.") contra el
+/// nombre corto de uso diario ("Grafipack"). Sin esto, cada factura por OCR
+/// creaba un proveedor NUEVO y duplicado, partiendo la cuenta corriente en dos.
+///
+/// `nombreNormalizado` guarda el nombre ya pasado por normalizarNombre()
+/// (minusculas, sin acentos ni puntuacion, sin S.R.L./S.A.), que es la forma
+/// con la que se busca. Es unico: un mismo nombre no puede apuntar a dos
+/// proveedores distintos.
+model ProveedorAlias {
+  id                String   @id @default(uuid()) @db.Uuid
+  proveedorId       String   @map("proveedor_id") @db.Uuid
+  /// Como vino escrito, tal cual. Solo informativo, para que se entienda de
+  /// donde salio el alias al mirarlo.
+  nombreOriginal    String   @map("nombre_original") @db.VarChar(160)
+  nombreNormalizado String   @unique @map("nombre_normalizado") @db.VarChar(160)
+  /// 'ocr' = lo confirmo un humano al reasignar una factura de OCR.
+  /// 'manual' = lo cargo alguien a mano.
+  origen            String   @default("ocr") @db.VarChar(20)
+  creadoAt          DateTime @default(now()) @map("creado_at")
+
+  proveedor Proveedor @relation(fields: [proveedorId], references: [id], onDelete: Cascade)
+
+  @@index([proveedorId])
+  @@map("proveedor_alias")
 }
 
 model Insumo {
