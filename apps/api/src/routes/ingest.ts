@@ -220,7 +220,15 @@ export default async function ingestRoutes(fastify: FastifyInstance) {
                 })),
               },
             },
-            select: { id: true, estado: true, total: true, numero: true },
+            select: {
+              id: true,
+              estado: true,
+              total: true,
+              numero: true,
+              // Los ids de los items hacen falta para auditarlos uno por uno
+              // (ver abajo por que).
+              items: { select: { id: true }, orderBy: { orden: 'asc' } },
+            },
           });
 
           await recordAudit({
@@ -232,6 +240,26 @@ export default async function ingestRoutes(fastify: FastifyInstance) {
             contexto: { fuente: 'ingest-ocr', confianza: body.ocr.confianza ?? null },
             tx,
           });
+
+          // Un audit POR ITEM. `facturas_recibidas_items` es OTRA tabla, y el
+          // replicador replica fila por fila a partir de los eventos de
+          // outbox: sin evento propio, los renglones se quedaban en S1 y en la
+          // nube la factura aparecia con "Productos (0)" aunque el OCR los
+          // hubiera leido perfecto. Mismo bug que el del proveedor, un nivel
+          // mas abajo. Incidente real: 2026-08-14 (factura de GRAFIPACK).
+          //
+          // Van DESPUES del audit de la factura (mayor `secuencia`), que es el
+          // orden que respeta la FK item -> factura al replicar.
+          for (const it of f.items) {
+            await recordAudit({
+              tabla: 'facturas_recibidas_items',
+              registroId: it.id,
+              accion: 'INSERT',
+              usuarioId: null,
+              contexto: { fuente: 'ingest-ocr', facturaId: f.id },
+              tx,
+            });
+          }
           return f;
         });
 
