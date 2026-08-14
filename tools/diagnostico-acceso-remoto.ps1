@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Diagnostica por que se cae el acceso remoto a una maquina Windows.
 

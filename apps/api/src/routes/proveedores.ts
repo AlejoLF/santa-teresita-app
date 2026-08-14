@@ -10,6 +10,7 @@ import {
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { calcSaldoFactura } from '../services/facturas.js';
+import { normalizarNombre } from '../services/proveedor-match.js';
 import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
 import {
   periodoBusquedaSchema,
@@ -474,6 +475,134 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         ...factura,
         saldo: (calcSaldoFactura(factura)).toFixed(2),
       };
+    },
+  );
+
+  // PATCH /admin/facturas/:id/proveedor — reasignar el proveedor de una
+  // factura y, opcionalmente, RECORDAR el vínculo.
+  //
+  // El nombre impreso en el comprobante casi nunca es el que el local usa
+  // ("GRAFIPACK SAN MARTIN S.R.L." contra "Grafipack"). Cuando el OCR no
+  // acierta, la encargada elige el proveedor de verdad acá; si además guarda
+  // el alias, la próxima factura con ese mismo nombre impreso entra derecho al
+  // proveedor correcto, sin intervención.
+  fastify.patch(
+    '/admin/facturas/:id/proveedor',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          proveedorId: z.string().uuid(),
+          /// Guardar el nombre que traía la factura como alias del proveedor
+          /// elegido. Default true: es el punto de la pantalla.
+          guardarAlias: z.boolean().default(true),
+          /// Qué nombre guardar. Si no viene, se usa el del proveedor que la
+          /// factura tenía asignado — que es el que leyó el OCR.
+          aliasNombre: z.string().min(1).max(160).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as {
+        proveedorId: string;
+        guardarAlias: boolean;
+        aliasNombre?: string;
+      };
+
+      const factura = await prisma.facturaRecibida.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          estado: true,
+          proveedorId: true,
+          razonSocialEmisor: true,
+          proveedor: { select: { nombre: true } },
+        },
+      });
+      if (!factura) return reply.code(404).send({ error: 'Factura no encontrada' });
+
+      const destino = await prisma.proveedor.findUnique({
+        where: { id: body.proveedorId },
+        select: { id: true, nombre: true },
+      });
+      if (!destino) return reply.code(404).send({ error: 'Proveedor no encontrado' });
+      if (destino.id === factura.proveedorId) {
+        return reply.code(400).send({ error: 'La factura ya es de ese proveedor' });
+      }
+
+      // El nombre a recordar: el que vino en la factura. Casi siempre es el
+      // del proveedor que el OCR creó de más y que estamos abandonando.
+      const nombreAlias =
+        body.aliasNombre ?? factura.proveedor?.nombre ?? factura.razonSocialEmisor ?? null;
+      const normalizado = nombreAlias ? normalizarNombre(nombreAlias) : '';
+
+      let aliasGuardado: string | null = null;
+      let aliasConflicto: string | null = null;
+
+      await prisma.$transaction(async (tx) => {
+        await tx.facturaRecibida.update({
+          where: { id },
+          data: { proveedorId: destino.id },
+        });
+        await recordAudit({
+          tabla: 'facturas_recibidas',
+          registroId: id,
+          accion: 'UPDATE',
+          usuarioId: req.usuario!.id,
+          valorAnterior: { proveedorId: factura.proveedorId, proveedor: factura.proveedor?.nombre },
+          valorNuevo: { proveedorId: destino.id, proveedor: destino.nombre },
+          contexto: { motivo: 'reasignacion manual de proveedor' },
+          tx,
+        });
+
+        if (!body.guardarAlias || !normalizado) return;
+
+        // Un mismo nombre no puede apuntar a dos proveedores. Si ya existe
+        // apuntando a OTRO, no se pisa en silencio: se avisa. Pisarlo
+        // redirigiría facturas futuras sin que nadie se entere.
+        const existente = await tx.proveedorAlias.findUnique({
+          where: { nombreNormalizado: normalizado },
+          select: { id: true, proveedorId: true },
+        });
+        if (existente && existente.proveedorId !== destino.id) {
+          aliasConflicto = nombreAlias;
+          return;
+        }
+        if (existente) {
+          aliasGuardado = nombreAlias;
+          return;
+        }
+
+        const alias = await tx.proveedorAlias.create({
+          data: {
+            proveedorId: destino.id,
+            nombreOriginal: (nombreAlias ?? '').slice(0, 160),
+            nombreNormalizado: normalizado,
+            origen: 'ocr',
+          },
+          select: { id: true },
+        });
+        // Sin audit no se replica a la nube (ver replicator.ts). El alias
+        // tiene que viajar, o el mirror resolvería distinto que S1.
+        await recordAudit({
+          tabla: 'proveedor_alias',
+          registroId: alias.id,
+          accion: 'INSERT',
+          usuarioId: req.usuario!.id,
+          valorNuevo: { proveedorId: destino.id, nombre: nombreAlias },
+          tx,
+        });
+        aliasGuardado = nombreAlias;
+      });
+
+      return reply.send({
+        ok: true,
+        proveedor: destino,
+        aliasGuardado,
+        aliasConflicto,
+      });
     },
   );
 

@@ -5,6 +5,7 @@ import { Prisma } from '@sta/db';
 import { prisma } from '@sta/db/client';
 import { config } from '../config.js';
 import { recordAudit } from '../services/audit.js';
+import { buscarProveedorParecido, normalizarNombre } from '../services/proveedor-match.js';
 
 /**
  * Ingesta de máquina — facturas leídas por OCR (n8n local en el server +
@@ -95,7 +96,21 @@ function tokenOk(req: FastifyRequest): boolean {
   return timingSafeEqual(Buffer.from(got), Buffer.from(expected));
 }
 
-/** Resuelve el proveedor (por CUIT, luego por nombre) o lo crea. Idempotente. */
+/**
+ * Resuelve el proveedor o lo crea. Idempotente.
+ *
+ * Del criterio más confiable al menos:
+ *   1. CUIT exacto      — sin ambigüedad posible.
+ *   2. Nombre exacto.
+ *   3. Alias guardado   — alguien ya confirmó a mano que ese nombre impreso es
+ *                         ese proveedor. Es la memoria del sistema.
+ *   4. Parecido de nombres (ver services/proveedor-match.ts).
+ * Recién si nada da, crea uno nuevo.
+ *
+ * Los pasos 3 y 4 existen porque el nombre impreso en la factura casi nunca es
+ * el que el local usa en el sistema. Sin ellos, cada factura por OCR creaba un
+ * proveedor duplicado y partía la cuenta corriente.
+ */
 async function resolverProveedor(p: Body['proveedor']): Promise<string> {
   if (p.cuit) {
     const porCuit = await prisma.proveedor.findFirst({ where: { cuit: p.cuit }, select: { id: true } });
@@ -106,6 +121,25 @@ async function resolverProveedor(p: Body['proveedor']): Promise<string> {
     select: { id: true },
   });
   if (porNombre) return porNombre.id;
+
+  // 3. Alias confirmado por un humano. Gana sobre el parecido automático:
+  //    es una decisión explícita, no una heurística.
+  const normalizado = normalizarNombre(p.nombre);
+  if (normalizado) {
+    const alias = await prisma.proveedorAlias.findUnique({
+      where: { nombreNormalizado: normalizado },
+      select: { proveedorId: true },
+    });
+    if (alias) return alias.proveedorId;
+  }
+
+  // 4. Parecido. Solo entre los activos, y solo si hay UN candidato claro.
+  const activos = await prisma.proveedor.findMany({
+    where: { activo: true },
+    select: { id: true, nombre: true, razonSocial: true },
+  });
+  const parecido = buscarProveedorParecido(p.nombre, activos);
+  if (parecido) return parecido.id;
   try {
     const nuevo = await prisma.proveedor.create({
       data: {
@@ -115,6 +149,24 @@ async function resolverProveedor(p: Body['proveedor']): Promise<string> {
         activo: true,
       },
       select: { id: true },
+    });
+    // El audit NO es decorativo acá: es lo que genera el evento de outbox que
+    // replica la fila a Supabase. Sin esto, el proveedor nuevo se quedaba solo
+    // en el Postgres de S1 y la factura que lo referencia fallaba al replicar
+    // con violación de FK — reintentando 25 veces hasta que el replicator la
+    // abandonaba. Síntoma: la factura entraba bien en S1, el bot contestaba
+    // "cargada", y en la nube no aparecía nunca. Incidente real: 2026-08-14.
+    //
+    // Va ANTES del audit de la factura (menor `secuencia`), así el replicador
+    // aplica primero el proveedor y después la factura, que es el único orden
+    // que respeta la FK.
+    await recordAudit({
+      tabla: 'proveedores',
+      registroId: nuevo.id,
+      accion: 'INSERT',
+      usuarioId: null,
+      valorNuevo: { nombre: p.nombre, cuit: p.cuit ?? null },
+      contexto: { fuente: 'ingest-ocr', motivo: 'proveedor nuevo detectado por OCR' },
     });
     return nuevo.id;
   } catch (e) {
@@ -202,7 +254,15 @@ export default async function ingestRoutes(fastify: FastifyInstance) {
                 })),
               },
             },
-            select: { id: true, estado: true, total: true, numero: true },
+            select: {
+              id: true,
+              estado: true,
+              total: true,
+              numero: true,
+              // Los ids de los items hacen falta para auditarlos uno por uno
+              // (ver abajo por que).
+              items: { select: { id: true }, orderBy: { orden: 'asc' } },
+            },
           });
 
           await recordAudit({
@@ -214,6 +274,26 @@ export default async function ingestRoutes(fastify: FastifyInstance) {
             contexto: { fuente: 'ingest-ocr', confianza: body.ocr.confianza ?? null },
             tx,
           });
+
+          // Un audit POR ITEM. `facturas_recibidas_items` es OTRA tabla, y el
+          // replicador replica fila por fila a partir de los eventos de
+          // outbox: sin evento propio, los renglones se quedaban en S1 y en la
+          // nube la factura aparecia con "Productos (0)" aunque el OCR los
+          // hubiera leido perfecto. Mismo bug que el del proveedor, un nivel
+          // mas abajo. Incidente real: 2026-08-14 (factura de GRAFIPACK).
+          //
+          // Van DESPUES del audit de la factura (mayor `secuencia`), que es el
+          // orden que respeta la FK item -> factura al replicar.
+          for (const it of f.items) {
+            await recordAudit({
+              tabla: 'facturas_recibidas_items',
+              registroId: it.id,
+              accion: 'INSERT',
+              usuarioId: null,
+              contexto: { fuente: 'ingest-ocr', facturaId: f.id },
+              tx,
+            });
+          }
           return f;
         });
 
