@@ -170,6 +170,50 @@ Instala n8n en primer plano (Ctrl+C lo corta), con datos en `C:\sta\n8n-dev`
 n8n export:workflow --id=<id> --output=workflow-facturas-ocr.json
 ```
 
+**Para volver a arrancarlo** (después de cerrar la terminal) usá
+`.\n8n-dev.ps1`, no `n8n start` pelado: el setup carga el entorno en *esa*
+sesión de PowerShell y se va con ella. Sin las variables, los Code nodes
+vuelven a fallar con `access to env vars denied`. `n8n-dev.ps1` relee el
+archivo de entorno, avisa si el bot quedó con un webhook puesto, y arranca.
+
+### El nodo "Telegram Trigger" NO se puede probar en tu PC
+
+Si lo ponés en el canvas y ejecutás, da:
+
+```
+Bad Request: bad webhook: An HTTPS URL must be provided for webhook
+```
+
+No es un error de configuración: ese nodo **registra un webhook**, o sea que
+Telegram tiene que poder *entrar* a tu n8n desde internet por HTTPS. En
+`localhost:5678` no hay ninguna URL pública que darle.
+
+**El `--tunnel` de n8n ya no existe**: fue eliminado en n8n 2.0 (regla de
+breaking changes `tunnel-option-v2` — "the --tunnel flag will be ignored"). Si
+lo pasás, n8n lo ignora en silencio y el problema queda igual.
+
+Opciones reales:
+
+1. **Usar el workflow de polling** (el de este repo). No necesita webhook, es
+   lo que va a correr en producción, y en el editor se prueba con *Execute
+   workflow* igual que cualquier otro. Es lo recomendado.
+2. Si querés sí o sí el trigger por webhook: levantar un túnel propio
+   (Cloudflare Tunnel, ngrok) y arrancar n8n con `WEBHOOK_URL=https://<tu-url>`.
+   Es una pieza más para mantener y no aporta nada a lo que se va a desplegar.
+
+> 🚨 **Un webhook apaga el polling del bot.** Telegram no permite las dos cosas
+> a la vez: con un webhook registrado, `getUpdates` devuelve **409** y el
+> workflow de S1 deja de recibir facturas hasta que lo borres. Si llegaste a
+> registrar uno (aunque haya sido probando), revisá y limpiá:
+>
+> ```powershell
+> $t = '<token del bot>'
+> Invoke-RestMethod "https://api.telegram.org/bot$t/getWebhookInfo"   # ver si hay
+> Invoke-RestMethod "https://api.telegram.org/bot$t/deleteWebhook"    # sacarlo
+> ```
+>
+> `n8n-dev.ps1` hace ese chequeo solo al arrancar y te avisa.
+
 > 🚨 **Dos n8n contra el mismo bot se pisan.** Telegram admite **un solo**
 > `getUpdates` en vuelo por token. Si el de S1 y el de tu PC poletean el mismo
 > bot: a uno lo corta con **409** (error instantáneo) y al otro lo deja colgado
