@@ -158,7 +158,10 @@ console.log(
     (APLICAR ? ' — modo APLICAR (va a escribir en la nube)\n' : ' — solo diagnóstico, no se escribe nada\n'),
 );
 
-const faltantes = []; // filas que hay que copiar a la nube
+// Set y no array: dos eventos distintos pueden depender del MISMO padre
+// faltante (cinco facturas del mismo proveedor, por ejemplo). Contarlo una vez
+// por evento inflaría el resumen y haría creer que falta más de lo que falta.
+const faltantes = new Set();
 const aReactivar = []; // ids de eventos a resetear
 
 for (const ev of pendientes) {
@@ -167,7 +170,10 @@ for (const ev of pendientes) {
   const edadMin = Math.round((Date.now() - ev.agregadoAt.getTime()) / 60000);
   console.log(`─ ${tabla} ${registroId}  (${ev.intentos} intentos, hace ${edadMin} min)`);
   if (ev.ultimoError) console.log(`    error: ${ev.ultimoError.slice(0, 200)}`);
-  else console.log('    error: (vacío — es el server viejo, sin describirError)');
+  // Un error vacío es típico de los eventos que quedaron trabados con el server
+  // anterior a `describirError`: no dice nada, por eso el diagnóstico de abajo
+  // no se apoya en el texto sino en mirar la nube.
+  else console.log('    error: (vacío)');
 
   if (!modelo) {
     console.log('    ⚠ tabla desconocida para el schema actual. Se saltea.');
@@ -187,7 +193,7 @@ for (const ev of pendientes) {
   }
   if (copiadas.length) {
     console.log(`    falta(n) en la nube: ${copiadas.join(', ')}`);
-    faltantes.push(...copiadas);
+    for (const c of copiadas) faltantes.add(c);
   } else {
     console.log('    los padres están en la nube — el evento debería aplicar bien al reintentar.');
   }
@@ -196,14 +202,14 @@ for (const ev of pendientes) {
 
 console.log('');
 if (!APLICAR) {
-  console.log(`Resumen: ${faltantes.length} fila(s) para copiar a la nube, ${aReactivar.length} evento(s) para reactivar.`);
+  console.log(`Resumen: ${faltantes.size} fila(s) para copiar a la nube, ${aReactivar.length} evento(s) para reactivar.`);
   console.log('Para aplicarlo:  node api\\reparar-replicacion.mjs --aplicar');
 } else {
   const r = await local.outboxEvent.updateMany({
     where: { id: { in: aReactivar } },
     data: { intentos: 0, ultimoError: null },
   });
-  console.log(`✅ ${faltantes.length} fila(s) copiada(s) a la nube.`);
+  console.log(`✅ ${faltantes.size} fila(s) copiada(s) a la nube.`);
   console.log(`✅ ${r.count} evento(s) reactivado(s) — el replicador los toma en el próximo ciclo (~4s).`);
   console.log('Verificá con:  Invoke-RestMethod http://127.0.0.1:3001/api/v1/sync/status | ConvertTo-Json -Depth 5');
 }
