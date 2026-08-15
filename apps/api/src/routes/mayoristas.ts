@@ -413,8 +413,21 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       if (!cliente) return reply.code(404).send({ error: 'Cliente no encontrado' });
 
       const ajustePct = Number(cliente.listaPrecios.ajustePctDefault);
+
+      // Las listas de mayorista son CUSTOM: tienen MIEMBROS. Un producto está en
+      // la lista si tiene fila en `precios_por_lista` — es el mismo criterio con
+      // el que `listas.ts` cuenta los productos de la lista y con el que la
+      // pantalla de catálogo deja marcarlos/desmarcarlos.
+      //
+      // Acá se pedía `where: { activo: true }` a secas, así que el remito
+      // ofrecía TODO el catálogo aunque la lista tuviera tres productos. La
+      // encargada armaba la lista y no servía para nada: los precios salían del
+      // ajuste % general y aparecían productos que ese cliente no compra.
+      const esCustom = cliente.listaPrecios.canalDefault === 'MAYORISTA';
       const productos = await prisma.producto.findMany({
-        where: { activo: true },
+        where: esCustom
+          ? { activo: true, preciosPorLista: { some: { listaId: cliente.listaPreciosId } } }
+          : { activo: true },
         orderBy: { nombre: 'asc' },
         include: {
           preciosPorLista: {
