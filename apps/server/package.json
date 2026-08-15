@@ -1,6 +1,6 @@
 {
   "name": "@sta/server",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "private": true,
   "description": "Santa Teresita — servidor local LAN (mini PC). Postgres fuente de verdad + API + replicator a Supabase. Deliverable separado del .exe (ver docs/SERVIDOR-LOCAL.md).",
   "type": "module",
