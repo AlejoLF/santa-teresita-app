@@ -210,6 +210,22 @@ Ver SPEC §1.5. Punteo:
   Cerrar la app antes de regenerar. Verificar con:
   `Get-Process | ? { $_.Modules.FileName -like '*query_engine-windows*' }`.
 
+- **Si tocás `schema.prisma`, escribí la migración — `db push` NO alcanza.**
+  Conviven dos formas de armar una base: desde el schema (`db push` → Supabase
+  y las locales) y aplicando migraciones en orden (**S1**, vía
+  `update-server.ps1` / `setup-mini-pc.ps1`). Una columna empujada con `db push`
+  sin migración existe en las primeras y **no** en S1. Peor: si una migración
+  posterior la USA, revienta ahí y —como el updater corta ante el primer
+  error— **todas** las migraciones que siguen quedan sin aplicar. Incidente
+  real: `tipos_producto.es_subcategoria` (más `opciones_modificador.codigo` y
+  `sesiones_caja.ultimo_numero_orden`) nunca tuvieron migración;
+  `20260702120000_porciones_reorg` la usa, y S1 pasó **seis semanas** sin poder
+  aplicar una sola migración, fallando y rolleando sola a las 4 AM sin que
+  nadie se enterara. Se detecta con **`node tools/check-migration-drift.mjs`**
+  — corrélo antes de publicar un release del server. Si la columna la usa una
+  migración que ya existe, el nombre de la nueva tiene que ordenar **antes**
+  que aquella (se aplican alfabéticamente), aunque quede con fecha "vieja".
+
 - **NO correr `prisma migrate dev` contra ninguna DB de este repo — y `pnpm
   db:migrate` MAPEA A ESO.** (Verificado: `packages/db/package.json` →
   `"migrate": "prisma migrate dev"`. El atajo es una trampa; para sincronizar
