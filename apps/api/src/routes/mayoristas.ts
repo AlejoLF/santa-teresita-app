@@ -6,6 +6,7 @@ import { RolUsuario, EstadoMovimiento, TipoCategoriaMovimiento } from '@sta/db';
 import { subtotalItem } from '@sta/shared';
 import { recordAudit } from '../services/audit.js';
 import { encolarTicketRemito } from '../services/impresion.js';
+import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
 
 /**
  * MAYORISTAS — Clientes con cuenta corriente.
@@ -805,6 +806,30 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       const fecha = b.fecha ? new Date(b.fecha) : new Date();
       const obs = `Cobro ${cliente.nombre}${b.observacion ? ' · ' + b.observacion : ''}`;
 
+      // El cobro de cuenta corriente es PLATA QUE ENTRA A LA CAJA DEL TURNO, así
+      // que necesita `sesionCajaId` como cualquier otro movimiento. Sin esto el
+      // registro queda con sesion_caja_id NULL: NO entra al cierre (que filtra
+      // por sesión) pero SÍ aparece en /admin/movimientos (que filtra por
+      // fecha) — o sea que la encargada lo ve listado y el cierre no lo cuenta,
+      // y la caja le da de menos sin ninguna señal de por qué.
+      //
+      // Es EL MISMO bug que se arregló en alpha.19 para POST /admin/movimientos
+      // y que quedó vivo en esta ruta. Ver el invariante en CLAUDE.md.
+      let sesionId: string;
+      try {
+        sesionId = (await getOrCreateSesionActual(req.usuario!.id)).id;
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error:
+              'No hay un turno abierto en este momento, así que el cobro no ' +
+              'tendría dónde imputarse. Abrí la caja y volvé a registrarlo.',
+            code: 'FUERA_DE_HORARIO',
+          });
+        }
+        throw e;
+      }
+
       const mov = await prisma.$transaction(async (tx) => {
         const m = await tx.movimiento.create({
           data: {
@@ -817,9 +842,10 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
             observacion: obs,
             estado: EstadoMovimiento.CONFIRMADO,
             usuarioId: req.usuario!.id,
+            sesionCajaId: sesionId,
           },
         });
-        await tx.pago.create({
+        const pago = await tx.pago.create({
           data: {
             movimientoId: m.id,
             metodo: b.metodo,
@@ -829,6 +855,33 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
             estado: 'CONFIRMADO',
             fecha,
           },
+        });
+        // Los dos audits van DENTRO de la transacción: si el cobro se rollbackea
+        // no queremos eventos de replicación de algo que no existe.
+        await recordAudit({
+          tabla: 'movimientos',
+          registroId: m.id,
+          accion: 'INSERT',
+          usuarioId: req.usuario!.id,
+          valorNuevo: {
+            tipo: 'INGRESO',
+            concepto: 'Cobro cuenta corriente',
+            cliente: cliente.nombre,
+            monto: b.monto,
+            remitosImputados: aImputar.length,
+          },
+          tx,
+        });
+        // `pagos` es otra tabla: sin evento propio, el cobro llega a la nube sin
+        // su forma de pago. Después del movimiento (mayor `secuencia`), que es
+        // el orden que respeta la FK pago → movimiento al replicar.
+        await recordAudit({
+          tabla: 'pagos',
+          registroId: pago.id,
+          accion: 'INSERT',
+          usuarioId: req.usuario!.id,
+          contexto: { movimientoId: m.id, motivo: 'cobro mayorista' },
+          tx,
         });
         await tx.cuenta.update({
           where: { id: b.cuentaId },
@@ -845,19 +898,9 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         }
         return m;
       });
-      await recordAudit({
-        tabla: 'movimientos',
-        registroId: mov.id,
-        accion: 'INSERT',
-        usuarioId: req.usuario!.id,
-        valorNuevo: {
-          tipo: 'INGRESO',
-          concepto: 'Cobro cuenta corriente',
-          cliente: cliente.nombre,
-          monto: b.monto,
-          remitosImputados: aImputar.length,
-        },
-      });
+      // El audit del movimiento se emite DENTRO de la transacción (arriba),
+      // junto con el del pago. Acá había un segundo audit del mismo movimiento
+      // que quedó de más al moverlo adentro.
       return reply.code(201).send({ ...mov, remitosImputados: aImputar.length });
     },
   );

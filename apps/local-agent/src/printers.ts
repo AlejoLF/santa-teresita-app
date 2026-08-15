@@ -227,11 +227,23 @@ export async function imprimirComanda(
   printer.newLine();
 
   if (payload.esCancelada) {
-    printer.invert(true);
+    // A TAMAÑO GRANDE a propósito: en normal, un ticket cancelado se confunde
+    // con uno bueno de un vistazo, y en cocina eso significa despachar un
+    // pedido que no existe.
+    //
+    // setTextSize(2,2) = 3x ancho y alto (ESC/POS codifica los multiplicadores
+    // 1..8 como 0..7). A 3x, en papel de 80mm —42 columnas normales— entran
+    // ~14 caracteres: "CANCELADA" son 9 y entra cómodo. El "*** CANCELADA ***"
+    // de antes son 17 y se partiría en dos líneas, que se lee peor que el
+    // original. Por eso el texto se acorta al agrandarlo.
     printer.bold(true);
-    printer.println('  *** CANCELADA ***  ');
-    printer.bold(false);
+    printer.invert(true);
+    printer.setTextSize(2, 2);
+    printer.println(' CANCELADA ');
+    printer.setTextNormal();
     printer.invert(false);
+    printer.bold(false);
+    printer.drawLine();
     printer.newLine();
   }
 
