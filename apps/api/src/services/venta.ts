@@ -280,8 +280,9 @@ export async function crearVenta(args: {
         clienteIdResuelto = nuevo.id;
         // Si vino dirección, guardar como dirección del cliente. La marcamos
         // default — el primer pedido le da casa por defecto.
+        let direccionNueva: { id: string } | null = null;
         if (data.direccionEntrega) {
-          await tx.direccion.create({
+          direccionNueva = await tx.direccion.create({
             data: {
               clienteId: nuevo.id,
               etiqueta: 'Casa',
@@ -290,6 +291,7 @@ export async function crearVenta(args: {
               indicaciones: data.indicacionesEntrega ?? null,
               esDefault: true,
             },
+            select: { id: true },
           });
         }
         await recordAudit({
@@ -301,6 +303,19 @@ export async function crearVenta(args: {
           contexto: { autoCreadoDesdePedido: true, canal: data.canal },
           tx,
         });
+        // La dirección va DESPUÉS del cliente (mayor `secuencia`), que es el
+        // orden que respeta la FK direccion → cliente al replicar.
+        if (direccionNueva) {
+          await recordAudit({
+            tabla: 'direcciones',
+            registroId: direccionNueva.id,
+            accion: 'INSERT',
+            usuarioId,
+            pcOrigen: data.pcOrigen,
+            contexto: { autoCreadoDesdePedido: true, clienteId: nuevo.id },
+            tx,
+          });
+        }
       }
     }
 
@@ -322,10 +337,14 @@ export async function crearVenta(args: {
         estado: EstadoVenta.PROCESADA,
         items: { create: itemsToCreate },
       },
+      // Los ids de los items hacen falta para auditarlos uno por uno (ver abajo).
+      include: { items: { select: { id: true } } },
     });
 
+    let deliveryNuevo: { id: string } | null = null;
     if (tieneDatosDelivery && esDelivery) {
-      await tx.deliveryInfo.create({
+      deliveryNuevo = await tx.deliveryInfo.create({
+        select: { id: true },
         data: {
           ventaId: venta.id,
           direccionSnapshot: {
@@ -347,6 +366,39 @@ export async function crearVenta(args: {
       valorNuevo: { numero: venta.numero, total: venta.total, canal: venta.canal },
       tx,
     });
+
+    // Un audit POR RENGLÓN y por el delivery. `items_venta` y `delivery_info`
+    // son OTRAS tablas, y el replicador replica fila por fila a partir de los
+    // eventos de outbox: sin evento propio se quedan en la base local y la
+    // venta llega a la nube VACÍA. Hasta ahora no se notaba porque las cajas
+    // escribían directo a Supabase; en cuanto pasan a escribirle a S1, cada
+    // venta replicaría sin sus renglones. Mismo bug que el de las facturas por
+    // OCR (2026-08-14), en el camino central del sistema.
+    //
+    // Van DESPUÉS del audit de la venta (mayor `secuencia`), que es el orden
+    // que respeta las FK item → venta y delivery → venta al replicar.
+    for (const it of venta.items) {
+      await recordAudit({
+        tabla: 'items_venta',
+        registroId: it.id,
+        accion: 'INSERT',
+        usuarioId,
+        pcOrigen: data.pcOrigen,
+        contexto: { ventaId: venta.id },
+        tx,
+      });
+    }
+    if (deliveryNuevo) {
+      await recordAudit({
+        tabla: 'delivery_info',
+        registroId: deliveryNuevo.id,
+        accion: 'INSERT',
+        usuarioId,
+        pcOrigen: data.pcOrigen,
+        contexto: { ventaId: venta.id },
+        tx,
+      });
+    }
 
     // Comanda de COCINA: solo si el pedido se "envía" al crear (Enviar a cocina /
     // Cargar otro / apps externas → enviarACocina=true, el default). En el flujo
@@ -504,6 +556,8 @@ export async function agregarItemsAVenta(args: {
   const subtotalNuevo = Number(venta.subtotal) + subtotalAdicional;
   const totalNuevo = subtotalNuevo - Number(venta.descuentoTotal) + Number(venta.recargoCanal);
 
+  const idsPrevios = new Set(venta.items.map((i) => i.id));
+
   return prisma.$transaction(async (tx) => {
     const updated = await tx.venta.update({
       where: { id: ventaId },
@@ -513,7 +567,34 @@ export async function agregarItemsAVenta(args: {
         tieneCocina: tieneCocinaNuevo,
         items: { create: itemsToCreate },
       },
+      include: { items: { select: { id: true } } },
     });
+
+    // La venta cambió de totales y tiene renglones NUEVOS. Las dos cosas
+    // necesitan su evento de outbox o la nube se queda con la versión vieja y
+    // sin los items agregados. Antes acá no se auditaba nada.
+    await recordAudit({
+      tabla: 'ventas',
+      registroId: ventaId,
+      accion: 'UPDATE',
+      usuarioId: args.usuarioId,
+      valorNuevo: { subtotal: updated.subtotal, total: updated.total },
+      contexto: { motivo: 'items agregados' },
+      tx,
+    });
+    // Solo los que no estaban antes: re-auditar los viejos no rompe nada
+    // (el replicador upsertea) pero ensucia el log y la cola.
+    for (const it of updated.items) {
+      if (idsPrevios.has(it.id)) continue;
+      await recordAudit({
+        tabla: 'items_venta',
+        registroId: it.id,
+        accion: 'INSERT',
+        usuarioId: args.usuarioId,
+        contexto: { ventaId },
+        tx,
+      });
+    }
 
     // Re-encolar la comanda de COCINA con los items nuevos — SOLO si el pedido YA
     // fue enviado a cocina (se creó con "Enviar a cocina", o ya se cobró). Así la
