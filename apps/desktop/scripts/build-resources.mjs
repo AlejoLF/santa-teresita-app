@@ -179,6 +179,16 @@ function buildApi() {
     REPO_ROOT,
   );
 
+  // Modo PROXY de la caja (C4): entry aparte, sin Prisma. Va al MISMO dir para
+  // que resuelva `resources/api/node_modules` (better-sqlite3 del outbox, y
+  // fastify). Se bundlea siempre: qué modo usa cada caja lo decide su config en
+  // runtime (`lanApiUrl`), no el build.
+  step('Bundle API-proxy con esbuild → resources/api/proxy.mjs');
+  run(
+    `"${esbuildBin}" "${path.join(apiDir, 'src', 'proxy.ts')}" --bundle --platform=node --target=node20 --format=esm --outfile="${path.join(dest, 'proxy.mjs')}" --banner:js="import { createRequire } from 'module'; const require = createRequire(import.meta.url);" ${externalArgs}`,
+    REPO_ROOT,
+  );
+
   step('Instalando deps externals de la API en resources/api/');
   // Generamos un package.json mínimo para que npm install resuelva solo lo external.
   const apiPkg = JSON.parse(fs.readFileSync(path.join(apiDir, 'package.json'), 'utf8'));

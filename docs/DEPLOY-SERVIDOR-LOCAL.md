@@ -291,7 +291,33 @@ En cada PC de caja, una vez que el server está vivo:
 notepad "$env:APPDATA\Santa Teresita\config.json"
 ```
 
-Contenido:
+Contenido **recomendado** (modo proxy, sin credenciales de base en la caja):
+
+```json
+{
+  "rol": "caja",
+  "lanApiUrl": "http://192.168.1.10:3001",
+  "cloudApiUrl": "https://<tu-api>.up.railway.app",
+  "webRemoteUrl": "https://sta-desktop.vercel.app"
+}
+```
+
+- `lanApiUrl` = IP del mini PC + **puerto 3001** (el API, no Postgres). **Si hay
+  2 redes (§1.11):** la IP del server **de la red a la que está conectada ESA
+  caja**.
+- `cloudApiUrl` = opcional. Solo para que las **lecturas** sigan vivas si S1 no
+  responde; las escrituras nunca van ahí, se encolan en el outbox local.
+- `webRemoteUrl` = Vercel (o `""` para usar el web bundleado del `.exe`).
+
+Con esto la caja levanta `proxy.mjs` en vez de la API completa: **no recibe
+`DATABASE_URL` ni ninguna password de Postgres**. Todo pasa por el API de S1,
+que es el único que habla con la base. Es el pendiente de seguridad **C4**.
+
+Para la caja el cambio es invisible: la web y el agente de impresión siguen
+hablando a `127.0.0.1:3001`, y el outbox sigue en el mismo lugar.
+
+<details>
+<summary>Modo viejo (con credenciales de base en la caja)</summary>
 
 ```json
 {
@@ -301,6 +327,13 @@ Contenido:
   "webRemoteUrl": "https://sta-desktop.vercel.app"
 }
 ```
+
+Sigue funcionando, pero pone la password del Postgres en cada PC del local:
+cualquiera con acceso a una caja puede leer y escribir la base entera saltándose
+las reglas de negocio. Si `lanApiUrl` está presente, **gana** sobre `lanDbUrl`
+— así se puede migrar caja por caja sin borrar la config vieja de golpe.
+
+</details>
 
 - `lanDbUrl` = IP del mini PC + password del rol `teresita` (la del `.env`
   del server). **Si hay 2 redes (§1.11):** usá la IP del server **de la red a la
