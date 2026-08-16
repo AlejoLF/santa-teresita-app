@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { BotonExportarExcel } from './BotonExportarExcel';
 import { cn } from '@/lib/cn';
 
 /**
@@ -98,23 +99,29 @@ export function useBusquedaPaginada<T>(opts: {
   const extraerRef = useRef(extraerItems);
   extraerRef.current = extraerItems;
 
+  // Los filtros SIN paginación. Se comparten entre la búsqueda y el export para
+  // que no puedan divergir: un Excel que muestra algo distinto de la pantalla
+  // es peor que no tener export.
+  const paramsFiltros = useCallback(() => {
+    const params = new URLSearchParams({ periodo });
+    if (qDebounced) params.set('q', qDebounced);
+    if (periodo === 'custom') {
+      if (desde) params.set('desde', new Date(desde + 'T00:00:00').toISOString());
+      if (hasta) params.set('hasta', new Date(hasta + 'T23:59:59').toISOString());
+    }
+    for (const [k, v] of Object.entries(paramsExtra ?? {})) {
+      if (v) params.set(k, v);
+    }
+    return params;
+  }, [periodo, qDebounced, desde, hasta, paramsExtra]);
+
   const fetchData = useCallback(async () => {
     const mine = ++reqId.current;
     setLoading(true);
     try {
-      const params = new URLSearchParams({
-        page: String(page),
-        pageSize: String(pageSize),
-        periodo,
-      });
-      if (qDebounced) params.set('q', qDebounced);
-      if (periodo === 'custom') {
-        if (desde) params.set('desde', new Date(desde + 'T00:00:00').toISOString());
-        if (hasta) params.set('hasta', new Date(hasta + 'T23:59:59').toISOString());
-      }
-      for (const [k, v] of Object.entries(paramsExtra ?? {})) {
-        if (v) params.set(k, v);
-      }
+      const params = paramsFiltros();
+      params.set('page', String(page));
+      params.set('pageSize', String(pageSize));
       const res = await api.get<Record<string, unknown>>(`${endpoint}?${params.toString()}`);
       if (mine !== reqId.current) return; // llegó tarde
       setItems(extraerRef.current(res));
@@ -135,7 +142,7 @@ export function useBusquedaPaginada<T>(opts: {
     } finally {
       if (mine === reqId.current) setLoading(false);
     }
-  }, [endpoint, page, pageSize, periodo, qDebounced, desde, hasta, paramsExtra]);
+  }, [endpoint, page, pageSize, paramsFiltros]);
 
   useEffect(() => {
     void fetchData();
@@ -159,6 +166,8 @@ export function useBusquedaPaginada<T>(opts: {
     refetch: fetchData,
     limpiar,
     hayFiltro: !!qDebounced || periodo !== 'todo',
+    /** Ruta con los filtros actuales, para el botón de exportar a Excel. */
+    pathExport: `${endpoint}?${paramsFiltros().toString()}`,
   };
 }
 
@@ -177,6 +186,7 @@ export function BuscadorFiltros({
   loading,
   onLimpiar,
   hayFiltro,
+  exportar,
   children,
 }: {
   q: string;
@@ -192,6 +202,11 @@ export function BuscadorFiltros({
   loading?: boolean;
   onLimpiar: () => void;
   hayFiltro: boolean;
+  /**
+   * Habilita el botón "Exportar a Excel". `path` sale de `pathExport` del hook
+   * para que el archivo tenga exactamente los filtros de la pantalla.
+   */
+  exportar?: { path: string; nombre: string };
   /** Filtros propios del área (selects de tipo/estado/canal…). */
   children?: React.ReactNode;
 }) {
@@ -213,6 +228,14 @@ export function BuscadorFiltros({
           >
             Limpiar
           </button>
+        )}
+        {exportar && (
+          <BotonExportarExcel
+            path={exportar.path}
+            nombre={exportar.nombre}
+            deshabilitado={total === 0}
+            className="ml-auto"
+          />
         )}
       </div>
 
