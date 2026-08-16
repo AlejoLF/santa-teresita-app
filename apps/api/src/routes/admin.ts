@@ -20,6 +20,11 @@ import {
   posponerAprobacion,
 } from '../services/excel-sync.js';
 import { cargarCierre, generarExcelCierre, generarHtmlCierre } from '../services/cierre-export.js';
+import {
+  construirExcelBusqueda,
+  descripcionFiltros,
+  nombreArchivoExport,
+} from '../services/export-busqueda.js';
 import { sendMail, sendTestEmail } from '../services/mailer.js';
 import { actualizarCashflow } from '../services/excel-writeback.js';
 import {
@@ -993,10 +998,15 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           hasta: z.string().datetime().optional(),
           page: z.coerce.number().int().min(1).default(1),
           pageSize: z.coerce.number().int().min(1).max(200).default(50),
+          // `xlsx` devuelve el MISMO resultado como Excel, sin paginar. Va en
+          // este handler y no en una ruta aparte a propósito: los filtros de
+          // abajo son largos y enredados, y duplicarlos es exactamente cómo el
+          // export termina mostrando algo distinto de lo que ve la pantalla.
+          formato: z.enum(['json', 'xlsx']).optional(),
         }),
       },
     },
-    async (req) => {
+    async (req, reply) => {
       const q = req.query as {
         tipo?: 'INGRESO' | 'EGRESO' | 'TRANSFERENCIA_INTERNA' | 'AJUSTE';
         categoriaId?: string;
@@ -1008,6 +1018,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         hasta?: string;
         page: number;
         pageSize: number;
+        formato?: 'json' | 'xlsx';
       };
 
       // Filtro temporal unificado. El `sesion` legacy se mapea a periodo; si no
@@ -1062,6 +1073,82 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           ],
         }),
       };
+      // ── Export a Excel ───────────────────────────────────────────────────
+      // Mismos filtros, sin paginar. El tope existe porque la base tiene cientos
+      // de miles de filas y un export sin límite se come la memoria del proceso;
+      // cuando corta, el archivo lo dice en la primera línea (un export truncado
+      // en silencio se lee como "esto es todo").
+      if (q.formato === 'xlsx') {
+        const TOPE = 5000;
+        const [filas, totalFilas] = await Promise.all([
+          prisma.movimiento.findMany({
+            where,
+            include: {
+              cuentaOrigen: { select: { nombre: true } },
+              cuentaDestino: { select: { nombre: true } },
+              categoria: { select: { nombre: true, tipo: true } },
+              usuario: { select: { nombre: true } },
+            },
+            orderBy: { fechaComputo: 'desc' },
+            take: TOPE,
+          }),
+          prisma.movimiento.count({ where }),
+        ]);
+        const buf = await construirExcelBusqueda({
+          titulo: 'Movimientos',
+          filtros: descripcionFiltros({
+            periodo: periodoEfectivo,
+            desde: ft.desde,
+            hasta: ft.hasta,
+            texto,
+            extra: q.tipo ? `Tipo: ${q.tipo}` : undefined,
+          }),
+          columnas: [
+            { header: 'Fecha', key: 'fecha', tipo: 'fecha' },
+            { header: 'Tipo', key: 'tipo', width: 20 },
+            { header: 'Categoría', key: 'categoria', width: 26 },
+            { header: 'Observación', key: 'observacion', width: 40 },
+            { header: 'Cuenta origen', key: 'origen' },
+            { header: 'Cuenta destino', key: 'destino' },
+            { header: 'Usuario', key: 'usuario' },
+            { header: 'Estado', key: 'estado', width: 14 },
+            { header: 'Ingreso', key: 'ingreso', tipo: 'dinero' },
+            { header: 'Egreso', key: 'egreso', tipo: 'dinero' },
+          ],
+          filas: filas.map((m) => {
+            const monto = Number(m.monto);
+            const confirmado = m.estado === EstadoMovimiento.CONFIRMADO;
+            return {
+              fecha: m.fechaComputo,
+              tipo: m.tipo,
+              categoria: m.categoria?.nombre ?? '—',
+              observacion: m.observacion ?? '',
+              origen: m.cuentaOrigen?.nombre ?? '',
+              destino: m.cuentaDestino?.nombre ?? '',
+              usuario: m.usuario?.nombre ?? '',
+              estado: m.estado,
+              // Ingresos y egresos en columnas separadas: sumar una sola de
+              // montos con signo mezclado no da nada útil.
+              ingreso: confirmado && m.tipo === 'INGRESO' ? monto : null,
+              egreso: confirmado && m.tipo === 'EGRESO' ? monto : null,
+            };
+          }),
+          totales: [
+            { etiqueta: 'TOTAL INGRESOS', columna: 'ingreso' },
+            { etiqueta: 'TOTAL EGRESOS', columna: 'egreso' },
+            { etiqueta: 'Cantidad de movimientos', valor: filas.length },
+          ],
+          hayMas:
+            totalFilas > filas.length
+              ? { exportadas: filas.length, totales: totalFilas }
+              : undefined,
+        });
+        return reply
+          .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('movimientos')}"`)
+          .send(buf);
+      }
+
       const [movimientos, total, sumas] = await Promise.all([
         prisma.movimiento.findMany({
           where,
