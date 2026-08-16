@@ -34,6 +34,21 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.62',
+    fecha: '16 de agosto',
+    titulo: 'Exportar a Excel, precios por sabor y remitos que se cobran solos',
+    cambios: [
+      'Botón "Exportar a Excel" en Ventas, Movimientos, Encargos y Facturas: baja TODO lo que buscaste (no sólo la página que estás viendo), con los totales arriba y bien grandes. Los importes bajan como números, así que podés sumarlos y filtrarlos en el Excel.',
+      'En las listas de precios ahora se ven los sabores que cambian el precio del producto (las pizzas, por ejemplo) y cuánto queda cada uno. En una lista de mayorista le podés poner precio propio a un sabor, y volverlo al precio general cuando quieras.',
+      'Al armar un remito ya podés elegir el sabor, igual que cuando cargás un pedido. El precio sale bien y los sabores salen impresos debajo de cada producto.',
+      'Al crear un remito podés marcar "Lo paga ahora": queda cobrado y pagado de una, sin tener que volver a la ficha del cliente a cargar el cobro.',
+      'Los cobros de mayoristas aceptan varios medios de pago a la vez (una parte en efectivo y otra por transferencia, por ejemplo). Cada parte entra a la cuenta que corresponde.',
+      'El remito de un mayorista sólo ofrece los productos que están en la lista de ese cliente, no todo el catálogo.',
+      'El cobro a un mayorista ahora entra en la caja del turno, así que aparece en el cierre.',
+      'En el ticket de una venta cancelada, el cartel "CANCELADA" se ve mucho más grande y en negativo — no se pasa por alto.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.61',
     fecha: '11 de agosto',
     titulo: 'Las aclaraciones de los movimientos ahora se ven en la tabla',

@@ -7,6 +7,13 @@ import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { coincideBusqueda } from '@/lib/busqueda';
+import {
+  LineasDePago,
+  useCuentas,
+  sugerirCuenta,
+  validarPagos,
+  type LineaPago,
+} from '@/components/admin/LineasDePago';
 import { cn } from '@/lib/cn';
 
 interface OpcionCat {
@@ -122,6 +129,13 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
   const [error, setError] = useState<string | null>(null);
   /** Producto cuyo sabor se está eligiendo (modal). */
   const [eligiendo, setEligiendo] = useState<ProductoCat | null>(null);
+  // Cobrar el remito en el momento. Sólo al CREAR: editar un remito ya cobrado
+  // está bloqueado, y editar uno pendiente no debería mover plata de costado.
+  const [cobrarAhora, setCobrarAhora] = useState(false);
+  const cuentas = useCuentas();
+  const [pagos, setPagos] = useState<LineaPago[]>([
+    { metodo: 'EFECTIVO', cuentaId: '', monto: '' },
+  ]);
 
   useEffect(() => {
     (async () => {
@@ -243,11 +257,34 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
     0,
   );
 
+  // Con un solo método, el monto sigue al total del remito: el remito se está
+  // armando y pedirle a la encargada que re-tipee el número cada vez que suma
+  // un producto sería inutilizable. Con varios métodos NO se toca — ahí los
+  // montos los repartió a mano.
+  useEffect(() => {
+    if (!cobrarAhora) return;
+    setPagos((prev) =>
+      prev.length === 1
+        ? [
+            {
+              ...prev[0]!,
+              cuentaId: prev[0]!.cuentaId || (sugerirCuenta(prev[0]!.metodo, cuentas)?.id ?? ''),
+              monto: total.toFixed(2),
+            },
+          ]
+        : prev,
+    );
+  }, [total, cobrarAhora, cuentas]);
+
   async function guardar() {
     setError(null);
     if (lineas.length === 0) return setError('Agregá al menos un producto');
     if (lineas.some((l) => Number(l.cantidad || 0) <= 0)) {
       return setError('Cada línea tiene que tener cantidad > 0');
+    }
+    if (cobrarAhora) {
+      const problema = validarPagos(pagos, total);
+      if (problema) return setError(problema);
     }
     setGuardando(true);
     // Los ítems libres mandan su precio manual; los del catálogo NO, porque el
@@ -270,6 +307,16 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
         const creado = await api.post<{ id: string }>(`/admin/mayoristas/${id}/remitos`, {
           observaciones: observaciones || undefined,
           items,
+          ...(cobrarAhora && {
+            cobrar: {
+              pagos: pagos.map((l) => ({
+                metodo: l.metodo,
+                cuentaId: l.cuentaId,
+                monto: Number(l.monto).toFixed(2),
+                numeroReferencia: l.numeroReferencia || undefined,
+              })),
+            },
+          }),
         });
         guardadoId = creado.id;
       }
@@ -421,6 +468,38 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
               <span className="text-sm text-ink-500 uppercase tracking-wide">Total</span>
               <MoneyAmount value={total.toFixed(2)} hero className="text-lg text-teresita-700" />
             </div>
+            {/* Cobrar en el momento. Antes había que guardar el remito, volver
+                a la ficha del cliente y cargar el cobro aparte imputándolo a
+                mano — tres pantallas para algo que en el mostrador es un solo
+                gesto. Sólo al crear: un remito ya cobrado no se edita. */}
+            {!editando && (
+              <>
+                <label
+                  className={cn(
+                    'flex items-center gap-2 px-2 py-2 rounded cursor-pointer text-sm transition-colors',
+                    cobrarAhora ? 'bg-basil-100 text-basil-700' : 'text-ink-500 hover:bg-cream-100',
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={cobrarAhora}
+                    onChange={(e) => setCobrarAhora(e.target.checked)}
+                    className="w-4 h-4 shrink-0"
+                  />
+                  <span aria-hidden>💰</span>
+                  <span className="font-medium">Lo paga ahora</span>
+                </label>
+                {cobrarAhora && (
+                  <LineasDePago
+                    lineas={pagos}
+                    onChange={setPagos}
+                    cuentas={cuentas}
+                    total={total}
+                  />
+                )}
+              </>
+            )}
+
             <label
               className={cn(
                 'flex items-center gap-2 px-2 py-2 rounded cursor-pointer text-sm transition-colors',
@@ -446,7 +525,7 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
             >
               {guardando
                 ? 'Guardando...'
-                : `${editando ? 'Guardar cambios' : 'Guardar remito'}${
+                : `${editando ? 'Guardar cambios' : cobrarAhora ? 'Guardar y cobrar' : 'Guardar remito'}${
                     imprimirAlGuardar ? ' e imprimir' : ''
                   }`}
             </Button>

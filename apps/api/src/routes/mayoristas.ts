@@ -166,6 +166,124 @@ async function resolverItemsRemito(
   return { itemsData, total };
 }
 
+/** Una línea de cobro ya normalizada (venga de la forma simple o de la dividida). */
+interface LineaCobro {
+  metodo: (typeof METODOS)[number];
+  cuentaId: string;
+  monto: string;
+  numeroReferencia?: string;
+}
+
+/**
+ * Registra un cobro de cuenta corriente DENTRO de una transacción.
+ *
+ * UN MOVIMIENTO POR LÍNEA. Un `Movimiento` tiene una sola `cuentaDestinoId`:
+ * si el cobro se paga mitad por transferencia y mitad en efectivo, meterlo en
+ * un movimiento solo dejaría la plata entera en una cuenta y el arqueo de la
+ * otra daría de menos. Con una línea = un movimiento cada cuenta recibe lo
+ * suyo, y el saldo del cliente (que suma los INGRESO por `entidadId`) sigue
+ * dando igual.
+ *
+ * Devuelve el PRIMER movimiento: es el que queda como `pagadoConMovimientoId`
+ * de los remitos imputados (el campo es uno solo).
+ *
+ * Está acá afuera para que cobrar desde la ficha del cliente y cobrar un
+ * remito en el momento de crearlo hagan exactamente lo mismo.
+ */
+async function registrarCobro(
+  tx: Prisma.TransactionClient,
+  args: {
+    cliente: { id: string; nombre: string };
+    lineas: LineaCobro[];
+    fecha: Date;
+    observacion: string;
+    categoriaId: string;
+    usuarioId: string;
+    sesionId: string;
+    aImputar: string[];
+    montoTotal: string;
+  },
+) {
+  const { cliente, lineas, fecha, categoriaId, usuarioId, sesionId, aImputar } = args;
+  const movimientos = [];
+  for (const linea of lineas) {
+    const m = await tx.movimiento.create({
+      data: {
+        tipo: 'INGRESO',
+        monto: linea.monto,
+        categoriaId,
+        cuentaDestinoId: linea.cuentaId,
+        entidadId: cliente.id,
+        fechaComputo: fecha,
+        observacion: lineas.length > 1 ? `${args.observacion} (${linea.metodo})` : args.observacion,
+        estado: EstadoMovimiento.CONFIRMADO,
+        usuarioId,
+        // El cobro de cuenta corriente es PLATA QUE ENTRA A LA CAJA DEL TURNO,
+        // así que necesita `sesionCajaId` como cualquier otro movimiento. Sin
+        // esto queda con sesion_caja_id NULL: NO entra al cierre (que filtra
+        // por sesión) pero SÍ aparece en /admin/movimientos (que filtra por
+        // fecha) — la encargada lo ve listado y el cierre no lo cuenta.
+        sesionCajaId: sesionId,
+      },
+    });
+    const pago = await tx.pago.create({
+      data: {
+        movimientoId: m.id,
+        metodo: linea.metodo,
+        cuentaId: linea.cuentaId,
+        monto: linea.monto,
+        numeroReferencia: linea.numeroReferencia ?? null,
+        estado: 'CONFIRMADO',
+        fecha,
+      },
+    });
+    // Los audits van DENTRO de la transacción: si el cobro se rollbackea no
+    // queremos eventos de replicación de algo que no existe.
+    await recordAudit({
+      tabla: 'movimientos',
+      registroId: m.id,
+      accion: 'INSERT',
+      usuarioId,
+      valorNuevo: {
+        tipo: 'INGRESO',
+        concepto: 'Cobro cuenta corriente',
+        cliente: cliente.nombre,
+        monto: linea.monto,
+        metodo: linea.metodo,
+        totalCobro: args.montoTotal,
+        remitosImputados: aImputar.length,
+      },
+      tx,
+    });
+    // `pagos` es otra tabla: sin evento propio, el cobro llega a la nube sin su
+    // forma de pago. Después del movimiento (mayor `secuencia`), que es el
+    // orden que respeta la FK pago → movimiento al replicar.
+    await recordAudit({
+      tabla: 'pagos',
+      registroId: pago.id,
+      accion: 'INSERT',
+      usuarioId,
+      contexto: { movimientoId: m.id, motivo: 'cobro mayorista' },
+      tx,
+    });
+    await tx.cuenta.update({
+      where: { id: linea.cuentaId },
+      data: { saldoActual: { increment: Number(linea.monto) } },
+    });
+    movimientos.push(m);
+  }
+  // Imputación: los remitos elegidos quedan PAGADO y apuntando al primer
+  // movimiento del cobro. Va DENTRO de la tx: si falla, no queremos remitos
+  // marcados como cobrados sin el cobro registrado.
+  if (aImputar.length) {
+    await tx.remito.updateMany({
+      where: { id: { in: aImputar } },
+      data: { estado: 'PAGADO', pagadoAt: fecha, pagadoConMovimientoId: movimientos[0]!.id },
+    });
+  }
+  return movimientos[0]!;
+}
+
 export default async function mayoristasRoutes(fastify: FastifyInstance) {
   // ── Listas de precios disponibles (para asignar a un cliente) ──
   fastify.get(
@@ -539,6 +657,25 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         body: z.object({
           fecha: z.string().datetime().optional(),
           observaciones: z.string().max(1000).optional(),
+          // Cobrar el remito EN EL MOMENTO. Sin esto había que crear el remito,
+          // volver a la ficha y cargar el cobro aparte imputándolo a mano — tres
+          // pantallas para lo que en el mostrador es un solo gesto.
+          // El monto sale del total calculado server-side, no del front.
+          cobrar: z
+            .object({
+              pagos: z
+                .array(
+                  z.object({
+                    metodo: z.enum(METODOS),
+                    cuentaId: z.string().uuid(),
+                    monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
+                    numeroReferencia: z.string().max(80).optional(),
+                  }),
+                )
+                .min(1)
+                .max(10),
+            })
+            .optional(),
           items: z
             .array(
               z.object({
@@ -572,6 +709,7 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         fecha?: string;
         observaciones?: string;
         items: ItemEntrada[];
+        cobrar?: { pagos: LineaCobro[] };
       };
       const cliente = await prisma.clienteMayorista.findUnique({
         where: { id },
@@ -587,6 +725,36 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         throw e;
       }
       const { itemsData, total } = resuelto;
+
+      // Si se cobra en el momento, los pagos tienen que cubrir el total que
+      // calculó el SERVER (no el que muestra la pantalla, que puede estar
+      // desactualizado si cambió un precio mientras cargaban el remito).
+      let sesionId: string | null = null;
+      let categoriaId: string | null = null;
+      if (b.cobrar) {
+        const suma = b.cobrar.pagos.reduce((a, p) => a + Number(p.monto), 0);
+        if (Math.abs(suma - total) > 0.01) {
+          return reply.code(400).send({
+            error:
+              `Los pagos suman $${suma.toFixed(2)} y el remito da $${total.toFixed(2)}. ` +
+              'Revisá los montos (puede haber cambiado un precio).',
+          });
+        }
+        try {
+          sesionId = (await getOrCreateSesionActual(req.usuario!.id)).id;
+        } catch (e) {
+          if (e instanceof FueraDeHorarioError) {
+            return reply.code(423).send({
+              error:
+                'No hay un turno abierto, así que el cobro no tendría dónde ' +
+                'imputarse. Guardá el remito sin cobrar y registrá el cobro cuando abra la caja.',
+              code: 'FUERA_DE_HORARIO',
+            });
+          }
+          throw e;
+        }
+        categoriaId = await getCategoriaCobroId();
+      }
 
       const remito = await prisma.remito.create({
         data: {
@@ -619,7 +787,24 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           valorNuevo: { remitoId: remito.id, nombre: it.nombreSnapshot },
         });
       }
-      return reply.code(201).send(remito);
+      // El cobro va DESPUÉS de que el remito existe: se imputa contra él, así
+      // queda PAGADO y apuntando a su movimiento como cualquier otro cobro.
+      if (b.cobrar && sesionId && categoriaId) {
+        await prisma.$transaction((tx) =>
+          registrarCobro(tx, {
+            cliente: { id: cliente.id, nombre: cliente.nombre },
+            lineas: b.cobrar!.pagos,
+            fecha: new Date(),
+            observacion: `Cobro ${cliente.nombre} · remito #${remito.numero}`,
+            categoriaId: categoriaId!,
+            usuarioId: req.usuario!.id,
+            sesionId: sesionId!,
+            aImputar: [remito.id],
+            montoTotal: total.toFixed(2),
+          }),
+        );
+      }
+      return reply.code(201).send({ ...remito, cobrado: Boolean(b.cobrar) });
     },
   );
 
@@ -904,8 +1089,24 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         params: z.object({ id: z.string().uuid() }),
         body: z.object({
           monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
-          cuentaId: z.string().uuid(),
+          // Forma simple (un método): `cuentaId` + `metodo`. Se mantiene porque
+          // es el 90% de los cobros y no vale la pena obligar a armar un array.
+          cuentaId: z.string().uuid().optional(),
           metodo: z.enum(METODOS).default('TRANSFERENCIA'),
+          // Forma dividida: la empresa paga una parte por transferencia y otra
+          // en efectivo. Cada línea aterriza en SU cuenta — si se metieran
+          // todas en una, el arqueo de esa cuenta daría de más.
+          pagos: z
+            .array(
+              z.object({
+                metodo: z.enum(METODOS),
+                cuentaId: z.string().uuid(),
+                monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
+                numeroReferencia: z.string().max(80).optional(),
+              }),
+            )
+            .max(10)
+            .optional(),
           fecha: z.string().datetime().optional(),
           numeroReferencia: z.string().max(80).optional(),
           observacion: z.string().max(500).optional(),
@@ -919,8 +1120,14 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       const { id } = req.params as { id: string };
       const b = req.body as {
         monto: string;
-        cuentaId: string;
+        cuentaId?: string;
         metodo: (typeof METODOS)[number];
+        pagos?: Array<{
+          metodo: (typeof METODOS)[number];
+          cuentaId: string;
+          monto: string;
+          numeroReferencia?: string;
+        }>;
         fecha?: string;
         numeroReferencia?: string;
         observacion?: string;
@@ -928,6 +1135,30 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       };
       const cliente = await prisma.clienteMayorista.findUnique({ where: { id } });
       if (!cliente) return reply.code(404).send({ error: 'Cliente no encontrado' });
+
+      // Las dos formas se normalizan a una sola lista de líneas: de acá para
+      // abajo el handler no sabe si vino un método o cinco.
+      const lineas = b.pagos?.length
+        ? b.pagos
+        : b.cuentaId
+          ? [
+              {
+                metodo: b.metodo,
+                cuentaId: b.cuentaId,
+                monto: b.monto,
+                numeroReferencia: b.numeroReferencia,
+              },
+            ]
+          : null;
+      if (!lineas) {
+        return reply.code(400).send({ error: 'Falta la cuenta destino del cobro' });
+      }
+      const sumaLineas = lineas.reduce((a, p) => a + Number(p.monto), 0);
+      if (Math.abs(sumaLineas - Number(b.monto)) > 0.01) {
+        return reply.code(400).send({
+          error: `Los pagos suman $${sumaLineas.toFixed(2)} y el cobro es de $${Number(b.monto).toFixed(2)}`,
+        });
+      }
 
       // Los remitos a imputar tienen que ser DE ESTE cliente y no estar
       // anulados. Sin este chequeo, un id de otro cliente marcaría pagado un
@@ -951,7 +1182,6 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       }
 
       const categoriaId = await getCategoriaCobroId();
-      const monto = Number(b.monto);
       const fecha = b.fecha ? new Date(b.fecha) : new Date();
       const obs = `Cobro ${cliente.nombre}${b.observacion ? ' · ' + b.observacion : ''}`;
 
@@ -979,78 +1209,28 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         throw e;
       }
 
-      const mov = await prisma.$transaction(async (tx) => {
-        const m = await tx.movimiento.create({
-          data: {
-            tipo: 'INGRESO',
-            monto: b.monto,
-            categoriaId,
-            cuentaDestinoId: b.cuentaId,
-            entidadId: cliente.id,
-            fechaComputo: fecha,
-            observacion: obs,
-            estado: EstadoMovimiento.CONFIRMADO,
-            usuarioId: req.usuario!.id,
-            sesionCajaId: sesionId,
-          },
-        });
-        const pago = await tx.pago.create({
-          data: {
-            movimientoId: m.id,
-            metodo: b.metodo,
-            cuentaId: b.cuentaId,
-            monto: b.monto,
-            numeroReferencia: b.numeroReferencia ?? null,
-            estado: 'CONFIRMADO',
-            fecha,
-          },
-        });
-        // Los dos audits van DENTRO de la transacción: si el cobro se rollbackea
-        // no queremos eventos de replicación de algo que no existe.
-        await recordAudit({
-          tabla: 'movimientos',
-          registroId: m.id,
-          accion: 'INSERT',
+      const mov = await prisma.$transaction((tx) =>
+        registrarCobro(tx, {
+          cliente,
+          lineas,
+          fecha,
+          observacion: obs,
+          categoriaId,
           usuarioId: req.usuario!.id,
-          valorNuevo: {
-            tipo: 'INGRESO',
-            concepto: 'Cobro cuenta corriente',
-            cliente: cliente.nombre,
-            monto: b.monto,
-            remitosImputados: aImputar.length,
-          },
-          tx,
-        });
-        // `pagos` es otra tabla: sin evento propio, el cobro llega a la nube sin
-        // su forma de pago. Después del movimiento (mayor `secuencia`), que es
-        // el orden que respeta la FK pago → movimiento al replicar.
-        await recordAudit({
-          tabla: 'pagos',
-          registroId: pago.id,
-          accion: 'INSERT',
-          usuarioId: req.usuario!.id,
-          contexto: { movimientoId: m.id, motivo: 'cobro mayorista' },
-          tx,
-        });
-        await tx.cuenta.update({
-          where: { id: b.cuentaId },
-          data: { saldoActual: { increment: monto } },
-        });
-        // Imputación: los remitos elegidos quedan PAGADO y apuntando a ESTE
-        // movimiento. Va DENTRO de la tx: si falla, no queremos remitos
-        // marcados como cobrados sin el cobro registrado.
-        if (aImputar.length) {
-          await tx.remito.updateMany({
-            where: { id: { in: aImputar } },
-            data: { estado: 'PAGADO', pagadoAt: fecha, pagadoConMovimientoId: m.id },
-          });
-        }
-        return m;
-      });
+          sesionId,
+          aImputar,
+          montoTotal: b.monto,
+        }),
+      );
       // El audit del movimiento se emite DENTRO de la transacción (arriba),
       // junto con el del pago. Acá había un segundo audit del mismo movimiento
       // que quedó de más al moverlo adentro.
-      return reply.code(201).send({ ...mov, remitosImputados: aImputar.length });
+      return reply.code(201).send({
+        ...mov,
+        remitosImputados: aImputar.length,
+        pagos: lineas.length,
+        montoTotal: b.monto,
+      });
     },
   );
 }
