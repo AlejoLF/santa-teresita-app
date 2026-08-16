@@ -1328,9 +1328,10 @@ model Proveedor {
   ultimoMovimientoAt DateTime?     @map("ultimo_movimiento_at")
 
   insumosVinculo   InsumoProveedor[]
-  insumosPrincipal Insumo[]          @relation("InsumoProveedorPrincipal")
+  insumosPrincipal Insumo[]              @relation("InsumoProveedorPrincipal")
   facturas         FacturaRecibida[]
   alias            ProveedorAlias[]
+  mapeosExcel      MapeoExcelProveedor[]
 
   @@index([activo])
   @@map("proveedores")
@@ -1641,4 +1642,39 @@ model OutboxEvent {
 
   @@index([publicadoAt, agregadoAt])
   @@map("outbox_events")
+}
+
+/// Qué proveedor del sistema alimenta cada FILA del Excel "Proveedores 2026".
+///
+/// Las filas de la hoja `Deudas` NO son proveedores uno a uno, y por eso el
+/// mapeo tiene que ser explícito en vez de adivinado por parecido de nombre:
+///
+///   - "Grafipack en Negro" y "Grafipack en Blanco" son EL MISMO proveedor
+///     partido en dos filas según si el comprobante es fiscal o no.
+///   - "Verduras", "Huevos", "Pollos", "Limpieza" son RUBROS: una fila que
+///     junta lo de varios proveedores.
+///   - "Carniceria Fca." y "Carniceria Julio Felipe" son dos proveedores con
+///     nombres que se parecen entre sí más de lo que se parecen a su nombre
+///     en el sistema.
+///
+/// Adivinar acá significa sumarle a un proveedor la deuda de otro, y eso se
+/// descubre tarde y se limpia a mano. Se identifica la fila por su ETIQUETA
+/// (el texto de la columna A), no por el número de fila: si mañana insertan
+/// una fila arriba, el mapeo sigue valiendo.
+model MapeoExcelProveedor {
+  id               String   @id @default(uuid()) @db.Uuid
+  /// Texto exacto de la columna A de la hoja `Deudas` (ej. "Grafipack en Negro").
+  etiquetaExcel    String   @map("etiqueta_excel") @db.VarChar(120)
+  proveedorId      String   @map("proveedor_id") @db.Uuid
+  /// Qué comprobantes de ese proveedor van a ESTA fila. Vacío = todos.
+  /// Es lo que permite partir un proveedor en "en Blanco" (FACTURA_A/B/C) y
+  /// "en Negro" (el resto).
+  tiposComprobante String[] @map("tipos_comprobante")
+  activo           Boolean  @default(true)
+
+  proveedor Proveedor @relation(fields: [proveedorId], references: [id], onDelete: Cascade)
+
+  @@unique([etiquetaExcel, proveedorId])
+  @@index([proveedorId])
+  @@map("mapeo_excel_proveedores")
 }

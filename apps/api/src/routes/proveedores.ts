@@ -10,7 +10,11 @@ import {
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { calcSaldoFactura } from '../services/facturas.js';
-import { normalizarNombre } from '../services/proveedor-match.js';
+import { normalizarNombre, buscarProveedorParecido } from '../services/proveedor-match.js';
+import {
+  volcarSemanaProveedores,
+  leerEtiquetasDelExcel,
+} from '../services/excel-proveedores.js';
 import {
   construirExcelBusqueda,
   descripcionFiltros,
@@ -2091,6 +2095,173 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         excedente: excedente.toFixed(2),
         observacion: observacionFinal,
       });
+    },
+  );
+
+  // ══════════════════════════════════════════════════════════════════════
+  //   EXCEL "Proveedores 2026.xlsx" — hoja Deudas
+  // ══════════════════════════════════════════════════════════════════════
+
+  // Las filas del Excel + las semanas que tiene el archivo. Es lo que la
+  // pantalla de mapeo necesita para ofrecer las etiquetas reales en vez de
+  // hacer que alguien las tipee (y las tipee mal).
+  fastify.get(
+    '/admin/excel-proveedores/estructura',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async (_req, reply) => {
+      try {
+        const est = await leerEtiquetasDelExcel();
+        const mapeos = await prisma.mapeoExcelProveedor.findMany({
+          include: { proveedor: { select: { id: true, nombre: true } } },
+        });
+        // Sugerencia de mapeo para las filas que todavía no tienen ninguno.
+        // Sugerencia, no decisión: la confirma un humano. Mezclar la cuenta
+        // corriente de dos proveedores se descubre tarde y se limpia a mano.
+        const proveedores = await prisma.proveedor.findMany({
+          where: { activo: true },
+          select: { id: true, nombre: true, razonSocial: true },
+        });
+        const conMapeo = new Set(mapeos.map((m) => m.etiquetaExcel));
+        const sugerencias = est.etiquetas
+          .filter((e) => !conMapeo.has(e))
+          .map((e) => ({ etiqueta: e, sugerido: buscarProveedorParecido(e, proveedores) }))
+          .filter((s) => s.sugerido);
+
+        return {
+          ...est,
+          mapeos: mapeos.map((m) => ({
+            id: m.id,
+            etiquetaExcel: m.etiquetaExcel,
+            proveedorId: m.proveedorId,
+            proveedorNombre: m.proveedor.nombre,
+            tiposComprobante: m.tiposComprobante,
+            activo: m.activo,
+          })),
+          sugerencias,
+        };
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : 'Error leyendo el Excel' });
+      }
+    },
+  );
+
+  // Crear/actualizar el mapeo de una fila.
+  fastify.post(
+    '/admin/excel-proveedores/mapeo',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z.object({
+          etiquetaExcel: z.string().min(1).max(120),
+          proveedorId: z.string().uuid(),
+          // Vacío = todos los comprobantes de ese proveedor van a esta fila.
+          // Con valores, se parte el proveedor entre filas ("en Blanco" /
+          // "en Negro").
+          tiposComprobante: z.array(z.string().max(30)).max(12).default([]),
+          activo: z.boolean().default(true),
+        }),
+      },
+    },
+    async (req) => {
+      const b = req.body as {
+        etiquetaExcel: string;
+        proveedorId: string;
+        tiposComprobante: string[];
+        activo: boolean;
+      };
+      const m = await prisma.mapeoExcelProveedor.upsert({
+        where: {
+          etiquetaExcel_proveedorId: {
+            etiquetaExcel: b.etiquetaExcel,
+            proveedorId: b.proveedorId,
+          },
+        },
+        create: b,
+        update: { tiposComprobante: b.tiposComprobante, activo: b.activo },
+      });
+      await recordAudit({
+        tabla: 'mapeo_excel_proveedores',
+        registroId: m.id,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: b as unknown as Record<string, unknown>,
+      });
+      return m;
+    },
+  );
+
+  fastify.delete(
+    '/admin/excel-proveedores/mapeo/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const existe = await prisma.mapeoExcelProveedor.findUnique({ where: { id } });
+      if (!existe) return reply.code(404).send({ error: 'Mapeo no encontrado' });
+      await prisma.mapeoExcelProveedor.delete({ where: { id } });
+      await recordAudit({
+        tabla: 'mapeo_excel_proveedores',
+        registroId: id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { etiquetaExcel: existe.etiquetaExcel },
+      });
+      return { ok: true };
+    },
+  );
+
+  // Volcar la semana al Excel.
+  //
+  // `simular=true` (el default) NO escribe: devuelve exactamente lo que haría.
+  // Es a propósito — el archivo es el cuaderno de trabajo de la encargada, y
+  // se mira antes de tocarlo.
+  fastify.post(
+    '/admin/excel-proveedores/volcar',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z
+          .object({
+            fecha: z.string().datetime().optional(),
+            simular: z.boolean().default(true),
+            // Pisar lo que ella ya escribió. Requiere pedirlo explícitamente.
+            pisarDiferencias: z.boolean().default(false),
+          })
+          .optional(),
+      },
+    },
+    async (req, reply) => {
+      const b = (req.body ?? {}) as {
+        fecha?: string;
+        simular?: boolean;
+        pisarDiferencias?: boolean;
+      };
+      try {
+        const r = await volcarSemanaProveedores({
+          fecha: b.fecha ? new Date(b.fecha) : undefined,
+          simular: b.simular !== false,
+          pisarDiferencias: b.pisarDiferencias === true,
+        });
+        if (!r.simulado && r.escritas > 0) {
+          await recordAudit({
+            tabla: 'mapeo_excel_proveedores',
+            registroId: '00000000-0000-0000-0000-000000000000',
+            accion: 'UPDATE',
+            usuarioId: req.usuario!.id,
+            valorNuevo: {
+              accion: 'volcado al Excel de proveedores',
+              semana: r.semana,
+              celdas: r.escritas,
+              diferencias: r.diferencias,
+            },
+          });
+        }
+        return r;
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : 'No se pudo volcar' });
+      }
     },
   );
 }
