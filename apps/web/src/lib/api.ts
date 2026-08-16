@@ -302,6 +302,51 @@ export function prefetch(path: string, ttlMs = 5 * 60_000): void {
   });
 }
 
+/**
+ * Baja un archivo del API (Excel, PDF) y dispara el "Guardar como" del browser.
+ *
+ * No se puede resolver con un `<a href>`: el API pide `Authorization: Bearer`,
+ * y una navegación normal no manda ese header — el link daría 401. Así que se
+ * baja por fetch, se arma un blob y se hace click sobre un anchor temporal.
+ *
+ * El nombre sale del `Content-Disposition` que manda el server; `nombrePorDefecto`
+ * es el plan B por si el header viene raro o falta.
+ */
+export async function descargarArchivo(path: string, nombrePorDefecto: string): Promise<void> {
+  const token = getAuthToken();
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'GET',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: token ? 'same-origin' : 'include',
+  });
+  if (!res.ok) {
+    let msg = `No se pudo generar el archivo (${res.status})`;
+    try {
+      const j = (await res.json()) as { error?: string };
+      if (j?.error) msg = j.error;
+    } catch {
+      /* el server no mandó JSON: queda el mensaje genérico */
+    }
+    throw new ApiError(res.status, msg);
+  }
+
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  const m = /filename="?([^";]+)"?/i.exec(cd);
+  const nombre = m?.[1]?.trim() || nombrePorDefecto;
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Liberar el object URL: sin esto el blob queda en memoria hasta recargar la
+  // página, y son archivos de varios MB.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   /** GET con cache cliente. TTL en ms. Devuelve respuesta cacheada si está fresh. */

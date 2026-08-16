@@ -2847,11 +2847,13 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             .optional(),
           // Por defecto solo FINALIZADA (lo que la tabla muestra hoy).
           estado: z.enum(['FINALIZADA', 'ANULADA', 'PROCESADA', 'TODAS']).default('FINALIZADA'),
+          // Mismo resultado en Excel, sin paginar. Ver la nota en /admin/movimientos.
+          formato: z.enum(['json', 'xlsx']).optional(),
           ...paginacionSchema,
         }),
       },
     },
-    async (req) => {
+    async (req, reply) => {
       const q = req.query as {
         q?: string;
         periodo?: PeriodoBusqueda;
@@ -2864,6 +2866,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         estado: 'FINALIZADA' | 'ANULADA' | 'PROCESADA' | 'TODAS';
         page: number;
         pageSize: number;
+        formato?: 'json' | 'xlsx';
       };
 
       // Traducción del bucket a condiciones sobre (canal, modalidad). Espeja
@@ -2972,6 +2975,95 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           ],
         }),
       };
+
+      if (q.formato === 'xlsx') {
+        const TOPE = 5000;
+        const [filas, totalFilas] = await Promise.all([
+          prisma.venta.findMany({
+            where,
+            select: {
+              numero: true,
+              numeroOrdenTurno: true,
+              canal: true,
+              modalidad: true,
+              estado: true,
+              fechaFinalizacion: true,
+              fechaApertura: true,
+              subtotal: true,
+              total: true,
+              descuentoTotal: true,
+              recargoCanal: true,
+              observaciones: true,
+              cliente: { select: { nombre: true, apellido: true } },
+              deliveryInfo: { select: { direccionSnapshot: true } },
+              pagos: { where: { estado: 'CONFIRMADO' }, select: { metodo: true, monto: true } },
+            },
+            orderBy: { fechaApertura: 'desc' },
+            take: TOPE,
+          }),
+          prisma.venta.count({ where }),
+        ]);
+        const buf = await construirExcelBusqueda({
+          titulo: 'Ventas',
+          filtros: descripcionFiltros({
+            periodo: q.periodo,
+            desde: ft.desde,
+            hasta: ft.hasta,
+            texto,
+            extra: [q.estado !== 'TODAS' ? `Estado: ${q.estado}` : null, q.canal ? `Canal: ${q.canal}` : null]
+              .filter(Boolean)
+              .join(' · ') || undefined,
+          }),
+          columnas: [
+            { header: 'N° venta', key: 'numero', tipo: 'numero', width: 12 },
+            { header: 'N° orden', key: 'orden', tipo: 'numero', width: 11 },
+            { header: 'Fecha', key: 'fecha', tipo: 'fecha' },
+            { header: 'Estado', key: 'estado', width: 14 },
+            { header: 'Canal', key: 'canal', width: 16 },
+            { header: 'Modalidad', key: 'modalidad', width: 16 },
+            { header: 'Cliente', key: 'cliente', width: 26 },
+            { header: 'Dirección', key: 'direccion', width: 34 },
+            { header: 'Métodos de pago', key: 'metodos', width: 26 },
+            { header: 'Observaciones', key: 'observaciones', width: 30 },
+            { header: 'Subtotal', key: 'subtotal', tipo: 'dinero' },
+            { header: 'Descuento', key: 'descuento', tipo: 'dinero' },
+            { header: 'Recargo canal', key: 'recargo', tipo: 'dinero' },
+            { header: 'Total', key: 'total', tipo: 'dinero' },
+          ],
+          filas: filas.map((v) => {
+            const dir = v.deliveryInfo?.direccionSnapshot as { direccion?: string } | null;
+            return {
+              numero: v.numero,
+              orden: v.numeroOrdenTurno,
+              fecha: v.fechaFinalizacion ?? v.fechaApertura,
+              estado: v.estado,
+              canal: v.canal,
+              modalidad: v.modalidad,
+              cliente: v.cliente ? [v.cliente.nombre, v.cliente.apellido].filter(Boolean).join(' ') : '',
+              direccion: dir?.direccion ?? '',
+              metodos: [...new Set(v.pagos.map((p) => p.metodo))].join(', '),
+              observaciones: v.observaciones ?? '',
+              subtotal: Number(v.subtotal),
+              descuento: Number(v.descuentoTotal),
+              recargo: Number(v.recargoCanal),
+              total: Number(v.total),
+            };
+          }),
+          totales: [
+            { etiqueta: 'TOTAL VENDIDO', columna: 'total' },
+            { etiqueta: 'Total descuentos', columna: 'descuento' },
+            { etiqueta: 'Cantidad de ventas', valor: filas.length },
+          ],
+          hayMas:
+            totalFilas > filas.length
+              ? { exportadas: filas.length, totales: totalFilas }
+              : undefined,
+        });
+        return reply
+          .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('ventas')}"`)
+          .send(buf);
+      }
 
       const [ventas, total] = await Promise.all([
         prisma.venta.findMany({

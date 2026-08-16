@@ -11,6 +11,11 @@ import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { calcSaldoFactura } from '../services/facturas.js';
 import { normalizarNombre } from '../services/proveedor-match.js';
+import {
+  construirExcelBusqueda,
+  descripcionFiltros,
+  nombreArchivoExport,
+} from '../services/export-busqueda.js';
 import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
 import {
   periodoBusquedaSchema,
@@ -626,10 +631,12 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           ...paginacionSchema,
           // LEGACY: algunos llamadores viejos mandan `limit` sin paginar.
           limit: z.coerce.number().int().min(1).max(200).optional(),
+          // Mismo resultado en Excel, sin paginar. Ver la nota en /admin/movimientos.
+          formato: z.enum(['json', 'xlsx']).optional(),
         }),
       },
     },
-    async (req) => {
+    async (req, reply) => {
       const q = req.query as {
         estado?: string;
         q?: string;
@@ -639,6 +646,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         page: number;
         pageSize: number;
         limit?: number;
+        formato?: 'json' | 'xlsx';
       };
 
       const ft = await resolverFiltroTemporal({
@@ -663,6 +671,108 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           ],
         }),
       };
+
+      if (q.formato === 'xlsx') {
+        const TOPE = 5000;
+        const [filas, totalFilas] = await Promise.all([
+          prisma.facturaRecibida.findMany({
+            where,
+            select: {
+              numero: true,
+              puntoVenta: true,
+              tipoComprobante: true,
+              fechaEmision: true,
+              creadoAt: true,
+              estado: true,
+              origen: true,
+              ocrConfianza: true,
+              netoGravado: true,
+              netoNoGravado: true,
+              iva21: true,
+              iva10_5: true,
+              iva27: true,
+              otrosImpuestos: true,
+              total: true,
+              totalPagado: true,
+              observaciones: true,
+              proveedor: { select: { nombre: true, cuit: true } },
+              _count: { select: { items: true } },
+            },
+            orderBy: { creadoAt: 'desc' },
+            take: TOPE,
+          }),
+          prisma.facturaRecibida.count({ where }),
+        ]);
+        const buf = await construirExcelBusqueda({
+          titulo: 'Facturas recibidas',
+          filtros: descripcionFiltros({
+            periodo: q.periodo,
+            desde: ft.desde,
+            hasta: ft.hasta,
+            texto,
+            extra: q.estado ? `Estado: ${q.estado}` : undefined,
+          }),
+          columnas: [
+            { header: 'Proveedor', key: 'proveedor', width: 32 },
+            { header: 'CUIT', key: 'cuit', width: 16 },
+            { header: 'Tipo', key: 'tipo', width: 10 },
+            { header: 'Punto de venta', key: 'pv', width: 14 },
+            { header: 'Número', key: 'numero', width: 18 },
+            { header: 'Fecha emisión', key: 'fechaEmision', tipo: 'fecha' },
+            { header: 'Cargada el', key: 'creado', tipo: 'fecha' },
+            { header: 'Estado', key: 'estado', width: 22 },
+            { header: 'Origen', key: 'origen', width: 16 },
+            { header: 'Confianza OCR', key: 'confianza', tipo: 'numero', width: 14 },
+            { header: 'Ítems', key: 'items', tipo: 'numero', width: 8 },
+            { header: 'Observaciones', key: 'observaciones', width: 34 },
+            { header: 'Neto gravado', key: 'netoGravado', tipo: 'dinero' },
+            { header: 'Neto no gravado', key: 'netoNoGravado', tipo: 'dinero' },
+            { header: 'IVA', key: 'iva', tipo: 'dinero' },
+            { header: 'Otros impuestos', key: 'otros', tipo: 'dinero' },
+            { header: 'Total', key: 'total', tipo: 'dinero' },
+            { header: 'Pagado', key: 'pagado', tipo: 'dinero' },
+            { header: 'Saldo', key: 'saldo', tipo: 'dinero' },
+          ],
+          filas: filas.map((f) => ({
+            proveedor: f.proveedor?.nombre ?? '',
+            cuit: f.proveedor?.cuit ?? '',
+            tipo: f.tipoComprobante,
+            pv: f.puntoVenta ?? '',
+            numero: f.numero,
+            fechaEmision: f.fechaEmision,
+            creado: f.creadoAt,
+            estado: f.estado,
+            origen: f.origen,
+            confianza: f.ocrConfianza != null ? Number(f.ocrConfianza) : null,
+            items: f._count.items,
+            observaciones: f.observaciones ?? '',
+            netoGravado: Number(f.netoGravado),
+            netoNoGravado: Number(f.netoNoGravado),
+            // Las tres alícuotas se suman en una sola columna: separarlas es
+            // ruido para lo que la encargada mira, y el detalle sigue en la
+            // ficha de la factura.
+            iva: Number(f.iva21) + Number(f.iva10_5) + Number(f.iva27),
+            otros: Number(f.otrosImpuestos),
+            total: Number(f.total),
+            pagado: Number(f.totalPagado),
+            saldo: Number(f.total) - Number(f.totalPagado),
+          })),
+          totales: [
+            { etiqueta: 'TOTAL FACTURADO', columna: 'total' },
+            { etiqueta: 'SALDO A PAGAR', columna: 'saldo' },
+            { etiqueta: 'Total IVA', columna: 'iva' },
+            { etiqueta: 'Cantidad de facturas', valor: filas.length },
+          ],
+          hayMas:
+            totalFilas > filas.length
+              ? { exportadas: filas.length, totales: totalFilas }
+              : undefined,
+        });
+        return reply
+          .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('facturas')}"`)
+          .send(buf);
+      }
 
       // `limit` legacy manda: si vino, no paginamos (compat con la bandeja OCR).
       const pageSize = q.limit ?? q.pageSize;
