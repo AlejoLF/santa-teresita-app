@@ -7,6 +7,11 @@ import { subtotalItem } from '@sta/shared';
 import { recordAudit } from '../services/audit.js';
 import { encolarTicketRemito } from '../services/impresion.js';
 import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
+import {
+  resolverDeltasDeLista,
+  deltaDeModificadores,
+  opcionIdsDeItems,
+} from '../services/deltas-lista.js';
 
 /**
  * MAYORISTAS — Clientes con cuenta corriente.
@@ -51,11 +56,19 @@ async function getCategoriaCobroId(): Promise<string> {
 /** Un ítem del remito no se pudo resolver (producto inexistente, precio faltante). */
 class ItemRemitoError extends Error {}
 
+interface ModificadorEntrada {
+  grupoId?: string;
+  grupoNombre?: string;
+  opcionId?: string;
+  opcionNombre?: string;
+  deltaPrecio?: string;
+}
 interface ItemEntrada {
   productoId?: string;
   nombre: string;
   cantidad: number;
   precioUnitario?: string;
+  modificadores?: ModificadorEntrada[];
 }
 interface ItemsResueltos {
   itemsData: Array<{
@@ -65,6 +78,8 @@ interface ItemsResueltos {
     precioUnitario: string;
     subtotal: string;
     orden: number;
+    modificadoresAplicados: Prisma.InputJsonValue | undefined;
+    deltaModificadores: string;
   }>;
   total: number;
 }
@@ -76,6 +91,11 @@ interface ItemsResueltos {
  * confía en lo que manda el front, se lee el precio efectivo de la lista (o el
  * precio base con el ajuste porcentual). Sólo los ítems libres (sin producto
  * del catálogo) llevan precio manual.
+ *
+ * Los SABORES también: el delta sale de `deltas-lista.ts`, que resuelve el
+ * precio de la opción contra la lista del cliente. Un producto con variantes
+ * (pizzas, ravioles) no tiene un precio solo, y antes el remito lo cargaba
+ * como si lo tuviera.
  *
  * Extraído para que crear y EDITAR un remito usen exactamente el mismo cálculo:
  * si divergen, editar un remito le cambia el total sin que nadie lo pida.
@@ -99,6 +119,7 @@ async function resolverItemsRemito(
       })
     : [];
   const prodMap = new Map(productos.map((p) => [p.id, p]));
+  const deltas = await resolverDeltasDeLista(cliente.listaPreciosId, opcionIdsDeItems(items));
 
   const itemsData: ItemsResueltos['itemsData'] = [];
   let total = 0;
@@ -106,11 +127,14 @@ async function resolverItemsRemito(
     let precioUnitario: number;
     let subtotalStr: string;
     let nombre = it.nombre;
+    let deltaMod = 0;
     if (it.productoId) {
       const p = prodMap.get(it.productoId);
       if (!p) throw new ItemRemitoError(`Producto ${it.productoId} no existe`);
       const override = p.preciosPorLista[0]?.precioEfectivo;
-      precioUnitario = override ? Number(override) : Number(p.precioBase) * (1 + ajustePct / 100);
+      deltaMod = deltaDeModificadores(it.modificadores ?? [], deltas);
+      precioUnitario =
+        (override ? Number(override) : Number(p.precioBase) * (1 + ajustePct / 100)) + deltaMod;
       nombre = p.nombre;
       subtotalStr = subtotalItem({
         cantidad: it.cantidad,
@@ -133,6 +157,10 @@ async function resolverItemsRemito(
       precioUnitario: precioUnitario.toFixed(2),
       subtotal: subtotalStr,
       orden: idx,
+      modificadoresAplicados: it.modificadores?.length
+        ? (it.modificadores as unknown as Prisma.InputJsonValue)
+        : undefined,
+      deltaModificadores: deltaMod.toFixed(2),
     });
   }
   return { itemsData, total };
@@ -381,6 +409,7 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
             cantidad: it.cantidad.toString(),
             precioUnitario: it.precioUnitario.toFixed(2),
             subtotal: it.subtotal.toFixed(2),
+            modificadores: it.modificadoresAplicados ?? null,
           })),
         })),
         cobros: cobros
@@ -424,6 +453,15 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       // encargada armaba la lista y no servía para nada: los precios salían del
       // ajuste % general y aparecían productos que ese cliente no compra.
       const esCustom = cliente.listaPrecios.canalDefault === 'MAYORISTA';
+      // Los modificadores llegan por el tipo de producto o por el producto
+      // puntual: hay que traer los dos y unirlos, igual que /catalogo/productos.
+      const incluirModificadores = {
+        include: {
+          grupoModificador: {
+            include: { opciones: { where: { activa: true }, orderBy: { orden: 'asc' as const } } },
+          },
+        },
+      };
       const productos = await prisma.producto.findMany({
         where: esCustom
           ? { activo: true, preciosPorLista: { some: { listaId: cliente.listaPreciosId } } }
@@ -435,8 +473,17 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
             orderBy: { vigenciaDesde: 'desc' },
             take: 1,
           },
+          tipoProducto: { include: { modificadores: incluirModificadores } },
+          modificadores: incluirModificadores,
         },
       });
+
+      // Deltas de sabor pisados para la lista de este cliente.
+      const overrides = await prisma.deltaOpcionPorLista.findMany({
+        where: { listaId: cliente.listaPreciosId },
+        select: { opcionId: true, deltaPrecio: true },
+      });
+      const overrideMap = new Map(overrides.map((o) => [o.opcionId, o.deltaPrecio.toString()]));
 
       return {
         lista: { id: cliente.listaPrecios.id, nombre: cliente.listaPrecios.nombre },
@@ -445,6 +492,24 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           const precio = override
             ? Number(override)
             : Number(p.precioBase) * (1 + ajustePct / 100);
+          // Sabores del producto, con el precio que tienen EN ESTA LISTA. Sin
+          // esto el remito de un producto con variantes (pizzas, ravioles)
+          // salía con el precio del producto "pelado".
+          const grupos = [...p.modificadores, ...p.tipoProducto.modificadores].map((ma) => {
+            const g = ma.grupoModificador;
+            return {
+              grupoId: g.id,
+              grupoNombre: g.nombre,
+              obligatorio: ma.obligatorioOverride ?? g.obligatorio,
+              tipoSeleccion: g.tipoSeleccion,
+              opciones: g.opciones.map((o) => ({
+                opcionId: o.id,
+                nombre: o.nombre,
+                codigo: o.codigo,
+                deltaPrecio: overrideMap.get(o.id) ?? o.deltaPrecio.toString(),
+              })),
+            };
+          });
           return {
             id: p.id,
             nombre: p.nombre,
@@ -457,6 +522,7 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
             unidadPrecioLabel: p.unidadPrecioLabel,
             formaVenta: p.formaVenta,
             precioUnitario: precio.toFixed(2),
+            grupos,
           };
         }),
       };
@@ -481,6 +547,19 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
                 cantidad: z.coerce.number().positive(),
                 // precioUnitario sólo se usa para ítems libres (sin productoId).
                 precioUnitario: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+                modificadores: z
+                  .array(
+                    z.object({
+                      grupoId: z.string().uuid().optional(),
+                      grupoNombre: z.string().max(80).optional(),
+                      opcionId: z.string().uuid().optional(),
+                      opcionNombre: z.string().max(120).optional(),
+                      // El server lo re-resuelve contra la lista del cliente y
+                      // lo usa sólo como techo — ver deltas-lista.ts.
+                      deltaPrecio: z.string().regex(/^-?\d+(\.\d{1,2})?$/).optional(),
+                    }),
+                  )
+                  .optional(),
               }),
             )
             .min(1),
@@ -492,7 +571,7 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       const b = req.body as {
         fecha?: string;
         observaciones?: string;
-        items: Array<{ productoId?: string; nombre: string; cantidad: number; precioUnitario?: string }>;
+        items: ItemEntrada[];
       };
       const cliente = await prisma.clienteMayorista.findUnique({
         where: { id },
@@ -527,6 +606,19 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         usuarioId: req.usuario!.id,
         valorNuevo: { numero: remito.numero, cliente: cliente.nombre, total: remito.total.toFixed(2) },
       });
+      // Los ítems se auditan DESPUÉS del remito (secuencia mayor): el
+      // replicador aplica por secuencia y la FK del hijo pide que el padre ya
+      // esté en la nube. Sin este audit las filas nunca salían de la caja —
+      // el mismo agujero que tenían los items de venta.
+      for (const it of remito.items) {
+        await recordAudit({
+          tabla: 'remito_items',
+          registroId: it.id,
+          accion: 'INSERT',
+          usuarioId: req.usuario!.id,
+          valorNuevo: { remitoId: remito.id, nombre: it.nombreSnapshot },
+        });
+      }
       return reply.code(201).send(remito);
     },
   );
@@ -565,6 +657,10 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           cantidad: it.cantidad.toString(),
           precioUnitario: it.precioUnitario.toFixed(2),
           subtotal: it.subtotal.toFixed(2),
+          // Los sabores elegidos, para que editar el remito los precargue en
+          // vez de perderlos (y recalcular el total sin ellos).
+          modificadores: it.modificadoresAplicados ?? null,
+          deltaModificadores: it.deltaModificadores.toFixed(2),
         })),
       };
     },
@@ -591,6 +687,19 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
                 nombre: z.string().min(1).max(200),
                 cantidad: z.coerce.number().positive(),
                 precioUnitario: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+                modificadores: z
+                  .array(
+                    z.object({
+                      grupoId: z.string().uuid().optional(),
+                      grupoNombre: z.string().max(80).optional(),
+                      opcionId: z.string().uuid().optional(),
+                      opcionNombre: z.string().max(120).optional(),
+                      // El server lo re-resuelve contra la lista del cliente y
+                      // lo usa sólo como techo — ver deltas-lista.ts.
+                      deltaPrecio: z.string().regex(/^-?\d+(\.\d{1,2})?$/).optional(),
+                    }),
+                  )
+                  .optional(),
               }),
             )
             .min(1),
@@ -633,6 +742,13 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         // Reemplazo completo: borrar + recrear es más simple y seguro que
         // diffear, y el remito es chico. Los ítems no se referencian desde
         // ningún lado, así que no hay nada que se rompa al borrarlos.
+        // Los ids viejos hacen falta para auditar las BAJAS: sin eso la nube
+        // se queda con los ítems anteriores y el remito replicado suma dos
+        // veces (los borrados + los nuevos).
+        const previos = await tx.remitoItem.findMany({
+          where: { remitoId },
+          select: { id: true },
+        });
         await tx.remitoItem.deleteMany({ where: { remitoId } });
         const upd = await tx.remito.update({
           where: { id: remitoId },
@@ -653,6 +769,26 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           valorNuevo: { total: upd.total.toFixed(2), items: upd.items.length },
           tx,
         });
+        for (const prev of previos) {
+          await recordAudit({
+            tabla: 'remito_items',
+            registroId: prev.id,
+            accion: 'DELETE',
+            usuarioId: req.usuario!.id,
+            valorAnterior: { remitoId },
+            tx,
+          });
+        }
+        for (const it of upd.items) {
+          await recordAudit({
+            tabla: 'remito_items',
+            registroId: it.id,
+            accion: 'INSERT',
+            usuarioId: req.usuario!.id,
+            valorNuevo: { remitoId, nombre: it.nombreSnapshot },
+            tx,
+          });
+        }
         return upd;
       });
       return actualizado;

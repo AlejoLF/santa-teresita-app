@@ -1052,7 +1052,14 @@ export interface TicketRemitoPayload {
   direccion?: string;
   estado?: string;
   observaciones?: string;
-  items: Array<{ cantidad: string; nombre: string; precio: string; subtotal: string }>;
+  items: Array<{
+    cantidad: string;
+    nombre: string;
+    precio: string;
+    subtotal: string;
+    /** Sabores elegidos, uno por línea debajo del producto. */
+    modificadores?: Array<{ opcionNombre?: string; grupoNombre?: string }> | null;
+  }>;
   total: string;
   /** ISO — se formatea a DD/MM/YYYY HH:MM en TZ Argentina. */
   fecha: string;
@@ -1106,6 +1113,13 @@ export async function imprimirTicketRemito(
       formatARS(it.subtotal),
     );
     for (const linea of lineas) printer.println(linea);
+    // Sabores debajo del producto, indentados. El precio ya está sumado en el
+    // unitario: acá van para que quien recibe sepa QUÉ le entregaron.
+    for (const m of it.modificadores ?? []) {
+      const nombre = m.opcionNombre?.trim();
+      if (!nombre) continue;
+      printer.println(`   > ${limpiar(nombre)}`);
+    }
   }
   printer.drawLine();
 

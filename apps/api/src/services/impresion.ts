@@ -1186,6 +1186,9 @@ export async function encolarTicketRemito(
       nombre: it.nombreSnapshot,
       precio: Number(it.precioUnitario).toFixed(2),
       subtotal: Number(it.subtotal).toFixed(2),
+      modificadores: (it.modificadoresAplicados ?? null) as
+        | Array<{ opcionNombre?: string; grupoNombre?: string }>
+        | null,
     })),
     total: Number(remito.total).toFixed(2),
     // ISO — el renderer del local-agent lo formatea como DD/MM/YYYY HH:MM AR.
