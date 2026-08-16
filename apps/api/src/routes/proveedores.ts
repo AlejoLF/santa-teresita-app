@@ -16,6 +16,12 @@ import {
   leerEtiquetasDelExcel,
 } from '../services/excel-proveedores.js';
 import {
+  importarCompras,
+  volcarCantidadesCompras,
+  actualizarPrecioEnExcel,
+} from '../services/excel-compras.js';
+import { detectarAumentos, textoAlerta } from '../services/alertas-precio.js';
+import {
   construirExcelBusqueda,
   descripcionFiltros,
   nombreArchivoExport,
@@ -382,7 +388,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
 
       const fechaEm = new Date(body.fechaEmision);
 
-      const created = await prisma.$transaction(async (tx) => {
+      const createdTx = await prisma.$transaction(async (tx) => {
         const factura = await tx.facturaRecibida.create({
           data: {
             proveedorId: body.proveedorId,
@@ -416,34 +422,19 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           },
         });
 
-        // Actualizar precio último por insumo+proveedor (si la factura es la más reciente vista)
-        for (const it of body.items) {
-          if (!it.insumoId) continue;
-          const existing = await tx.insumoProveedor.findUnique({
-            where: { insumoId_proveedorId: { insumoId: it.insumoId, proveedorId: body.proveedorId } },
-          });
-          if (!existing || !existing.fechaUltimoPrecio || existing.fechaUltimoPrecio < fechaEm) {
-            await tx.insumoProveedor.upsert({
-              where: {
-                insumoId_proveedorId: { insumoId: it.insumoId, proveedorId: body.proveedorId },
-              },
-              create: {
-                insumoId: it.insumoId,
-                proveedorId: body.proveedorId,
-                precioUltimo: it.precioUnitario,
-                fechaUltimoPrecio: fechaEm,
-                esPrincipal: false,
-              },
-              update: {
-                precioUltimo: it.precioUnitario,
-                fechaUltimoPrecio: fechaEm,
-              },
-            });
-          }
-        }
+        // El precio de cada insumo YA NO se pisa en silencio. Acá había un
+        // upsert que actualizaba `precioUltimo` sin avisarle a nadie: si el
+        // OCR leía mal, o venía otra presentación, el costo quedaba mal y no
+        // se descubría hasta que la rentabilidad no cerraba, meses después.
+        //
+        // Ahora `detectarAumentos` fija el precio sólo cuando NO había uno
+        // anterior (primera compra, no hay nada que avisar) y en cualquier
+        // otro caso deja un aviso PENDIENTE para que lo apruebe una persona.
+        const avisos = await detectarAumentos({ facturaId: factura.id, tx });
 
-        return factura;
+        return { factura, avisos };
       });
+      const { factura: created, avisos } = createdTx;
 
       await recordAudit({
         tabla: 'facturas_recibidas',
@@ -456,7 +447,11 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           itemsCount: body.items.length,
         },
       });
-      return reply.code(201).send(created);
+      return reply.code(201).send({
+        ...created,
+        // Lo que la pantalla tiene que mostrarle a la encargada apenas guarda.
+        avisosPrecio: avisos.map((a) => ({ ...a, mensaje: textoAlerta(a) })),
+      });
     },
   );
 
@@ -933,8 +928,9 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
 
   // POST /admin/facturas/:id/validar — el humano ACEPTA la factura leída por
   // OCR. PENDIENTE_VALIDACION → PENDIENTE_PAGO. Marca validadaAt + quién.
-  // Actualiza precio último por insumo (si hay items linkeados). NO genera
-  // ningún pago ni movimiento de cuenta — eso es el flujo de pago aparte.
+  // Si algún insumo vino más caro que la última vez, deja un AVISO pendiente
+  // (no actualiza el precio solo). NO genera ningún pago ni movimiento de
+  // cuenta — eso es el flujo de pago aparte.
   fastify.post(
     '/admin/facturas/:id/validar',
     {
@@ -955,6 +951,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         return reply.code(409).send({ error: 'La factura no está pendiente de validación', estado: factura.estado });
       }
 
+      let avisos: Awaited<ReturnType<typeof detectarAumentos>> = [];
       await prisma.$transaction(async (tx) => {
         await tx.facturaRecibida.update({
           where: { id },
@@ -964,23 +961,10 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
             usuarioValidacionId: req.usuario!.id,
           },
         });
-        // Precio último por insumo+proveedor (solo items linkeados a un insumo).
-        for (const it of factura.items) {
-          if (!it.insumoId) continue;
-          const existing = await tx.insumoProveedor.findUnique({
-            where: { insumoId_proveedorId: { insumoId: it.insumoId, proveedorId: factura.proveedorId } },
-          });
-          if (!existing || !existing.fechaUltimoPrecio || existing.fechaUltimoPrecio < factura.fechaEmision) {
-            await tx.insumoProveedor.upsert({
-              where: { insumoId_proveedorId: { insumoId: it.insumoId, proveedorId: factura.proveedorId } },
-              create: {
-                insumoId: it.insumoId, proveedorId: factura.proveedorId,
-                precioUltimo: it.precioUnitario, fechaUltimoPrecio: factura.fechaEmision, esPrincipal: false,
-              },
-              update: { precioUltimo: it.precioUnitario, fechaUltimoPrecio: factura.fechaEmision },
-            });
-          }
-        }
+        // El precio ya no se pisa en silencio: si el insumo tenía uno
+        // anterior, esto deja un aviso PENDIENTE en vez de actualizarlo.
+        // Es el mismo criterio que en el alta manual — ver alertas-precio.ts.
+        avisos = await detectarAumentos({ facturaId: id, tx });
         await recordAudit({
           tabla: 'facturas_recibidas',
           registroId: id,
@@ -991,7 +975,12 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           tx,
         });
       });
-      return reply.send({ ok: true, id, estado: 'PENDIENTE_PAGO' });
+      return reply.send({
+        ok: true,
+        id,
+        estado: 'PENDIENTE_PAGO',
+        avisosPrecio: avisos.map((a) => ({ ...a, mensaje: textoAlerta(a) })),
+      });
     },
   );
 
@@ -2262,6 +2251,223 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       } catch (e) {
         return reply.code(400).send({ error: e instanceof Error ? e.message : 'No se pudo volcar' });
       }
+    },
+  );
+
+  // ══════════════════════════════════════════════════════════════════════
+  //   Hoja `Compras` — catálogo de compra y cantidades por semana
+  // ══════════════════════════════════════════════════════════════════════
+
+  // Traer proveedores y productos de la hoja al sistema. Idempotente: se
+  // identifica cada insumo por (proveedor, nombre en el Excel), así que
+  // correrlo de nuevo actualiza en vez de duplicar.
+  fastify.post(
+    '/admin/excel-compras/importar',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { body: z.object({ simular: z.boolean().default(true) }).optional() },
+    },
+    async (req, reply) => {
+      const simular = (req.body as { simular?: boolean } | undefined)?.simular !== false;
+      try {
+        const r = await importarCompras({ simular });
+        if (!simular) {
+          await recordAudit({
+            tabla: 'insumos',
+            registroId: '00000000-0000-0000-0000-000000000000',
+            accion: 'INSERT',
+            usuarioId: req.usuario!.id,
+            valorNuevo: {
+              accion: 'import de la hoja Compras',
+              creados: r.insumosCreados,
+              actualizados: r.insumosActualizados,
+              proveedoresNuevos: r.proveedoresNuevos.length,
+            },
+          });
+        }
+        return r;
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : 'No se pudo importar' });
+      }
+    },
+  );
+
+  // Volcar a la hoja las cantidades compradas de la semana.
+  fastify.post(
+    '/admin/excel-compras/volcar',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z
+          .object({
+            fecha: z.string().datetime().optional(),
+            simular: z.boolean().default(true),
+            pisarDiferencias: z.boolean().default(false),
+          })
+          .optional(),
+      },
+    },
+    async (req, reply) => {
+      const b = (req.body ?? {}) as {
+        fecha?: string;
+        simular?: boolean;
+        pisarDiferencias?: boolean;
+      };
+      try {
+        return await volcarCantidadesCompras({
+          fecha: b.fecha ? new Date(b.fecha) : undefined,
+          simular: b.simular !== false,
+          pisarDiferencias: b.pisarDiferencias === true,
+        });
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : 'No se pudo volcar' });
+      }
+    },
+  );
+
+  // ══════════════════════════════════════════════════════════════════════
+  //   Avisos de aumento de precio
+  // ══════════════════════════════════════════════════════════════════════
+
+  fastify.get(
+    '/admin/alertas-precio',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        querystring: z.object({
+          estado: z.enum(['PENDIENTE', 'APROBADA', 'RECHAZADA']).optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const { estado } = req.query as { estado?: 'PENDIENTE' | 'APROBADA' | 'RECHAZADA' };
+      const alertas = await prisma.alertaPrecioInsumo.findMany({
+        where: { estado: estado ?? 'PENDIENTE' },
+        orderBy: [{ detectadaAt: 'desc' }],
+        take: 200,
+        include: {
+          insumo: { select: { id: true, nombre: true, presentacion: true } },
+          proveedor: { select: { id: true, nombre: true } },
+        },
+      });
+      return {
+        alertas: alertas.map((a) => {
+          const datos = {
+            insumoNombre: a.insumo.nombre,
+            variacionPct: Number(a.variacionPct),
+            precioAnterior: Number(a.precioAnterior),
+            precioNuevo: Number(a.precioNuevo),
+          };
+          return {
+            id: a.id,
+            ...datos,
+            presentacion: a.insumo.presentacion,
+            proveedor: a.proveedor.nombre,
+            estado: a.estado,
+            detectadaAt: a.detectadaAt,
+            aplicadaEnExcel: a.aplicadaEnExcel,
+            // El texto ya armado: que la pantalla no lo re-invente distinto.
+            mensaje: textoAlerta(datos),
+          };
+        }),
+      };
+    },
+  );
+
+  // Aprobar o rechazar. Aprobar es lo ÚNICO que mueve el precio del sistema.
+  fastify.post(
+    '/admin/alertas-precio/:id/resolver',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          aprobar: z.boolean(),
+          // Actualizar también la columna Precio de la hoja `Compras`. Default
+          // true: si el Excel queda con el precio viejo, la encargada sigue
+          // pidiendo con ese numero y el aviso no sirvió de nada.
+          actualizarExcel: z.boolean().default(true),
+          observaciones: z.string().max(500).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const b = req.body as { aprobar: boolean; actualizarExcel: boolean; observaciones?: string };
+      const alerta = await prisma.alertaPrecioInsumo.findUnique({
+        where: { id },
+        include: {
+          insumo: { select: { id: true, nombre: true, nombreExcelCompras: true } },
+          proveedor: { select: { id: true, nombre: true } },
+        },
+      });
+      if (!alerta) return reply.code(404).send({ error: 'Aviso no encontrado' });
+      if (alerta.estado !== 'PENDIENTE') {
+        return reply.code(400).send({ error: 'Ese aviso ya estaba resuelto' });
+      }
+
+      let refExcel: string | null = null;
+      if (b.aprobar) {
+        await prisma.insumoProveedor.upsert({
+          where: {
+            insumoId_proveedorId: { insumoId: alerta.insumoId, proveedorId: alerta.proveedorId },
+          },
+          create: {
+            insumoId: alerta.insumoId,
+            proveedorId: alerta.proveedorId,
+            precioUltimo: alerta.precioNuevo.toFixed(2),
+            fechaUltimoPrecio: new Date(),
+          },
+          update: { precioUltimo: alerta.precioNuevo.toFixed(2), fechaUltimoPrecio: new Date() },
+        });
+
+        // El Excel va DESPUÉS y en su propio try: si el archivo no está a mano
+        // (la carpeta de Drive no montada, el archivo abierto), el precio del
+        // sistema ya quedó bien y no se pierde la decisión de la encargada.
+        if (b.actualizarExcel && alerta.insumo.nombreExcelCompras) {
+          try {
+            const r = await actualizarPrecioEnExcel({
+              proveedorNombre: alerta.proveedor.nombre,
+              nombreExcel: alerta.insumo.nombreExcelCompras,
+              precioNuevo: Number(alerta.precioNuevo),
+            });
+            refExcel = r?.ref ?? null;
+          } catch {
+            refExcel = null;
+          }
+        }
+      }
+
+      const actualizada = await prisma.alertaPrecioInsumo.update({
+        where: { id },
+        data: {
+          estado: b.aprobar ? 'APROBADA' : 'RECHAZADA',
+          resueltaAt: new Date(),
+          usuarioId: req.usuario!.id,
+          aplicadaEnExcel: Boolean(refExcel),
+          observaciones: b.observaciones ?? null,
+        },
+      });
+      await recordAudit({
+        tabla: 'alertas_precio_insumo',
+        registroId: id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { estado: 'PENDIENTE', precio: alerta.precioAnterior.toFixed(2) },
+        valorNuevo: {
+          estado: actualizada.estado,
+          precio: alerta.precioNuevo.toFixed(2),
+          insumo: alerta.insumo.nombre,
+          celdaExcel: refExcel,
+        },
+      });
+      return {
+        ...actualizada,
+        celdaExcel: refExcel,
+        avisoExcel: b.aprobar && b.actualizarExcel && !refExcel
+          ? 'El precio se actualizó en el sistema, pero no se pudo escribir en el Excel. Revisá que el archivo esté accesible.'
+          : null,
+      };
     },
   );
 }

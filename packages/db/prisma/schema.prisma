@@ -340,8 +340,9 @@ model Usuario {
 
   cambiosExcelAplicados AprobacionExcel[] @relation("AprobacionAplicadaPor")
 
-  auditEntries AuditLog[]
-  sessions     AuthSession[]
+  auditEntries  AuditLog[]
+  sessions      AuthSession[]
+  alertasPrecio AlertaPrecioInsumo[]
 
   @@index([rol, activo])
   @@map("usuarios")
@@ -1332,6 +1333,7 @@ model Proveedor {
   facturas         FacturaRecibida[]
   alias            ProveedorAlias[]
   mapeosExcel      MapeoExcelProveedor[]
+  alertasPrecio    AlertaPrecioInsumo[]
 
   @@index([activo])
   @@map("proveedores")
@@ -1369,6 +1371,14 @@ model ProveedorAlias {
 model Insumo {
   id                   String          @id @default(uuid()) @db.Uuid
   nombre               String          @db.VarChar(160)
+  /// Nombre EXACTO con el que figura en la columna A de la hoja `Compras` del
+  /// Excel de la encargada. Es lo que permite volver a encontrar su fila para
+  /// escribirle las cantidades compradas.
+  ///
+  /// Se guarda el nombre y no el numero de fila a proposito: la hoja tiene 338
+  /// productos agrupados por proveedor y ella inserta filas nuevas seguido. Un
+  /// numero de fila queda viejo al primer agregado; el nombre no.
+  nombreExcelCompras   String?         @map("nombre_excel_compras") @db.VarChar(160)
   categoria            CategoriaInsumo
   unidadCompra         UnidadCompra    @map("unidad_compra")
   presentacion         String?         @db.VarChar(160)
@@ -1381,9 +1391,55 @@ model Insumo {
   proveedorPrincipal Proveedor?            @relation("InsumoProveedorPrincipal", fields: [proveedorPrincipalId], references: [id])
   proveedoresVinculo InsumoProveedor[]
   facturasItem       FacturaItemRecibida[]
+  alertasPrecio      AlertaPrecioInsumo[]
 
   @@index([categoria, activo])
+  @@index([proveedorPrincipalId, nombreExcelCompras])
   @@map("insumos")
+}
+
+enum EstadoAlertaPrecio {
+  PENDIENTE
+  APROBADA
+  RECHAZADA
+}
+
+/// "Este producto aumento un X%": el aviso que se le da a la encargada cuando
+/// una factura trae un insumo mas caro que la ultima vez.
+///
+/// El precio NO se actualiza solo. Un aumento puede ser real, pero tambien
+/// puede ser que el OCR leyo mal, que vino otra presentacion, o que la factura
+/// trae un recargo puntual. Actualizar en silencio ensucia el costo de todos
+/// los productos y nadie se entera hasta que la rentabilidad no cierra. Por eso
+/// queda PENDIENTE hasta que alguien lo aprueba, y recien ahi se toca el precio
+/// del sistema y el del Excel.
+model AlertaPrecioInsumo {
+  id              String             @id @default(uuid()) @db.Uuid
+  insumoId        String             @map("insumo_id") @db.Uuid
+  proveedorId     String             @map("proveedor_id") @db.Uuid
+  /// El item de factura que disparo el aviso. Es la prueba: sin el, la alerta
+  /// dice "aumento" y no se puede ver de donde salio.
+  facturaItemId   String?            @map("factura_item_id") @db.Uuid
+  precioAnterior  Decimal            @map("precio_anterior") @db.Decimal(18, 4)
+  precioNuevo     Decimal            @map("precio_nuevo") @db.Decimal(18, 4)
+  /// Variacion porcentual. Negativa si bajo (tambien se avisa: una baja
+  /// inesperada suele ser un error de lectura o un cambio de presentacion).
+  variacionPct    Decimal            @map("variacion_pct") @db.Decimal(9, 4)
+  estado          EstadoAlertaPrecio @default(PENDIENTE)
+  detectadaAt     DateTime           @default(now()) @map("detectada_at")
+  resueltaAt      DateTime?          @map("resuelta_at")
+  usuarioId       String?            @map("usuario_id") @db.Uuid
+  /// Que se hizo al aprobar: si se escribio tambien en el Excel.
+  aplicadaEnExcel Boolean            @default(false) @map("aplicada_en_excel")
+  observaciones   String?
+
+  insumo    Insumo    @relation(fields: [insumoId], references: [id], onDelete: Cascade)
+  proveedor Proveedor @relation(fields: [proveedorId], references: [id], onDelete: Cascade)
+  usuario   Usuario?  @relation(fields: [usuarioId], references: [id])
+
+  @@index([estado, detectadaAt])
+  @@index([insumoId])
+  @@map("alertas_precio_insumo")
 }
 
 model InsumoProveedor {
