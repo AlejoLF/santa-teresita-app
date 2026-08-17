@@ -1050,6 +1050,9 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           q: z.string().optional(),
           proveedorId: z.string().uuid().optional(),
           categoria: z.string().optional(),
+          // Sin esto, desactivar un insumo desde la ficha del proveedor lo
+          // hacía desaparecer de la lista y no había forma de reactivarlo.
+          incluirInactivos: queryBool(),
           limit: z.coerce.number().int().min(1).max(500).default(200),
         }),
       },
@@ -1059,11 +1062,12 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         q?: string;
         proveedorId?: string;
         categoria?: string;
+        incluirInactivos?: boolean;
         limit: number;
       };
       const insumos = await prisma.insumo.findMany({
         where: {
-          activo: true,
+          ...(q.incluirInactivos ? {} : { activo: true }),
           // Multi-campo: nombre, presentación, observaciones y el nombre del
           // proveedor que lo vende (así "buscar por proveedor" trae sus insumos).
           ...(q.q && {
@@ -1141,9 +1145,14 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           return {
             id: i.id,
             nombre: i.nombre,
+            activo: i.activo,
             categoria: i.categoria,
             unidadCompra: i.unidadCompra,
             presentacion: i.presentacion,
+            // El nombre con el que figura en la hoja `Compras`: es lo que ata
+            // el insumo a su fila del Excel. Si está vacío, las cantidades
+            // compradas no se le van a poder escribir.
+            nombreExcelCompras: i.nombreExcelCompras,
             stockActual: i.stockActual.toString(),
             stockMinimo: i.stockMinimo?.toString() ?? null,
             proveedorPrincipal: i.proveedorPrincipal,
@@ -2468,6 +2477,183 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           ? 'El precio se actualizó en el sistema, pero no se pudo escribir en el Excel. Revisá que el archivo esté accesible.'
           : null,
       };
+    },
+  );
+
+  // PATCH /admin/insumos-catalogo/:id — editar un insumo desde la pestaña
+  // "Insumos" de la ficha del proveedor.
+  //
+  // El PRECIO no es del insumo sino del vínculo insumo-proveedor: el mismo
+  // producto puede costar distinto según a quién se le compre. Por eso se pasa
+  // `proveedorId` junto con `precio` — sin eso no se sabría qué precio se está
+  // editando.
+  fastify.patch(
+    '/admin/insumos-catalogo/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          nombre: z.string().min(1).max(160).optional(),
+          categoria: z.enum(['VERDULERIA','LACTEOS','CARNES','POLLO','HUEVOS','HARINAS','CONDIMENTOS','ENVASES','LIMPIEZA','BEBIDAS','SIN_TACC','POSTRES','OTROS']).optional(),
+          unidadCompra: z.enum(['KG','GRAMOS','UNIDAD','LITRO','CAJA','BOLSA','PAQUETE','DOCENA','OTRO']).optional(),
+          presentacion: z.string().max(160).nullable().optional(),
+          observaciones: z.string().max(1000).nullable().optional(),
+          activo: z.boolean().optional(),
+          stockMinimo: z.string().regex(/^\d+(\.\d{1,3})?$/).nullable().optional(),
+          // Precio para un proveedor puntual.
+          proveedorId: z.string().uuid().optional(),
+          precio: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const b = req.body as Record<string, unknown> & {
+        proveedorId?: string;
+        precio?: string;
+      };
+      const previo = await prisma.insumo.findUnique({
+        where: { id },
+        select: { id: true, nombre: true, presentacion: true, unidadCompra: true, categoria: true },
+      });
+      if (!previo) return reply.code(404).send({ error: 'Insumo no encontrado' });
+
+      if (b.precio !== undefined && !b.proveedorId) {
+        return reply.code(400).send({
+          error: 'Para cambiar el precio hace falta decir de qué proveedor es.',
+        });
+      }
+
+      const datos: Record<string, unknown> = {};
+      for (const campo of [
+        'nombre',
+        'categoria',
+        'unidadCompra',
+        'presentacion',
+        'observaciones',
+        'activo',
+        'stockMinimo',
+      ]) {
+        if (b[campo] !== undefined) datos[campo] = b[campo];
+      }
+
+      const actualizado = await prisma.$transaction(async (tx) => {
+        const ins = Object.keys(datos).length
+          ? await tx.insumo.update({ where: { id }, data: datos })
+          : await tx.insumo.findUniqueOrThrow({ where: { id } });
+
+        if (b.precio !== undefined && b.proveedorId) {
+          await tx.insumoProveedor.upsert({
+            where: { insumoId_proveedorId: { insumoId: id, proveedorId: b.proveedorId } },
+            create: {
+              insumoId: id,
+              proveedorId: b.proveedorId,
+              precioUltimo: b.precio,
+              fechaUltimoPrecio: new Date(),
+            },
+            update: { precioUltimo: b.precio, fechaUltimoPrecio: new Date() },
+          });
+          // Un precio corregido a mano cierra el aviso pendiente de ese insumo:
+          // si no, la encargada arregla el precio y el aviso le queda ahí
+          // reclamando algo que ya resolvió.
+          await tx.alertaPrecioInsumo.updateMany({
+            where: { insumoId: id, proveedorId: b.proveedorId, estado: 'PENDIENTE' },
+            data: {
+              estado: 'APROBADA',
+              resueltaAt: new Date(),
+              usuarioId: req.usuario!.id,
+              observaciones: 'Resuelto al editar el precio a mano desde la ficha del proveedor',
+            },
+          });
+        }
+        return ins;
+      });
+
+      await recordAudit({
+        tabla: 'insumos',
+        registroId: id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: previo.nombre, presentacion: previo.presentacion },
+        valorNuevo: { ...datos, ...(b.precio ? { precio: b.precio } : {}) },
+      });
+      return actualizado;
+    },
+  );
+
+  // Vincular un insumo YA EXISTENTE a este proveedor (con su precio).
+  // Sirve cuando el mismo producto se le empieza a comprar a otro.
+  fastify.post(
+    '/admin/proveedores/:id/insumos',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          insumoId: z.string().uuid(),
+          precio: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+          esPrincipal: z.boolean().default(false),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const b = req.body as { insumoId: string; precio?: string; esPrincipal: boolean };
+      const insumo = await prisma.insumo.findUnique({ where: { id: b.insumoId } });
+      if (!insumo) return reply.code(404).send({ error: 'Insumo no encontrado' });
+
+      const v = await prisma.insumoProveedor.upsert({
+        where: { insumoId_proveedorId: { insumoId: b.insumoId, proveedorId: id } },
+        create: {
+          insumoId: b.insumoId,
+          proveedorId: id,
+          precioUltimo: b.precio ?? null,
+          fechaUltimoPrecio: b.precio ? new Date() : null,
+          esPrincipal: b.esPrincipal,
+        },
+        update: {
+          ...(b.precio ? { precioUltimo: b.precio, fechaUltimoPrecio: new Date() } : {}),
+          esPrincipal: b.esPrincipal,
+        },
+      });
+      await recordAudit({
+        tabla: 'insumo_proveedores',
+        registroId: `${b.insumoId}:${id}`,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { insumo: insumo.nombre, precio: b.precio ?? null },
+      });
+      return v;
+    },
+  );
+
+  // Desvincular un insumo de este proveedor. No borra el insumo: puede seguir
+  // comprandose a otro.
+  fastify.delete(
+    '/admin/proveedores/:id/insumos/:insumoId',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid(), insumoId: z.string().uuid() }),
+      },
+    },
+    async (req, reply) => {
+      const { id, insumoId } = req.params as { id: string; insumoId: string };
+      const existe = await prisma.insumoProveedor.findUnique({
+        where: { insumoId_proveedorId: { insumoId, proveedorId: id } },
+      });
+      if (!existe) return reply.code(404).send({ error: 'Ese insumo no está vinculado a este proveedor' });
+      await prisma.insumoProveedor.delete({
+        where: { insumoId_proveedorId: { insumoId, proveedorId: id } },
+      });
+      await recordAudit({
+        tabla: 'insumo_proveedores',
+        registroId: `${insumoId}:${id}`,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+      });
+      return { ok: true };
     },
   );
 }

@@ -10,6 +10,7 @@ import {
   type InsumoSuggestion,
 } from '@/components/admin/InsumoAutocomplete';
 import { cn } from '@/lib/cn';
+import { InsumosDelProveedor } from '@/components/admin/InsumosDelProveedor';
 
 interface Proveedor {
   id: string;
@@ -59,6 +60,9 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
+  // Cuenta corriente (lo que se le debe) e Insumos (lo que se le compra) son
+  // dos cosas distintas y la ficha se hacía larguísima con las dos juntas.
+  const [pestana, setPestana] = useState<'cuenta' | 'insumos'>('cuenta');
 
   const fetchData = useCallback(async () => {
     try {
@@ -128,6 +132,33 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
         </div>
       </header>
 
+      {/* Pestañas */}
+      <nav className="flex gap-1 border-b border-cream-300" role="tablist">
+        {([
+          ['cuenta', 'Cuenta corriente'],
+          ['insumos', 'Insumos'],
+        ] as const).map(([clave, label]) => (
+          <button
+            key={clave}
+            role="tab"
+            aria-selected={pestana === clave}
+            onClick={() => setPestana(clave)}
+            className={cn(
+              'px-4 py-2 text-sm border-b-2 -mb-px transition-colors',
+              pestana === clave
+                ? 'border-teresita-700 text-teresita-800 font-medium'
+                : 'border-transparent text-ink-500 hover:text-ink-700',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {pestana === 'insumos' && <InsumosDelProveedor proveedorId={id} />}
+
+      {pestana === 'cuenta' && (
+        <>
       {/* Facturas pendientes */}
       <section className="card overflow-hidden">
         <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken flex items-center justify-between">
@@ -462,6 +493,9 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
             ))}
           </div>
         </section>
+      )}
+
+        </>
       )}
 
       {showForm && (

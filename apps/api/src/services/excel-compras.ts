@@ -359,22 +359,26 @@ export async function importarCompras(opts: {
           })
         ).id;
 
-      if (p.precio != null) {
-        res.preciosCargados += 1;
-        await prisma.insumoProveedor.upsert({
-          where: { insumoId_proveedorId: { insumoId, proveedorId: prov.id } },
-          create: {
-            insumoId,
-            proveedorId: prov.id,
-            precioUltimo: p.precio.toFixed(2),
-            fechaUltimoPrecio: new Date(),
-            esPrincipal: true,
-          },
-          // El precio del Excel NO pisa uno que ya venga de una factura: la
-          // factura es el dato duro y la hoja puede estar desactualizada.
-          update: {},
-        });
-      }
+      // El vínculo insumo-proveedor se crea SIEMPRE, tenga precio o no.
+      //
+      // Antes se creaba sólo si la hoja traía precio, y eso dejaba un
+      // catch-22: el producto sin precio no aparecía en la pestaña "Insumos"
+      // del proveedor —que filtra por vínculo— o sea justo en la pantalla
+      // donde alguien iría a cargarle el precio que le falta.
+      if (p.precio != null) res.preciosCargados += 1;
+      await prisma.insumoProveedor.upsert({
+        where: { insumoId_proveedorId: { insumoId, proveedorId: prov.id } },
+        create: {
+          insumoId,
+          proveedorId: prov.id,
+          precioUltimo: p.precio != null ? p.precio.toFixed(2) : null,
+          fechaUltimoPrecio: p.precio != null ? new Date() : null,
+          esPrincipal: true,
+        },
+        // El precio del Excel NO pisa uno que ya venga de una factura: la
+        // factura es el dato duro y la hoja puede estar desactualizada.
+        update: {},
+      });
     }
   }
   return res;
