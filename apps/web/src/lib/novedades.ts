@@ -46,6 +46,10 @@ export const NOVEDADES: Novedad[] = [
       'El remito de un mayorista sólo ofrece los productos que están en la lista de ese cliente, no todo el catálogo.',
       'El cobro a un mayorista ahora entra en la caja del turno, así que aparece en el cierre.',
       'En el ticket de una venta cancelada, el cartel "CANCELADA" se ve mucho más grande y en negativo — no se pasa por alto.',
+      'Aviso de aumentos: cuando llega una factura con un producto más caro que la última vez, el sistema te avisa en vez de cambiar el precio solo. Lo ves en Insumos y proveedores → Avisos de precio, con el precio de antes, el de ahora y cuánto subió, y ahí decidís si lo aprobás o no. Si lo aprobás, se actualiza el precio del programa y también el del Excel.',
+      'En Insumos y proveedores hay una pestaña nueva "Excel" para pasar al archivo de Drive lo que el sistema ya sabe: lo que llegó y lo que se pagó de cada proveedor en la semana, y las cantidades compradas de cada producto. Siempre te muestra primero qué va a escribir, y recién si estás de acuerdo lo escribe.',
+      'Nunca pisa lo que vos hayas escrito a mano: si una celda no coincide con lo que calculó, te la marca y la deja como está.',
+      'Al entrar a cada proveedor hay una pestaña "Insumos" con todos sus productos, la presentación, la unidad y el precio, y los podés editar ahí mismo.',
     ],
   },
   {

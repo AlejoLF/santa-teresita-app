@@ -534,6 +534,43 @@ export async function volcarCantidadesCompras(opts: {
  * que quedar diciendo lo mismo, si no la encargada sigue pidiendo con el
  * precio viejo.
  */
+/**
+ * Con qué reemplazar la celda de precio, respetando cómo la escribió ella.
+ *
+ * La encargada no carga el precio final: carga el neto y le suma el IVA en la
+ * misma celda (`=115850*1.21`). Pisar eso con el número pelado le saca de la
+ * vista el neto —el número con el que realmente negocia con el proveedor— y
+ * cada aumento aprobado degradaría una celda más, hasta que la columna entera
+ * queda sin rastro de cómo se formó.
+ *
+ * Así que si la celda tenía una fórmula `neto * coeficiente`, se reescribe con
+ * el mismo coeficiente y el neto nuevo. Sólo si el neto da exacto a los
+ * centavos: si no cierra, vale más el número correcto que la forma linda, y se
+ * escribe el precio pelado.
+ */
+export function valorParaPrecio(
+  valorPrevio: ExcelJS.CellValue,
+  precioNuevo: number,
+): EdicionCelda['valor'] {
+  const formula =
+    valorPrevio && typeof valorPrevio === 'object' && 'formula' in valorPrevio
+      ? String((valorPrevio as { formula: string }).formula)
+      : null;
+  const m = formula?.match(/^\s*=?\s*([0-9]+(?:\.[0-9]+)?)\s*\*\s*([0-9]+(?:\.[0-9]+)?)\s*$/);
+  if (m) {
+    const coef = Number(m[2]);
+    if (coef > 0) {
+      const neto = Math.round((precioNuevo / coef) * 100) / 100;
+      // Round-trip: si el neto redondeado no reproduce el precio al centavo,
+      // la fórmula mentiría por una fracción y eso es peor que perder la forma.
+      if (Math.abs(neto * coef - precioNuevo) < 0.005) {
+        return { tipo: 'formula', formula: `${neto}*${m[2]}`, resultado: precioNuevo };
+      }
+    }
+  }
+  return { tipo: 'numero', valor: precioNuevo };
+}
+
 export async function actualizarPrecioEnExcel(args: {
   proveedorNombre: string;
   nombreExcel: string;
@@ -553,7 +590,7 @@ export async function actualizarPrecioEnExcel(args: {
     await editarHojaXlsx({
       archivo: ruta,
       hoja: HOJA,
-      ediciones: [{ ref, valor: { tipo: 'numero', valor: args.precioNuevo } }],
+      ediciones: [{ ref, valor: valorParaPrecio(ws.getCell(ref).value, args.precioNuevo) }],
     });
     return { ref };
   }

@@ -2371,6 +2371,10 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
             id: a.id,
             ...datos,
             presentacion: a.insumo.presentacion,
+            // Los ids, para que la pantalla pueda linkear a la ficha del
+            // proveedor sin tener que adivinarla por el nombre.
+            insumoId: a.insumoId,
+            proveedorId: a.proveedorId,
             proveedor: a.proveedor.nombre,
             estado: a.estado,
             detectadaAt: a.detectadaAt,

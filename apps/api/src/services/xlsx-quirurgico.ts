@@ -218,7 +218,12 @@ export async function editarHojaXlsx(opts: {
 
   if (opts.simular) return { hojaXml: ruta, celdasEscritas: opts.ediciones.length };
 
-  zip.file(ruta, nuevo);
+  // `createFolders: false`: sin esto JSZip agrega entradas de carpeta ("xl/",
+  // "xl/worksheets/") que el archivo original no tenía. Excel las ignora, pero
+  // el punto de este módulo es que el .xlsx salga con exactamente las mismas
+  // partes que entró: si el zip cambia de forma, verificar que no se perdió
+  // nada deja de significar algo.
+  zip.file(ruta, nuevo, { createFolders: false });
   // DEFLATE como el original: sin compresión el archivo se triplica y la
   // sincronización de Drive se vuelve pesada al pedo.
   const salida = await zip.generateAsync({
