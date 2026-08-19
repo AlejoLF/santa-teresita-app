@@ -176,17 +176,21 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     '/admin/pendientes',
     { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
     async () => {
-      const [facturasSinValidar, cambiosExcelPendientes, sesionesSinAprobar] =
+      const [facturasSinValidar, cambiosExcelPendientes, sesionesSinAprobar, avisosPrecio] =
         await Promise.all([
           prisma.facturaRecibida.count({ where: { estado: 'PENDIENTE_VALIDACION' } }),
           prisma.aprobacionExcel.count({ where: { estado: 'PENDIENTE' } }),
           prisma.sesionCaja.count({ where: { estado: 'CERRADA' } }),
+          // Un aumento sin revisar sigue costeando con el precio viejo. Va en
+          // el badge para que se note sin entrar a buscarlo.
+          prisma.alertaPrecioInsumo.count({ where: { estado: 'PENDIENTE' } }),
         ]);
       return {
         pendientes: {
           facturasSinValidar,
           cambiosExcelPendientes,
           sesionesSinAprobar,
+          avisosPrecio,
         },
       };
     },
@@ -283,6 +287,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         facturasVencenPronto,
         cambiosExcelPendientes,
         sesionesSinAprobar,
+        avisosPrecio,
         saldosCuentas,
       ] = await Promise.all([
         prisma.venta.aggregate({
@@ -379,6 +384,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         }),
         prisma.aprobacionExcel.count({ where: { estado: 'PENDIENTE' } }),
         prisma.sesionCaja.count({ where: { estado: 'CERRADA' } }),
+        prisma.alertaPrecioInsumo.count({ where: { estado: 'PENDIENTE' } }),
         prisma.cuenta.findMany({
           where: { activa: true },
           select: { id: true, nombre: true, tipo: true, saldoActual: true },
@@ -632,6 +638,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           cambiosExcelPendientes,
           sesionesSinAprobar,
           sesionesAbiertasViejas,
+          avisosPrecio,
         },
         saldosCuentas: saldosCuentas.map((c) => ({
           id: c.id,

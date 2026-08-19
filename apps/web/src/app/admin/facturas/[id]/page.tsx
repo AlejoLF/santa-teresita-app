@@ -150,6 +150,7 @@ function ValidacionForm({
   onReload: () => Promise<void>;
   prompt: ReturnType<typeof usePrompt>['prompt'];
 }) {
+  const router = useRouter();
   const [tipo, setTipo] = useState(factura.tipoComprobante);
   const [puntoVenta, setPuntoVenta] = useState(factura.puntoVenta ?? '');
   const [numero, setNumero] = useState(factura.numero);
@@ -171,6 +172,10 @@ function ValidacionForm({
   );
   const [busy, setBusy] = useState<null | 'guardar' | 'aceptar' | 'rechazar'>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // Aumentos que detectó el sistema al aceptar esta factura. Se muestran acá
+  // y no se navega: es el único momento en que quien acepta tiene la factura
+  // de papel delante para decidir si el precio nuevo es real.
+  const [avisos, setAvisos] = useState<string[] | null>(null);
 
   const sumaItems = items.reduce((a, it) => a + (Number(it.subtotal) || 0), 0);
   const descuadre = items.length > 0 && Math.abs(sumaItems - Number(total)) > Number(total) * 0.02;
@@ -252,7 +257,15 @@ function ValidacionForm({
     const ok = await guardar();
     if (!ok) return setBusy(null);
     try {
-      await api.post(`/admin/facturas/${factura.id}/validar`, undefined);
+      const r = await api.post<{ avisosPrecio?: Array<{ mensaje: string }> }>(
+        `/admin/facturas/${factura.id}/validar`,
+        undefined,
+      );
+      if (r.avisosPrecio && r.avisosPrecio.length > 0) {
+        setAvisos(r.avisosPrecio.map((a) => a.mensaje));
+        setBusy(null);
+        return;
+      }
       onDone();
     } catch (e) {
       setMsg(e instanceof ApiError ? `Error al aceptar: ${e.message}` : 'Error al aceptar');
@@ -488,6 +501,34 @@ function ValidacionForm({
       </section>
 
       {msg && <p className={cn('text-sm', msg.startsWith('Error') || msg.startsWith('Falta') ? 'text-pomodoro-600' : 'text-basil-600')}>{msg}</p>}
+
+      {/* La factura ya quedó aceptada. Lo que falta es decidir si esos precios
+          nuevos son buenos — y eso NO se aplica solo: un salto raro suele ser
+          el OCR leyendo mal o una presentación distinta. */}
+      {avisos && (
+        <div className="card p-4 border-l-4 border-l-saffron-600 space-y-2">
+          <p className="text-sm text-ink-900 font-medium">
+            La factura quedó aceptada. Ojo con estos precios:
+          </p>
+          <ul className="text-sm text-ink-700 space-y-1">
+            {avisos.map((a) => (
+              <li key={a}>· {a}</li>
+            ))}
+          </ul>
+          <p className="text-2xs text-ink-500">
+            El precio del sistema todavía NO cambió. Se aprueba o se rechaza en Insumos y
+            proveedores → Avisos de precio.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => router.push('/admin/insumos?tab=avisos')}>
+              Ir a los avisos
+            </Button>
+            <Button size="sm" variant="secondary" onClick={onDone}>
+              Después lo veo
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Acciones */}
       <div className="flex items-center justify-between gap-3 sticky bottom-0 bg-cream-50/80 backdrop-blur py-3">

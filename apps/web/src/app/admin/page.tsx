@@ -62,6 +62,7 @@ interface Dashboard {
     operaciones: number;
   }>;
   pendientes: {
+    avisosPrecio: number;
     facturasSinValidar: number;
     facturasVencenPronto: number;
     cambiosExcelPendientes: number;
@@ -133,7 +134,8 @@ export default function AdminDashboard() {
     data.pendientes.cambiosExcelPendientes +
     data.pendientes.sesionesSinAprobar +
     data.pendientes.sesionesAbiertasViejas +
-    data.pendientes.facturasVencenPronto;
+    data.pendientes.facturasVencenPronto +
+    data.pendientes.avisosPrecio;
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -312,6 +314,13 @@ export default function AdminDashboard() {
             <p className="text-sm text-ink-500">Sin acciones pendientes ✨</p>
           ) : (
             <ul className="divide-y divide-cream-200">
+              <PendienteRow
+                show={data.pendientes.avisosPrecio > 0}
+                label={`${data.pendientes.avisosPrecio} productos aumentaron de precio y falta aprobarlo`}
+                icon="📈"
+                href="/admin/insumos?tab=avisos"
+                accent="warning"
+              />
               <PendienteRow
                 show={data.pendientes.cambiosExcelPendientes > 0}
                 label={`${data.pendientes.cambiosExcelPendientes} cambios en Excel sin aprobar`}
