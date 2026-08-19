@@ -7,6 +7,11 @@ import { FueraDeHorarioError } from '../services/sesion-caja.js';
 import { recordAudit } from '../services/audit.js';
 import { encolarComandaEncargo, esDestinoImpresion } from '../services/impresion.js';
 import {
+  construirExcelBusqueda,
+  descripcionFiltros,
+  nombreArchivoExport,
+} from '../services/export-busqueda.js';
+import {
   periodoBusquedaSchema,
   paginacionSchema,
   resolverFiltroTemporal,
@@ -113,10 +118,12 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
           desde: z.string().datetime().optional(),
           hasta: z.string().datetime().optional(),
           ...paginacionSchema,
+          // Mismo resultado en Excel, sin paginar. Ver la nota en /admin/movimientos.
+          formato: z.enum(['json', 'xlsx']).optional(),
         }),
       },
     },
-    async (req) => {
+    async (req, reply) => {
       const q = req.query as {
         q?: string;
         entrega?: 'todos' | 'entregados' | 'pendientes';
@@ -125,12 +132,79 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
         hasta?: string;
         page: number;
         pageSize: number;
+        formato?: 'json' | 'xlsx';
       };
       const filtroTemporal = await resolverFiltroTemporal({
         periodo: q.periodo,
         desde: q.desde,
         hasta: q.hasta,
       });
+
+      if (q.formato === 'xlsx') {
+        const TOPE = 5000;
+        // Se reusa la MISMA búsqueda, pidiendo una sola página grande: así el
+        // export no puede diferir de lo que muestra la pantalla.
+        const res = await buscarEncargos({
+          q: q.q,
+          entrega: q.entrega,
+          filtroTemporal,
+          page: 1,
+          pageSize: TOPE,
+        });
+        const buf = await construirExcelBusqueda({
+          titulo: 'Encargos',
+          filtros: descripcionFiltros({
+            periodo: q.periodo,
+            desde: filtroTemporal.desde,
+            hasta: filtroTemporal.hasta,
+            texto: q.q,
+            extra: q.entrega && q.entrega !== 'todos' ? `Entrega: ${q.entrega}` : undefined,
+          }),
+          columnas: [
+            { header: 'N° encargo', key: 'numero', tipo: 'numero', width: 12 },
+            { header: 'N° orden', key: 'orden', tipo: 'numero', width: 11 },
+            { header: 'Fecha de entrega', key: 'fechaEntrega', width: 16 },
+            { header: 'Hora', key: 'hora', width: 10 },
+            { header: 'Franja', key: 'franja', width: 14 },
+            { header: 'Cliente', key: 'cliente', width: 26 },
+            { header: 'Teléfono', key: 'telefono', width: 16 },
+            { header: 'Entrega', key: 'tipoEntrega', width: 14 },
+            { header: 'Estado', key: 'estado', width: 14 },
+            { header: 'Cobro', key: 'estadoCobro', width: 12 },
+            { header: 'Retirado', key: 'retirado', width: 12 },
+            { header: 'Ítems', key: 'items', tipo: 'numero', width: 8 },
+            { header: 'Total', key: 'total', tipo: 'dinero' },
+          ],
+          filas: res.encargos.map((e) => ({
+            numero: e.numero,
+            orden: e.numeroOrdenTurno,
+            fechaEntrega: e.fechaEntrega ?? '',
+            hora: e.horaEntregaExacta ?? '',
+            franja: e.franjaEntrega ?? '',
+            cliente: e.cliente ?? '',
+            telefono: e.telefono ?? '',
+            tipoEntrega: e.tipoEntrega ?? '',
+            estado: e.estado,
+            estadoCobro: e.estadoCobro,
+            retirado: e.retiradoAt ? 'Sí' : 'No',
+            items: e.itemsCount,
+            total: Number(e.total),
+          })),
+          totales: [
+            { etiqueta: 'TOTAL EN ENCARGOS', columna: 'total' },
+            { etiqueta: 'Cantidad de encargos', valor: res.encargos.length },
+          ],
+          hayMas:
+            res.total > res.encargos.length
+              ? { exportadas: res.encargos.length, totales: res.total }
+              : undefined,
+        });
+        return reply
+          .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('encargos')}"`)
+          .send(buf);
+      }
+
       const res = await buscarEncargos({
         q: q.q,
         entrega: q.entrega,

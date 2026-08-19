@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '@sta/db/client';
 import { RolUsuario, CanalListaPrecios } from '@sta/db';
 import { recordAudit } from '../services/audit.js';
+import { invalidate } from '../lib/cache.js';
 
 /**
  * Gestión de LISTAS DE PRECIOS (pestaña dentro de Catálogo).
@@ -110,10 +111,23 @@ export default async function listasRoutes(fastify: FastifyInstance) {
       const tipo = tipoDeLista(lista.canalDefault);
       const ajuste = Number(lista.ajustePctDefault);
 
+      // Los modificadores vienen del tipo de producto (el grupo "Sabor —
+      // Ravioles" aplica a todo el tipo) o del producto puntual, así que hay
+      // que traer los dos y unirlos — igual que en /catalogo/productos.
+      const incluirModificadores = {
+        include: {
+          grupoModificador: {
+            include: { opciones: { where: { activa: true }, orderBy: { orden: 'asc' as const } } },
+          },
+        },
+      };
       const productos = await prisma.producto.findMany({
         where: { activo: true },
         include: {
-          tipoProducto: { include: { categoria: true } },
+          tipoProducto: {
+            include: { categoria: true, modificadores: incluirModificadores },
+          },
+          modificadores: incluirModificadores,
           preciosPorLista:
             tipo === 'CUSTOM'
               ? { where: { listaId: id }, orderBy: { vigenciaDesde: 'desc' }, take: 1 }
@@ -125,6 +139,13 @@ export default async function listasRoutes(fastify: FastifyInstance) {
           { nombre: 'asc' },
         ],
       });
+
+      // Deltas de sabor pisados en esta lista. Ausencia = vale el de catálogo.
+      const overrides = await prisma.deltaOpcionPorLista.findMany({
+        where: { listaId: id },
+        select: { opcionId: true, deltaPrecio: true },
+      });
+      const overrideMap = new Map(overrides.map((o) => [o.opcionId, Number(o.deltaPrecio)]));
 
       const porCategoria = new Map<
         string,
@@ -151,6 +172,38 @@ export default async function listasRoutes(fastify: FastifyInstance) {
           enLista = override != null;
           precio = override != null ? Number(override) : base * (1 + ajuste / 100);
         }
+        // Sabores QUE CAMBIAN EL PRECIO. Un producto con variantes (pizzas,
+        // ravioles) no tiene un precio solo: el sabor le suma. Sin esto la
+        // lista mostraba un único número y el precio real quedaba invisible.
+        //
+        // Se filtran los grupos donde ninguna opción suma nada Y ninguna está
+        // pisada en esta lista: listar los 40 sabores de Ravioles a $0 no le
+        // dice nada a nadie y hace la pantalla inusable.
+        const sabores: Array<Record<string, unknown>> = [];
+        for (const ma of [...p.modificadores, ...p.tipoProducto.modificadores]) {
+          const g = ma.grupoModificador;
+          const relevante = g.opciones.some(
+            (o) => Number(o.deltaPrecio) !== 0 || overrideMap.has(o.id),
+          );
+          if (!relevante) continue;
+          for (const o of g.opciones) {
+            const catalogo = Number(o.deltaPrecio);
+            const pisado = overrideMap.has(o.id);
+            const delta = pisado ? overrideMap.get(o.id)! : catalogo;
+            sabores.push({
+              opcionId: o.id,
+              grupoId: g.id,
+              grupoNombre: g.nombre,
+              nombre: o.nombre,
+              deltaCatalogo: catalogo.toFixed(2),
+              delta: delta.toFixed(2),
+              pisado,
+              // Lo que termina cobrando el sabor en esta lista.
+              precioConSabor: (precio + delta).toFixed(2),
+            });
+          }
+        }
+
         porCategoria.get(cat.id)!.productos.push({
           id: p.id,
           nombre: p.nombre,
@@ -160,6 +213,7 @@ export default async function listasRoutes(fastify: FastifyInstance) {
           precioBase: p.precioBase.toFixed(2),
           enLista,
           precio: precio.toFixed(2),
+          sabores,
         });
       }
       const categorias = [...porCategoria.values()].sort((a, b) => a.orden - b.orden);
@@ -176,6 +230,10 @@ export default async function listasRoutes(fastify: FastifyInstance) {
           editablePorProducto: tipo === 'PUBLICA' || tipo === 'CUSTOM',
           editableMembresia: tipo === 'CUSTOM',
           editableAjuste: tipo === 'CANAL' || tipo === 'CUSTOM',
+          // En la pública editar un sabor cambia el delta DE CATÁLOGO (y por lo
+          // tanto el de toda lista que no lo haya pisado). En una custom se
+          // guarda un precio propio para esa lista y nada más.
+          editableSabores: tipo === 'PUBLICA' || tipo === 'CUSTOM',
         },
         categorias,
       };
@@ -342,6 +400,18 @@ export default async function listasRoutes(fastify: FastifyInstance) {
             )
             .default([]),
           remove: z.array(z.string().uuid()).default([]),
+          // Precio de un SABOR en esta lista. `deltasRemove` lo devuelve al
+          // valor de catálogo (borra el override), que no es lo mismo que
+          // ponerlo en 0.
+          deltas: z
+            .array(
+              z.object({
+                opcionId: z.string().uuid(),
+                deltaPrecio: z.string().regex(/^\d+(\.\d{1,2})?$/),
+              }),
+            )
+            .default([]),
+          deltasRemove: z.array(z.string().uuid()).default([]),
         }),
       },
     },
@@ -350,6 +420,8 @@ export default async function listasRoutes(fastify: FastifyInstance) {
       const b = req.body as {
         upserts: Array<{ productoId: string; precioEfectivo: string }>;
         remove: string[];
+        deltas: Array<{ opcionId: string; deltaPrecio: string }>;
+        deltasRemove: string[];
       };
       const lista = await prisma.listaPrecios.findUnique({ where: { id } });
       if (!lista) return reply.code(404).send({ error: 'Lista no encontrada' });
@@ -360,6 +432,38 @@ export default async function listasRoutes(fastify: FastifyInstance) {
           error:
             'Las listas de canal (RAPPI/PYA/ML/...) se ajustan con el % global, no producto por producto.',
         });
+      }
+
+      // ── Sabores ──
+      // PÚBLICA: se toca el delta DE CATÁLOGO — es el precio del sabor para
+      // todo el que no lo haya pisado. CUSTOM: se guarda un override que sólo
+      // vale para esta lista.
+      if (b.deltas.length > 0 || b.deltasRemove.length > 0) {
+        if (tipo === 'PUBLICA') {
+          await prisma.$transaction(
+            b.deltas.map((d) =>
+              prisma.opcionModificador.update({
+                where: { id: d.opcionId },
+                data: { deltaPrecio: d.deltaPrecio },
+              }),
+            ),
+          );
+        } else {
+          await prisma.$transaction(async (tx) => {
+            if (b.deltasRemove.length > 0) {
+              await tx.deltaOpcionPorLista.deleteMany({
+                where: { listaId: id, opcionId: { in: b.deltasRemove } },
+              });
+            }
+            for (const d of b.deltas) {
+              await tx.deltaOpcionPorLista.upsert({
+                where: { opcionId_listaId: { opcionId: d.opcionId, listaId: id } },
+                create: { opcionId: d.opcionId, listaId: id, deltaPrecio: d.deltaPrecio },
+                update: { deltaPrecio: d.deltaPrecio },
+              });
+            }
+          });
+        }
       }
 
       if (tipo === 'PUBLICA') {
@@ -397,14 +501,29 @@ export default async function listasRoutes(fastify: FastifyInstance) {
         });
       }
 
+      // El catálogo cachea productos y deltas hasta 1 min. Sin esto, la
+      // encargada cambia un precio y lo sigue viendo viejo en la caja.
+      invalidate('catalogo:');
+
       await recordAudit({
         tabla: 'listas_precios',
         registroId: id,
         accion: 'UPDATE',
         usuarioId: req.usuario!.id,
-        valorNuevo: { tipo, precios_actualizados: b.upserts.length, bajas: b.remove.length },
+        valorNuevo: {
+          tipo,
+          precios_actualizados: b.upserts.length,
+          bajas: b.remove.length,
+          sabores_actualizados: b.deltas.length,
+          sabores_a_catalogo: b.deltasRemove.length,
+        },
       });
-      return { ok: true, actualizados: b.upserts.length, bajas: b.remove.length };
+      return {
+        ok: true,
+        actualizados: b.upserts.length,
+        bajas: b.remove.length,
+        sabores: b.deltas.length,
+      };
     },
   );
 

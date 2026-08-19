@@ -15,6 +15,11 @@ import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caj
 import { recordAudit } from './audit.js';
 import { encolarComandaEncargo, esDestinoImpresion } from './impresion.js';
 import { agregarItemsAVenta } from './venta.js';
+import {
+  resolverDeltasDeLista,
+  deltaDeModificadores,
+  opcionIdsDeItems,
+} from './deltas-lista.js';
 
 /**
  * Crea un ENCARGO (pedido para un día futuro) reutilizando la tabla `ventas`.
@@ -63,6 +68,7 @@ export async function crearEncargo(args: {
   });
   const productoMap = new Map(productos.map((p) => [p.id, p]));
   const ajustePct = Number(lista.ajustePctDefault);
+  const deltas = await resolverDeltasDeLista(lista.id, opcionIdsDeItems(data.items));
 
   const itemsToCreate: Array<Prisma.ItemVentaCreateWithoutVentaInput> = [];
   let subtotalVenta = 0;
@@ -77,11 +83,7 @@ export async function crearEncargo(args: {
     const precioListaSinDelta = precioOverride
       ? Number(precioOverride)
       : precioBaseNumber * (1 + ajustePct / 100);
-    // Seguridad: el delta de cada modificador SUMA, nunca resta (clamp a >= 0).
-    const deltaMod = item.modificadores.reduce(
-      (acc, m) => acc + Math.max(0, Number(m.deltaPrecio || 0)),
-      0,
-    );
+    const deltaMod = deltaDeModificadores(item.modificadores, deltas);
     const precioUnitario = precioListaSinDelta + deltaMod;
 
     const subTotalItemStr = subtotalItem({
@@ -287,6 +289,7 @@ export async function crearAdicionEncargo(args: {
   const lista = await prisma.listaPrecios.findUnique({ where: { id: root.listaPreciosId } });
   const ajustePct = Number(lista?.ajustePctDefault ?? 0);
   const productoMap = new Map(productos.map((p) => [p.id, p]));
+  const deltas = await resolverDeltasDeLista(root.listaPreciosId, opcionIdsDeItems(items));
 
   const itemsToCreate: Array<Prisma.ItemVentaCreateWithoutVentaInput> = [];
   let subtotalVenta = 0;
@@ -298,10 +301,7 @@ export async function crearAdicionEncargo(args: {
     const precioListaSinDelta = precioOverride
       ? Number(precioOverride)
       : Number(producto.precioBase) * (1 + ajustePct / 100);
-    const deltaMod = item.modificadores.reduce(
-      (acc, m) => acc + Math.max(0, Number(m.deltaPrecio || 0)),
-      0,
-    );
+    const deltaMod = deltaDeModificadores(item.modificadores, deltas);
     const precioUnitario = precioListaSinDelta + deltaMod;
     const subTotalItemStr = subtotalItem({
       cantidad: item.cantidad,

@@ -73,6 +73,7 @@ export default function FacturasInboxPage() {
         loading={b.loading}
         onLimpiar={b.limpiar}
         hayFiltro={b.hayFiltro}
+        exportar={{ path: b.pathExport, nombre: 'facturas.xlsx' }}
       >
         <select
           value={filtro}

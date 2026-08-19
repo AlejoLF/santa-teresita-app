@@ -99,6 +99,7 @@ export default function AdminEncargosPage() {
         loading={b.loading}
         onLimpiar={b.limpiar}
         hayFiltro={b.hayFiltro}
+        exportar={{ path: b.pathExport, nombre: 'encargos.xlsx' }}
       >
         <select
           value={entrega}

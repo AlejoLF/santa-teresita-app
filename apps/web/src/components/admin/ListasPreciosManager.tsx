@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { Fragment, useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
@@ -19,6 +19,20 @@ interface ListaRow {
   productos: number;
 }
 
+/** Un sabor que le cambia el precio al producto, ya resuelto para esta lista. */
+interface SaborLista {
+  opcionId: string;
+  grupoId: string;
+  grupoNombre: string;
+  nombre: string;
+  /** Lo que vale el sabor en el catálogo (la lista pública). */
+  deltaCatalogo: string;
+  /** Lo que vale EN ESTA LISTA (= el de catálogo si nadie lo pisó). */
+  delta: string;
+  /** ¿Tiene precio propio en esta lista? */
+  pisado: boolean;
+  precioConSabor: string;
+}
 interface ProductoLista {
   id: string;
   nombre: string;
@@ -28,6 +42,7 @@ interface ProductoLista {
   precioBase: string;
   enLista: boolean;
   precio: string;
+  sabores: SaborLista[];
 }
 interface CategoriaLista {
   id: string;
@@ -45,6 +60,7 @@ interface DetalleResp {
     editablePorProducto: boolean;
     editableMembresia: boolean;
     editableAjuste: boolean;
+    editableSabores: boolean;
   };
   categorias: CategoriaLista[];
 }
@@ -246,6 +262,11 @@ function DetalleLista({ listaId, onBack }: { listaId: string; onBack: () => void
   const [precios, setPrecios] = useState<Record<string, string>>({}); // productoId → precio editado
   const [miembros, setMiembros] = useState<Record<string, boolean>>({}); // productoId → en lista (custom)
   const [colapsadas, setColapsadas] = useState<Record<string, boolean>>({});
+  // Sabores: qué productos tienen la lista de sabores desplegada, el precio
+  // editado de cada sabor, y cuáles se devuelven al precio de catálogo.
+  const [saboresAbiertos, setSaboresAbiertos] = useState<Record<string, boolean>>({});
+  const [deltas, setDeltas] = useState<Record<string, string>>({});
+  const [deltasAQuitar, setDeltasAQuitar] = useState<Record<string, boolean>>({});
   // Aumento global
   const [globalPct, setGlobalPct] = useState('');
   // Rename
@@ -259,14 +280,18 @@ function DetalleLista({ listaId, onBack }: { listaId: string; onBack: () => void
       // Inicializar estado de edición
       const px: Record<string, string> = {};
       const mb: Record<string, boolean> = {};
+      const dl: Record<string, string> = {};
       for (const c of res.categorias) {
         for (const p of c.productos) {
           px[p.id] = p.precio;
           mb[p.id] = p.enLista;
+          for (const sab of p.sabores) dl[sab.opcionId] = sab.delta;
         }
       }
       setPrecios(px);
       setMiembros(mb);
+      setDeltas(dl);
+      setDeltasAQuitar({});
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo cargar la lista');
@@ -343,7 +368,30 @@ function DetalleLista({ listaId, onBack }: { listaId: string; onBack: () => void
             }
           }
         }
-        await api.put(`/admin/listas/${listaId}/precios`, { upserts, remove });
+        // Sabores: sólo los que cambiaron. `deltasRemove` devuelve el sabor al
+        // precio de catálogo, que NO es lo mismo que ponerlo en 0.
+        const deltasBody: Array<{ opcionId: string; deltaPrecio: string }> = [];
+        const deltasRemove: string[] = [];
+        for (const c of categorias) {
+          for (const p of c.productos) {
+            for (const sab of p.sabores) {
+              if (deltasAQuitar[sab.opcionId]) {
+                if (sab.pisado) deltasRemove.push(sab.opcionId);
+                continue;
+              }
+              const val = deltas[sab.opcionId] ?? sab.delta;
+              if (Number(val) !== Number(sab.delta)) {
+                deltasBody.push({ opcionId: sab.opcionId, deltaPrecio: Number(val).toFixed(2) });
+              }
+            }
+          }
+        }
+        await api.put(`/admin/listas/${listaId}/precios`, {
+          upserts,
+          remove,
+          deltas: deltasBody,
+          deltasRemove,
+        });
       }
       await fetchDetalle();
       setEditando(false);
@@ -508,8 +556,13 @@ function DetalleLista({ listaId, onBack }: { listaId: string; onBack: () => void
                       const original = precioOriginal.get(p.id) ?? p.precio;
                       const editado = precios[p.id] ?? p.precio;
                       const cambio = editando && lista.editablePorProducto && editado !== original;
+                      const abierto = !!saboresAbiertos[p.id];
+                      // Ancho de la fila, para que la sub-fila de sabores no
+                      // desalinee la tabla cuando aparece el check de membresía.
+                      const colSpan = editando && lista.editableMembresia ? 3 : 2;
                       return (
-                        <tr key={p.id}>
+                        <Fragment key={p.id}>
+                        <tr>
                           {editando && lista.editableMembresia && (
                             <td className="pl-4 py-2 w-8">
                               <input
@@ -523,6 +576,20 @@ function DetalleLista({ listaId, onBack }: { listaId: string; onBack: () => void
                           <td className="px-4 py-2 text-ink-700">
                             {p.codigo && <span className="text-ink-400 font-mono mr-2">{p.codigo}</span>}
                             {p.nombre}
+                            {/* Un producto con variantes (pizzas, ravioles) no
+                                tiene UN precio: el sabor le suma. Antes esto no
+                                se veía y la lista mentía. */}
+                            {p.sabores.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSaboresAbiertos((sa) => ({ ...sa, [p.id]: !sa[p.id] }))
+                                }
+                                className="ml-2 text-2xs text-teresita-700 hover:underline whitespace-nowrap"
+                              >
+                                {abierto ? '▾' : '▸'} {p.sabores.length} sabores
+                              </button>
+                            )}
                           </td>
                           <td className="px-4 py-2 text-right whitespace-nowrap">
                             {editando && lista.editablePorProducto ? (
@@ -546,6 +613,90 @@ function DetalleLista({ listaId, onBack }: { listaId: string; onBack: () => void
                             )}
                           </td>
                         </tr>
+                        {abierto && (
+                          <tr className="bg-surface-sunken">
+                            <td colSpan={colSpan} className="px-4 py-2">
+                              <p className="text-2xs text-ink-500 mb-1">
+                                {lista.tipo === 'PUBLICA'
+                                  ? 'Lo que suma cada sabor. Cambiarlo acá lo cambia en todas las listas que no tengan precio propio.'
+                                  : 'Lo que suma cada sabor EN ESTA LISTA. Si no lo tocás, vale el del catálogo.'}
+                              </p>
+                              <table className="w-full">
+                                <tbody className="divide-y divide-cream-200">
+                                  {p.sabores.map((sab) => {
+                                    const quitado = !!deltasAQuitar[sab.opcionId];
+                                    const val = quitado
+                                      ? sab.deltaCatalogo
+                                      : (deltas[sab.opcionId] ?? sab.delta);
+                                    return (
+                                      <tr key={sab.opcionId}>
+                                        <td className="py-1 pr-2 text-ink-700">
+                                          {sab.nombre}
+                                          <span className="text-2xs text-ink-400 ml-2">
+                                            {sab.grupoNombre}
+                                          </span>
+                                          {sab.pisado && !quitado && lista.tipo === 'CUSTOM' && (
+                                            <span className="ml-2 text-2xs text-saffron-600">
+                                              precio propio
+                                            </span>
+                                          )}
+                                        </td>
+                                        <td className="py-1 text-right whitespace-nowrap">
+                                          {editando && lista.editableSabores ? (
+                                            <span className="inline-flex items-center gap-2">
+                                              <span className="text-2xs text-ink-400">+$</span>
+                                              <input
+                                                type="number"
+                                                step="0.01"
+                                                min="0"
+                                                value={val}
+                                                disabled={
+                                                  quitado ||
+                                                  (lista.tipo === 'CUSTOM' && !miembros[p.id])
+                                                }
+                                                onChange={(e) =>
+                                                  setDeltas((d) => ({
+                                                    ...d,
+                                                    [sab.opcionId]: e.target.value,
+                                                  }))
+                                                }
+                                                className="input w-24 text-right font-mono py-0.5 disabled:opacity-40"
+                                              />
+                                              {lista.tipo === 'CUSTOM' &&
+                                                (sab.pisado || quitado) && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                      setDeltasAQuitar((q) => ({
+                                                        ...q,
+                                                        [sab.opcionId]: !q[sab.opcionId],
+                                                      }))
+                                                    }
+                                                    className="text-2xs text-ink-500 hover:underline"
+                                                    title={`Precio de catálogo: $${sab.deltaCatalogo}`}
+                                                  >
+                                                    {quitado ? 'dejar propio' : 'usar catálogo'}
+                                                  </button>
+                                                )}
+                                            </span>
+                                          ) : (
+                                            <span className="text-ink-700">
+                                              +<MoneyAmount value={sab.delta} /> ={' '}
+                                              <strong>
+                                                <MoneyAmount value={sab.precioConSabor} />
+                                              </strong>
+                                            </span>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </td>
+                          </tr>
+                        )}
+                        </Fragment>
                       );
                     })}
                   </tbody>

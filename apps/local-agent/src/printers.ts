@@ -227,11 +227,23 @@ export async function imprimirComanda(
   printer.newLine();
 
   if (payload.esCancelada) {
-    printer.invert(true);
+    // A TAMAÑO GRANDE a propósito: en normal, un ticket cancelado se confunde
+    // con uno bueno de un vistazo, y en cocina eso significa despachar un
+    // pedido que no existe.
+    //
+    // setTextSize(2,2) = 3x ancho y alto (ESC/POS codifica los multiplicadores
+    // 1..8 como 0..7). A 3x, en papel de 80mm —42 columnas normales— entran
+    // ~14 caracteres: "CANCELADA" son 9 y entra cómodo. El "*** CANCELADA ***"
+    // de antes son 17 y se partiría en dos líneas, que se lee peor que el
+    // original. Por eso el texto se acorta al agrandarlo.
     printer.bold(true);
-    printer.println('  *** CANCELADA ***  ');
-    printer.bold(false);
+    printer.invert(true);
+    printer.setTextSize(2, 2);
+    printer.println(' CANCELADA ');
+    printer.setTextNormal();
     printer.invert(false);
+    printer.bold(false);
+    printer.drawLine();
     printer.newLine();
   }
 
@@ -1040,7 +1052,14 @@ export interface TicketRemitoPayload {
   direccion?: string;
   estado?: string;
   observaciones?: string;
-  items: Array<{ cantidad: string; nombre: string; precio: string; subtotal: string }>;
+  items: Array<{
+    cantidad: string;
+    nombre: string;
+    precio: string;
+    subtotal: string;
+    /** Sabores elegidos, uno por línea debajo del producto. */
+    modificadores?: Array<{ opcionNombre?: string; grupoNombre?: string }> | null;
+  }>;
   total: string;
   /** ISO — se formatea a DD/MM/YYYY HH:MM en TZ Argentina. */
   fecha: string;
@@ -1094,6 +1113,13 @@ export async function imprimirTicketRemito(
       formatARS(it.subtotal),
     );
     for (const linea of lineas) printer.println(linea);
+    // Sabores debajo del producto, indentados. El precio ya está sumado en el
+    // unitario: acá van para que quien recibe sepa QUÉ le entregaron.
+    for (const m of it.modificadores ?? []) {
+      const nombre = m.opcionNombre?.trim();
+      if (!nombre) continue;
+      printer.println(`   > ${limpiar(nombre)}`);
+    }
   }
   printer.drawLine();
 

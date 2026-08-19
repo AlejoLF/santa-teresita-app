@@ -7,8 +7,29 @@ import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { coincideBusqueda } from '@/lib/busqueda';
+import {
+  LineasDePago,
+  useCuentas,
+  sugerirCuenta,
+  validarPagos,
+  type LineaPago,
+} from '@/components/admin/LineasDePago';
 import { cn } from '@/lib/cn';
 
+interface OpcionCat {
+  opcionId: string;
+  nombre: string;
+  codigo: string | null;
+  /** Ya resuelto contra la lista de precios de ESTE cliente. */
+  deltaPrecio: string;
+}
+interface GrupoCat {
+  grupoId: string;
+  grupoNombre: string;
+  obligatorio: boolean;
+  tipoSeleccion: 'UNICA' | 'MULTIPLE';
+  opciones: OpcionCat[];
+}
 interface ProductoCat {
   id: string;
   nombre: string;
@@ -18,6 +39,14 @@ interface ProductoCat {
   unidadPrecio: string;
   unidadPrecioLabel: string | null;
   precioUnitario: string;
+  grupos: GrupoCat[];
+}
+interface ModificadorLinea {
+  grupoId: string;
+  grupoNombre: string;
+  opcionId: string;
+  opcionNombre: string;
+  deltaPrecio: string;
 }
 interface Catalogo {
   lista: { id: string; nombre: string };
@@ -28,9 +57,16 @@ interface Linea {
   productoId: string | null;
   nombre: string;
   unidadPrecio: string;
+  /** Precio de lista del producto, SIN los sabores. */
+  precioBase: string;
+  /** Lo que se cobra: `precioBase` + la suma de los deltas. */
   precioUnitario: string;
   cantidad: string;
-  /** Clave estable de React: los ítems libres no tienen productoId. */
+  modificadores: ModificadorLinea[];
+  /**
+   * Clave estable de React. Incluye los sabores elegidos: dos líneas del mismo
+   * producto con sabores distintos son líneas DISTINTAS, no una con cantidad 2.
+   */
   key: string;
 }
 interface RemitoExistente {
@@ -43,7 +79,14 @@ interface RemitoExistente {
     nombre: string;
     cantidad: string;
     precioUnitario: string;
+    modificadores: ModificadorLinea[] | null;
   }>;
+}
+
+/** Clave de una línea: producto + combinación de sabores. */
+function keyDeLinea(productoId: string, mods: ModificadorLinea[]): string {
+  const ids = mods.map((m) => m.opcionId).sort();
+  return ids.length ? `${productoId}:${ids.join('-')}` : productoId;
 }
 
 /** Subtotal de una línea, espejo de subtotalItem del backend. */
@@ -84,6 +127,15 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
   const [imprimirAlGuardar, setImprimirAlGuardar] = useState(true);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Producto cuyo sabor se está eligiendo (modal). */
+  const [eligiendo, setEligiendo] = useState<ProductoCat | null>(null);
+  // Cobrar el remito en el momento. Sólo al CREAR: editar un remito ya cobrado
+  // está bloqueado, y editar uno pendiente no debería mover plata de costado.
+  const [cobrarAhora, setCobrarAhora] = useState(false);
+  const cuentas = useCuentas();
+  const [pagos, setPagos] = useState<LineaPago[]>([
+    { metodo: 'EFECTIVO', cuentaId: '', monto: '' },
+  ]);
 
   useEffect(() => {
     (async () => {
@@ -108,13 +160,25 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
         setLineas(
           rem.items.map((it, i) => {
             const p = it.productoId ? res.productos.find((x) => x.id === it.productoId) : undefined;
+            const mods = it.modificadores ?? [];
+            // Los deltas se re-leen del catálogo actual (igual que el precio):
+            // así el editor muestra lo mismo que va a recalcular el backend.
+            const modsFrescos = mods.map((m) => {
+              const g = p?.grupos.find((x) => x.grupoId === m.grupoId);
+              const o = g?.opciones.find((x) => x.opcionId === m.opcionId);
+              return { ...m, deltaPrecio: o?.deltaPrecio ?? m.deltaPrecio };
+            });
+            const base = p?.precioUnitario ?? it.precioUnitario;
+            const delta = modsFrescos.reduce((a, m) => a + Number(m.deltaPrecio || 0), 0);
             return {
               productoId: it.productoId,
               nombre: p?.nombre ?? it.nombre,
               unidadPrecio: p?.unidadPrecio ?? 'POR_UNIDAD',
-              precioUnitario: p?.precioUnitario ?? it.precioUnitario,
+              precioBase: base,
+              precioUnitario: p ? (Number(base) + delta).toFixed(2) : it.precioUnitario,
               cantidad: it.cantidad,
-              key: it.productoId ?? `libre-${i}`,
+              modificadores: modsFrescos,
+              key: it.productoId ? keyDeLinea(it.productoId, modsFrescos) : `libre-${i}`,
             };
           }),
         );
@@ -136,12 +200,20 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
     return base.slice(0, 60);
   }, [cat, busqueda]);
 
-  function agregar(p: ProductoCat) {
+  /**
+   * Agrega una línea con los sabores ya elegidos.
+   *
+   * La misma combinación producto+sabores suma cantidad; una combinación
+   * distinta es una línea nueva. Si sumara todo junto, un remito con dos
+   * gustos de pizza saldría con un precio solo y equivocado.
+   */
+  function agregarLinea(p: ProductoCat, mods: ModificadorLinea[]) {
+    const key = keyDeLinea(p.id, mods);
+    const delta = mods.reduce((a, m) => a + Number(m.deltaPrecio || 0), 0);
     setLineas((arr) => {
-      const ya = arr.find((l) => l.productoId === p.id);
-      if (ya) {
+      if (arr.some((l) => l.key === key)) {
         return arr.map((l) =>
-          l.productoId === p.id ? { ...l, cantidad: String(Number(l.cantidad) + 1) } : l,
+          l.key === key ? { ...l, cantidad: String(Number(l.cantidad) + 1) } : l,
         );
       }
       return [
@@ -150,12 +222,24 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
           productoId: p.id,
           nombre: p.nombre,
           unidadPrecio: p.unidadPrecio,
-          precioUnitario: p.precioUnitario,
+          precioBase: p.precioUnitario,
+          precioUnitario: (Number(p.precioUnitario) + delta).toFixed(2),
           cantidad: '1',
-          key: p.id,
+          modificadores: mods,
+          key,
         },
       ];
     });
+  }
+
+  /** Click en un producto: si tiene sabores, primero hay que elegirlos. */
+  function agregar(p: ProductoCat) {
+    const conOpciones = p.grupos.filter((g) => g.opciones.length > 0);
+    if (conOpciones.length > 0) {
+      setEligiendo(p);
+      return;
+    }
+    agregarLinea(p, []);
   }
 
   // Por `key`, no por productoId: los ítems libres lo tienen en null y dos de
@@ -173,11 +257,34 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
     0,
   );
 
+  // Con un solo método, el monto sigue al total del remito: el remito se está
+  // armando y pedirle a la encargada que re-tipee el número cada vez que suma
+  // un producto sería inutilizable. Con varios métodos NO se toca — ahí los
+  // montos los repartió a mano.
+  useEffect(() => {
+    if (!cobrarAhora) return;
+    setPagos((prev) =>
+      prev.length === 1
+        ? [
+            {
+              ...prev[0]!,
+              cuentaId: prev[0]!.cuentaId || (sugerirCuenta(prev[0]!.metodo, cuentas)?.id ?? ''),
+              monto: total.toFixed(2),
+            },
+          ]
+        : prev,
+    );
+  }, [total, cobrarAhora, cuentas]);
+
   async function guardar() {
     setError(null);
     if (lineas.length === 0) return setError('Agregá al menos un producto');
     if (lineas.some((l) => Number(l.cantidad || 0) <= 0)) {
       return setError('Cada línea tiene que tener cantidad > 0');
+    }
+    if (cobrarAhora) {
+      const problema = validarPagos(pagos, total);
+      if (problema) return setError(problema);
     }
     setGuardando(true);
     // Los ítems libres mandan su precio manual; los del catálogo NO, porque el
@@ -186,6 +293,7 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
       productoId: l.productoId ?? undefined,
       nombre: l.nombre,
       cantidad: Number(l.cantidad),
+      ...(l.modificadores.length ? { modificadores: l.modificadores } : {}),
       ...(l.productoId ? {} : { precioUnitario: Number(l.precioUnitario).toFixed(2) }),
     }));
     try {
@@ -199,6 +307,16 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
         const creado = await api.post<{ id: string }>(`/admin/mayoristas/${id}/remitos`, {
           observaciones: observaciones || undefined,
           items,
+          ...(cobrarAhora && {
+            cobrar: {
+              pagos: pagos.map((l) => ({
+                metodo: l.metodo,
+                cuentaId: l.cuentaId,
+                monto: Number(l.monto).toFixed(2),
+                numeroReferencia: l.numeroReferencia || undefined,
+              })),
+            },
+          }),
         });
         guardadoId = creado.id;
       }
@@ -267,6 +385,9 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
                   <span className="text-sm text-ink-700">
                     {p.nombre}
                     {p.marca && <span className="text-ink-400"> · {p.marca}</span>}
+                    {p.grupos.some((g) => g.opciones.length > 0) && (
+                      <span className="text-2xs text-teresita-700 ml-2">elegir sabor</span>
+                    )}
                   </span>
                   <span className="text-xs font-mono text-ink-500 whitespace-nowrap">
                     ${Number(p.precioUnitario).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
@@ -300,6 +421,11 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
                   <div key={l.key} className="flex items-center gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="text-sm text-ink-700 truncate">{l.nombre}</div>
+                      {l.modificadores.length > 0 && (
+                        <div className="text-2xs text-teresita-700 truncate">
+                          {l.modificadores.map((m) => m.opcionNombre).join(' · ')}
+                        </div>
+                      )}
                       <div className="text-2xs text-ink-500">
                         $
                         {Number(l.precioUnitario).toLocaleString('es-AR', {
@@ -342,6 +468,38 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
               <span className="text-sm text-ink-500 uppercase tracking-wide">Total</span>
               <MoneyAmount value={total.toFixed(2)} hero className="text-lg text-teresita-700" />
             </div>
+            {/* Cobrar en el momento. Antes había que guardar el remito, volver
+                a la ficha del cliente y cargar el cobro aparte imputándolo a
+                mano — tres pantallas para algo que en el mostrador es un solo
+                gesto. Sólo al crear: un remito ya cobrado no se edita. */}
+            {!editando && (
+              <>
+                <label
+                  className={cn(
+                    'flex items-center gap-2 px-2 py-2 rounded cursor-pointer text-sm transition-colors',
+                    cobrarAhora ? 'bg-basil-100 text-basil-700' : 'text-ink-500 hover:bg-cream-100',
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={cobrarAhora}
+                    onChange={(e) => setCobrarAhora(e.target.checked)}
+                    className="w-4 h-4 shrink-0"
+                  />
+                  <span aria-hidden>💰</span>
+                  <span className="font-medium">Lo paga ahora</span>
+                </label>
+                {cobrarAhora && (
+                  <LineasDePago
+                    lineas={pagos}
+                    onChange={setPagos}
+                    cuentas={cuentas}
+                    total={total}
+                  />
+                )}
+              </>
+            )}
+
             <label
               className={cn(
                 'flex items-center gap-2 px-2 py-2 rounded cursor-pointer text-sm transition-colors',
@@ -367,12 +525,155 @@ function EditorRemito({ clienteId: id }: { clienteId: string }) {
             >
               {guardando
                 ? 'Guardando...'
-                : `${editando ? 'Guardar cambios' : 'Guardar remito'}${
+                : `${editando ? 'Guardar cambios' : cobrarAhora ? 'Guardar y cobrar' : 'Guardar remito'}${
                     imprimirAlGuardar ? ' e imprimir' : ''
                   }`}
             </Button>
           </div>
         </section>
+      </div>
+
+      {eligiendo && (
+        <ModalSabores
+          producto={eligiendo}
+          onCancel={() => setEligiendo(null)}
+          onConfirm={(mods) => {
+            agregarLinea(eligiendo, mods);
+            setEligiendo(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Elegir sabores antes de agregar la línea
+// ────────────────────────────────────────────────────────────────────────
+//
+// Es el mismo gesto que en Cargar pedido, pero acotado: acá no hay cantidades
+// por sabor ni observaciones — un remito de mayorista es una entrega, no una
+// comanda de cocina.
+
+function ModalSabores({
+  producto,
+  onCancel,
+  onConfirm,
+}: {
+  producto: ProductoCat;
+  onCancel: () => void;
+  onConfirm: (mods: ModificadorLinea[]) => void;
+}) {
+  const grupos = producto.grupos.filter((g) => g.opciones.length > 0);
+  // grupoId → opcionIds elegidas.
+  const [sel, setSel] = useState<Record<string, string[]>>({});
+
+  function toggle(g: GrupoCat, opcionId: string) {
+    setSel((prev) => {
+      const actual = prev[g.grupoId] ?? [];
+      if (g.tipoSeleccion === 'UNICA') {
+        return { ...prev, [g.grupoId]: actual[0] === opcionId ? [] : [opcionId] };
+      }
+      return {
+        ...prev,
+        [g.grupoId]: actual.includes(opcionId)
+          ? actual.filter((x) => x !== opcionId)
+          : [...actual, opcionId],
+      };
+    });
+  }
+
+  const elegidos: ModificadorLinea[] = grupos.flatMap((g) =>
+    (sel[g.grupoId] ?? []).flatMap((opcionId) => {
+      const o = g.opciones.find((x) => x.opcionId === opcionId);
+      if (!o) return [];
+      return [
+        {
+          grupoId: g.grupoId,
+          grupoNombre: g.grupoNombre,
+          opcionId: o.opcionId,
+          opcionNombre: o.nombre,
+          deltaPrecio: o.deltaPrecio,
+        },
+      ];
+    }),
+  );
+  const delta = elegidos.reduce((a, m) => a + Number(m.deltaPrecio || 0), 0);
+  const faltaObligatorio = grupos.some((g) => g.obligatorio && (sel[g.grupoId] ?? []).length === 0);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-ink-900/40 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="card w-full sm:max-w-lg max-h-[85vh] overflow-y-auto p-4 space-y-3"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header>
+          <h3 className="font-display text-md text-ink-900">{producto.nombre}</h3>
+          <p className="text-2xs text-ink-500">
+            Precio de lista: $
+            {Number(producto.precioUnitario).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+          </p>
+        </header>
+
+        {grupos.map((g) => (
+          <section key={g.grupoId}>
+            <h4 className="text-sm font-medium text-ink-700 mb-1">
+              {g.grupoNombre}
+              {g.obligatorio && <span className="text-pomodoro-600 ml-1">*</span>}
+              <span className="text-2xs text-ink-400 ml-2">
+                {g.tipoSeleccion === 'UNICA' ? 'elegí uno' : 'podés elegir varios'}
+              </span>
+            </h4>
+            <div className="grid grid-cols-2 gap-1">
+              {g.opciones.map((o) => {
+                const activa = (sel[g.grupoId] ?? []).includes(o.opcionId);
+                return (
+                  <button
+                    key={o.opcionId}
+                    type="button"
+                    onClick={() => toggle(g, o.opcionId)}
+                    className={cn(
+                      'text-left text-sm px-2 py-1.5 rounded border transition-colors',
+                      activa
+                        ? 'border-teresita-700 bg-teresita-50 text-teresita-800'
+                        : 'border-cream-300 text-ink-700 hover:bg-cream-100',
+                    )}
+                  >
+                    {o.nombre}
+                    {Number(o.deltaPrecio) !== 0 && (
+                      <span className="text-2xs text-ink-500 ml-1">
+                        +${Number(o.deltaPrecio).toLocaleString('es-AR')}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ))}
+
+        <div className="border-t border-cream-300 pt-3 flex items-center justify-between gap-2">
+          <span className="text-sm text-ink-500">
+            Queda en{' '}
+            <strong className="text-ink-900">
+              <MoneyAmount value={(Number(producto.precioUnitario) + delta).toFixed(2)} />
+            </strong>
+          </span>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={onCancel}>
+              Cancelar
+            </Button>
+            <Button size="sm" onClick={() => onConfirm(elegidos)} disabled={faltaObligatorio}>
+              Agregar
+            </Button>
+          </div>
+        </div>
+        {faltaObligatorio && (
+          <p className="text-2xs text-pomodoro-600">Falta elegir un sabor obligatorio (*).</p>
+        )}
       </div>
     </div>
   );

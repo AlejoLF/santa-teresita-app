@@ -6,6 +6,12 @@ import { RolUsuario, EstadoMovimiento, TipoCategoriaMovimiento } from '@sta/db';
 import { subtotalItem } from '@sta/shared';
 import { recordAudit } from '../services/audit.js';
 import { encolarTicketRemito } from '../services/impresion.js';
+import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
+import {
+  resolverDeltasDeLista,
+  deltaDeModificadores,
+  opcionIdsDeItems,
+} from '../services/deltas-lista.js';
 
 /**
  * MAYORISTAS — Clientes con cuenta corriente.
@@ -50,11 +56,19 @@ async function getCategoriaCobroId(): Promise<string> {
 /** Un ítem del remito no se pudo resolver (producto inexistente, precio faltante). */
 class ItemRemitoError extends Error {}
 
+interface ModificadorEntrada {
+  grupoId?: string;
+  grupoNombre?: string;
+  opcionId?: string;
+  opcionNombre?: string;
+  deltaPrecio?: string;
+}
 interface ItemEntrada {
   productoId?: string;
   nombre: string;
   cantidad: number;
   precioUnitario?: string;
+  modificadores?: ModificadorEntrada[];
 }
 interface ItemsResueltos {
   itemsData: Array<{
@@ -64,6 +78,8 @@ interface ItemsResueltos {
     precioUnitario: string;
     subtotal: string;
     orden: number;
+    modificadoresAplicados: Prisma.InputJsonValue | undefined;
+    deltaModificadores: string;
   }>;
   total: number;
 }
@@ -75,6 +91,11 @@ interface ItemsResueltos {
  * confía en lo que manda el front, se lee el precio efectivo de la lista (o el
  * precio base con el ajuste porcentual). Sólo los ítems libres (sin producto
  * del catálogo) llevan precio manual.
+ *
+ * Los SABORES también: el delta sale de `deltas-lista.ts`, que resuelve el
+ * precio de la opción contra la lista del cliente. Un producto con variantes
+ * (pizzas, ravioles) no tiene un precio solo, y antes el remito lo cargaba
+ * como si lo tuviera.
  *
  * Extraído para que crear y EDITAR un remito usen exactamente el mismo cálculo:
  * si divergen, editar un remito le cambia el total sin que nadie lo pida.
@@ -98,6 +119,7 @@ async function resolverItemsRemito(
       })
     : [];
   const prodMap = new Map(productos.map((p) => [p.id, p]));
+  const deltas = await resolverDeltasDeLista(cliente.listaPreciosId, opcionIdsDeItems(items));
 
   const itemsData: ItemsResueltos['itemsData'] = [];
   let total = 0;
@@ -105,11 +127,14 @@ async function resolverItemsRemito(
     let precioUnitario: number;
     let subtotalStr: string;
     let nombre = it.nombre;
+    let deltaMod = 0;
     if (it.productoId) {
       const p = prodMap.get(it.productoId);
       if (!p) throw new ItemRemitoError(`Producto ${it.productoId} no existe`);
       const override = p.preciosPorLista[0]?.precioEfectivo;
-      precioUnitario = override ? Number(override) : Number(p.precioBase) * (1 + ajustePct / 100);
+      deltaMod = deltaDeModificadores(it.modificadores ?? [], deltas);
+      precioUnitario =
+        (override ? Number(override) : Number(p.precioBase) * (1 + ajustePct / 100)) + deltaMod;
       nombre = p.nombre;
       subtotalStr = subtotalItem({
         cantidad: it.cantidad,
@@ -132,9 +157,131 @@ async function resolverItemsRemito(
       precioUnitario: precioUnitario.toFixed(2),
       subtotal: subtotalStr,
       orden: idx,
+      modificadoresAplicados: it.modificadores?.length
+        ? (it.modificadores as unknown as Prisma.InputJsonValue)
+        : undefined,
+      deltaModificadores: deltaMod.toFixed(2),
     });
   }
   return { itemsData, total };
+}
+
+/** Una línea de cobro ya normalizada (venga de la forma simple o de la dividida). */
+interface LineaCobro {
+  metodo: (typeof METODOS)[number];
+  cuentaId: string;
+  monto: string;
+  numeroReferencia?: string;
+}
+
+/**
+ * Registra un cobro de cuenta corriente DENTRO de una transacción.
+ *
+ * UN MOVIMIENTO POR LÍNEA. Un `Movimiento` tiene una sola `cuentaDestinoId`:
+ * si el cobro se paga mitad por transferencia y mitad en efectivo, meterlo en
+ * un movimiento solo dejaría la plata entera en una cuenta y el arqueo de la
+ * otra daría de menos. Con una línea = un movimiento cada cuenta recibe lo
+ * suyo, y el saldo del cliente (que suma los INGRESO por `entidadId`) sigue
+ * dando igual.
+ *
+ * Devuelve el PRIMER movimiento: es el que queda como `pagadoConMovimientoId`
+ * de los remitos imputados (el campo es uno solo).
+ *
+ * Está acá afuera para que cobrar desde la ficha del cliente y cobrar un
+ * remito en el momento de crearlo hagan exactamente lo mismo.
+ */
+async function registrarCobro(
+  tx: Prisma.TransactionClient,
+  args: {
+    cliente: { id: string; nombre: string };
+    lineas: LineaCobro[];
+    fecha: Date;
+    observacion: string;
+    categoriaId: string;
+    usuarioId: string;
+    sesionId: string;
+    aImputar: string[];
+    montoTotal: string;
+  },
+) {
+  const { cliente, lineas, fecha, categoriaId, usuarioId, sesionId, aImputar } = args;
+  const movimientos = [];
+  for (const linea of lineas) {
+    const m = await tx.movimiento.create({
+      data: {
+        tipo: 'INGRESO',
+        monto: linea.monto,
+        categoriaId,
+        cuentaDestinoId: linea.cuentaId,
+        entidadId: cliente.id,
+        fechaComputo: fecha,
+        observacion: lineas.length > 1 ? `${args.observacion} (${linea.metodo})` : args.observacion,
+        estado: EstadoMovimiento.CONFIRMADO,
+        usuarioId,
+        // El cobro de cuenta corriente es PLATA QUE ENTRA A LA CAJA DEL TURNO,
+        // así que necesita `sesionCajaId` como cualquier otro movimiento. Sin
+        // esto queda con sesion_caja_id NULL: NO entra al cierre (que filtra
+        // por sesión) pero SÍ aparece en /admin/movimientos (que filtra por
+        // fecha) — la encargada lo ve listado y el cierre no lo cuenta.
+        sesionCajaId: sesionId,
+      },
+    });
+    const pago = await tx.pago.create({
+      data: {
+        movimientoId: m.id,
+        metodo: linea.metodo,
+        cuentaId: linea.cuentaId,
+        monto: linea.monto,
+        numeroReferencia: linea.numeroReferencia ?? null,
+        estado: 'CONFIRMADO',
+        fecha,
+      },
+    });
+    // Los audits van DENTRO de la transacción: si el cobro se rollbackea no
+    // queremos eventos de replicación de algo que no existe.
+    await recordAudit({
+      tabla: 'movimientos',
+      registroId: m.id,
+      accion: 'INSERT',
+      usuarioId,
+      valorNuevo: {
+        tipo: 'INGRESO',
+        concepto: 'Cobro cuenta corriente',
+        cliente: cliente.nombre,
+        monto: linea.monto,
+        metodo: linea.metodo,
+        totalCobro: args.montoTotal,
+        remitosImputados: aImputar.length,
+      },
+      tx,
+    });
+    // `pagos` es otra tabla: sin evento propio, el cobro llega a la nube sin su
+    // forma de pago. Después del movimiento (mayor `secuencia`), que es el
+    // orden que respeta la FK pago → movimiento al replicar.
+    await recordAudit({
+      tabla: 'pagos',
+      registroId: pago.id,
+      accion: 'INSERT',
+      usuarioId,
+      contexto: { movimientoId: m.id, motivo: 'cobro mayorista' },
+      tx,
+    });
+    await tx.cuenta.update({
+      where: { id: linea.cuentaId },
+      data: { saldoActual: { increment: Number(linea.monto) } },
+    });
+    movimientos.push(m);
+  }
+  // Imputación: los remitos elegidos quedan PAGADO y apuntando al primer
+  // movimiento del cobro. Va DENTRO de la tx: si falla, no queremos remitos
+  // marcados como cobrados sin el cobro registrado.
+  if (aImputar.length) {
+    await tx.remito.updateMany({
+      where: { id: { in: aImputar } },
+      data: { estado: 'PAGADO', pagadoAt: fecha, pagadoConMovimientoId: movimientos[0]!.id },
+    });
+  }
+  return movimientos[0]!;
 }
 
 export default async function mayoristasRoutes(fastify: FastifyInstance) {
@@ -380,6 +527,7 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
             cantidad: it.cantidad.toString(),
             precioUnitario: it.precioUnitario.toFixed(2),
             subtotal: it.subtotal.toFixed(2),
+            modificadores: it.modificadoresAplicados ?? null,
           })),
         })),
         cobros: cobros
@@ -412,8 +560,30 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       if (!cliente) return reply.code(404).send({ error: 'Cliente no encontrado' });
 
       const ajustePct = Number(cliente.listaPrecios.ajustePctDefault);
+
+      // Las listas de mayorista son CUSTOM: tienen MIEMBROS. Un producto está en
+      // la lista si tiene fila en `precios_por_lista` — es el mismo criterio con
+      // el que `listas.ts` cuenta los productos de la lista y con el que la
+      // pantalla de catálogo deja marcarlos/desmarcarlos.
+      //
+      // Acá se pedía `where: { activo: true }` a secas, así que el remito
+      // ofrecía TODO el catálogo aunque la lista tuviera tres productos. La
+      // encargada armaba la lista y no servía para nada: los precios salían del
+      // ajuste % general y aparecían productos que ese cliente no compra.
+      const esCustom = cliente.listaPrecios.canalDefault === 'MAYORISTA';
+      // Los modificadores llegan por el tipo de producto o por el producto
+      // puntual: hay que traer los dos y unirlos, igual que /catalogo/productos.
+      const incluirModificadores = {
+        include: {
+          grupoModificador: {
+            include: { opciones: { where: { activa: true }, orderBy: { orden: 'asc' as const } } },
+          },
+        },
+      };
       const productos = await prisma.producto.findMany({
-        where: { activo: true },
+        where: esCustom
+          ? { activo: true, preciosPorLista: { some: { listaId: cliente.listaPreciosId } } }
+          : { activo: true },
         orderBy: { nombre: 'asc' },
         include: {
           preciosPorLista: {
@@ -421,8 +591,17 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
             orderBy: { vigenciaDesde: 'desc' },
             take: 1,
           },
+          tipoProducto: { include: { modificadores: incluirModificadores } },
+          modificadores: incluirModificadores,
         },
       });
+
+      // Deltas de sabor pisados para la lista de este cliente.
+      const overrides = await prisma.deltaOpcionPorLista.findMany({
+        where: { listaId: cliente.listaPreciosId },
+        select: { opcionId: true, deltaPrecio: true },
+      });
+      const overrideMap = new Map(overrides.map((o) => [o.opcionId, o.deltaPrecio.toString()]));
 
       return {
         lista: { id: cliente.listaPrecios.id, nombre: cliente.listaPrecios.nombre },
@@ -431,6 +610,24 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           const precio = override
             ? Number(override)
             : Number(p.precioBase) * (1 + ajustePct / 100);
+          // Sabores del producto, con el precio que tienen EN ESTA LISTA. Sin
+          // esto el remito de un producto con variantes (pizzas, ravioles)
+          // salía con el precio del producto "pelado".
+          const grupos = [...p.modificadores, ...p.tipoProducto.modificadores].map((ma) => {
+            const g = ma.grupoModificador;
+            return {
+              grupoId: g.id,
+              grupoNombre: g.nombre,
+              obligatorio: ma.obligatorioOverride ?? g.obligatorio,
+              tipoSeleccion: g.tipoSeleccion,
+              opciones: g.opciones.map((o) => ({
+                opcionId: o.id,
+                nombre: o.nombre,
+                codigo: o.codigo,
+                deltaPrecio: overrideMap.get(o.id) ?? o.deltaPrecio.toString(),
+              })),
+            };
+          });
           return {
             id: p.id,
             nombre: p.nombre,
@@ -443,6 +640,7 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
             unidadPrecioLabel: p.unidadPrecioLabel,
             formaVenta: p.formaVenta,
             precioUnitario: precio.toFixed(2),
+            grupos,
           };
         }),
       };
@@ -459,6 +657,25 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         body: z.object({
           fecha: z.string().datetime().optional(),
           observaciones: z.string().max(1000).optional(),
+          // Cobrar el remito EN EL MOMENTO. Sin esto había que crear el remito,
+          // volver a la ficha y cargar el cobro aparte imputándolo a mano — tres
+          // pantallas para lo que en el mostrador es un solo gesto.
+          // El monto sale del total calculado server-side, no del front.
+          cobrar: z
+            .object({
+              pagos: z
+                .array(
+                  z.object({
+                    metodo: z.enum(METODOS),
+                    cuentaId: z.string().uuid(),
+                    monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
+                    numeroReferencia: z.string().max(80).optional(),
+                  }),
+                )
+                .min(1)
+                .max(10),
+            })
+            .optional(),
           items: z
             .array(
               z.object({
@@ -467,6 +684,19 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
                 cantidad: z.coerce.number().positive(),
                 // precioUnitario sólo se usa para ítems libres (sin productoId).
                 precioUnitario: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+                modificadores: z
+                  .array(
+                    z.object({
+                      grupoId: z.string().uuid().optional(),
+                      grupoNombre: z.string().max(80).optional(),
+                      opcionId: z.string().uuid().optional(),
+                      opcionNombre: z.string().max(120).optional(),
+                      // El server lo re-resuelve contra la lista del cliente y
+                      // lo usa sólo como techo — ver deltas-lista.ts.
+                      deltaPrecio: z.string().regex(/^-?\d+(\.\d{1,2})?$/).optional(),
+                    }),
+                  )
+                  .optional(),
               }),
             )
             .min(1),
@@ -478,7 +708,8 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       const b = req.body as {
         fecha?: string;
         observaciones?: string;
-        items: Array<{ productoId?: string; nombre: string; cantidad: number; precioUnitario?: string }>;
+        items: ItemEntrada[];
+        cobrar?: { pagos: LineaCobro[] };
       };
       const cliente = await prisma.clienteMayorista.findUnique({
         where: { id },
@@ -494,6 +725,36 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         throw e;
       }
       const { itemsData, total } = resuelto;
+
+      // Si se cobra en el momento, los pagos tienen que cubrir el total que
+      // calculó el SERVER (no el que muestra la pantalla, que puede estar
+      // desactualizado si cambió un precio mientras cargaban el remito).
+      let sesionId: string | null = null;
+      let categoriaId: string | null = null;
+      if (b.cobrar) {
+        const suma = b.cobrar.pagos.reduce((a, p) => a + Number(p.monto), 0);
+        if (Math.abs(suma - total) > 0.01) {
+          return reply.code(400).send({
+            error:
+              `Los pagos suman $${suma.toFixed(2)} y el remito da $${total.toFixed(2)}. ` +
+              'Revisá los montos (puede haber cambiado un precio).',
+          });
+        }
+        try {
+          sesionId = (await getOrCreateSesionActual(req.usuario!.id)).id;
+        } catch (e) {
+          if (e instanceof FueraDeHorarioError) {
+            return reply.code(423).send({
+              error:
+                'No hay un turno abierto, así que el cobro no tendría dónde ' +
+                'imputarse. Guardá el remito sin cobrar y registrá el cobro cuando abra la caja.',
+              code: 'FUERA_DE_HORARIO',
+            });
+          }
+          throw e;
+        }
+        categoriaId = await getCategoriaCobroId();
+      }
 
       const remito = await prisma.remito.create({
         data: {
@@ -513,7 +774,37 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         usuarioId: req.usuario!.id,
         valorNuevo: { numero: remito.numero, cliente: cliente.nombre, total: remito.total.toFixed(2) },
       });
-      return reply.code(201).send(remito);
+      // Los ítems se auditan DESPUÉS del remito (secuencia mayor): el
+      // replicador aplica por secuencia y la FK del hijo pide que el padre ya
+      // esté en la nube. Sin este audit las filas nunca salían de la caja —
+      // el mismo agujero que tenían los items de venta.
+      for (const it of remito.items) {
+        await recordAudit({
+          tabla: 'remito_items',
+          registroId: it.id,
+          accion: 'INSERT',
+          usuarioId: req.usuario!.id,
+          valorNuevo: { remitoId: remito.id, nombre: it.nombreSnapshot },
+        });
+      }
+      // El cobro va DESPUÉS de que el remito existe: se imputa contra él, así
+      // queda PAGADO y apuntando a su movimiento como cualquier otro cobro.
+      if (b.cobrar && sesionId && categoriaId) {
+        await prisma.$transaction((tx) =>
+          registrarCobro(tx, {
+            cliente: { id: cliente.id, nombre: cliente.nombre },
+            lineas: b.cobrar!.pagos,
+            fecha: new Date(),
+            observacion: `Cobro ${cliente.nombre} · remito #${remito.numero}`,
+            categoriaId: categoriaId!,
+            usuarioId: req.usuario!.id,
+            sesionId: sesionId!,
+            aImputar: [remito.id],
+            montoTotal: total.toFixed(2),
+          }),
+        );
+      }
+      return reply.code(201).send({ ...remito, cobrado: Boolean(b.cobrar) });
     },
   );
 
@@ -551,6 +842,10 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           cantidad: it.cantidad.toString(),
           precioUnitario: it.precioUnitario.toFixed(2),
           subtotal: it.subtotal.toFixed(2),
+          // Los sabores elegidos, para que editar el remito los precargue en
+          // vez de perderlos (y recalcular el total sin ellos).
+          modificadores: it.modificadoresAplicados ?? null,
+          deltaModificadores: it.deltaModificadores.toFixed(2),
         })),
       };
     },
@@ -577,6 +872,19 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
                 nombre: z.string().min(1).max(200),
                 cantidad: z.coerce.number().positive(),
                 precioUnitario: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+                modificadores: z
+                  .array(
+                    z.object({
+                      grupoId: z.string().uuid().optional(),
+                      grupoNombre: z.string().max(80).optional(),
+                      opcionId: z.string().uuid().optional(),
+                      opcionNombre: z.string().max(120).optional(),
+                      // El server lo re-resuelve contra la lista del cliente y
+                      // lo usa sólo como techo — ver deltas-lista.ts.
+                      deltaPrecio: z.string().regex(/^-?\d+(\.\d{1,2})?$/).optional(),
+                    }),
+                  )
+                  .optional(),
               }),
             )
             .min(1),
@@ -619,6 +927,13 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         // Reemplazo completo: borrar + recrear es más simple y seguro que
         // diffear, y el remito es chico. Los ítems no se referencian desde
         // ningún lado, así que no hay nada que se rompa al borrarlos.
+        // Los ids viejos hacen falta para auditar las BAJAS: sin eso la nube
+        // se queda con los ítems anteriores y el remito replicado suma dos
+        // veces (los borrados + los nuevos).
+        const previos = await tx.remitoItem.findMany({
+          where: { remitoId },
+          select: { id: true },
+        });
         await tx.remitoItem.deleteMany({ where: { remitoId } });
         const upd = await tx.remito.update({
           where: { id: remitoId },
@@ -639,6 +954,26 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           valorNuevo: { total: upd.total.toFixed(2), items: upd.items.length },
           tx,
         });
+        for (const prev of previos) {
+          await recordAudit({
+            tabla: 'remito_items',
+            registroId: prev.id,
+            accion: 'DELETE',
+            usuarioId: req.usuario!.id,
+            valorAnterior: { remitoId },
+            tx,
+          });
+        }
+        for (const it of upd.items) {
+          await recordAudit({
+            tabla: 'remito_items',
+            registroId: it.id,
+            accion: 'INSERT',
+            usuarioId: req.usuario!.id,
+            valorNuevo: { remitoId, nombre: it.nombreSnapshot },
+            tx,
+          });
+        }
         return upd;
       });
       return actualizado;
@@ -754,8 +1089,24 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         params: z.object({ id: z.string().uuid() }),
         body: z.object({
           monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
-          cuentaId: z.string().uuid(),
+          // Forma simple (un método): `cuentaId` + `metodo`. Se mantiene porque
+          // es el 90% de los cobros y no vale la pena obligar a armar un array.
+          cuentaId: z.string().uuid().optional(),
           metodo: z.enum(METODOS).default('TRANSFERENCIA'),
+          // Forma dividida: la empresa paga una parte por transferencia y otra
+          // en efectivo. Cada línea aterriza en SU cuenta — si se metieran
+          // todas en una, el arqueo de esa cuenta daría de más.
+          pagos: z
+            .array(
+              z.object({
+                metodo: z.enum(METODOS),
+                cuentaId: z.string().uuid(),
+                monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
+                numeroReferencia: z.string().max(80).optional(),
+              }),
+            )
+            .max(10)
+            .optional(),
           fecha: z.string().datetime().optional(),
           numeroReferencia: z.string().max(80).optional(),
           observacion: z.string().max(500).optional(),
@@ -769,8 +1120,14 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       const { id } = req.params as { id: string };
       const b = req.body as {
         monto: string;
-        cuentaId: string;
+        cuentaId?: string;
         metodo: (typeof METODOS)[number];
+        pagos?: Array<{
+          metodo: (typeof METODOS)[number];
+          cuentaId: string;
+          monto: string;
+          numeroReferencia?: string;
+        }>;
         fecha?: string;
         numeroReferencia?: string;
         observacion?: string;
@@ -778,6 +1135,30 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       };
       const cliente = await prisma.clienteMayorista.findUnique({ where: { id } });
       if (!cliente) return reply.code(404).send({ error: 'Cliente no encontrado' });
+
+      // Las dos formas se normalizan a una sola lista de líneas: de acá para
+      // abajo el handler no sabe si vino un método o cinco.
+      const lineas = b.pagos?.length
+        ? b.pagos
+        : b.cuentaId
+          ? [
+              {
+                metodo: b.metodo,
+                cuentaId: b.cuentaId,
+                monto: b.monto,
+                numeroReferencia: b.numeroReferencia,
+              },
+            ]
+          : null;
+      if (!lineas) {
+        return reply.code(400).send({ error: 'Falta la cuenta destino del cobro' });
+      }
+      const sumaLineas = lineas.reduce((a, p) => a + Number(p.monto), 0);
+      if (Math.abs(sumaLineas - Number(b.monto)) > 0.01) {
+        return reply.code(400).send({
+          error: `Los pagos suman $${sumaLineas.toFixed(2)} y el cobro es de $${Number(b.monto).toFixed(2)}`,
+        });
+      }
 
       // Los remitos a imputar tienen que ser DE ESTE cliente y no estar
       // anulados. Sin este chequeo, un id de otro cliente marcaría pagado un
@@ -801,64 +1182,55 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
       }
 
       const categoriaId = await getCategoriaCobroId();
-      const monto = Number(b.monto);
       const fecha = b.fecha ? new Date(b.fecha) : new Date();
       const obs = `Cobro ${cliente.nombre}${b.observacion ? ' · ' + b.observacion : ''}`;
 
-      const mov = await prisma.$transaction(async (tx) => {
-        const m = await tx.movimiento.create({
-          data: {
-            tipo: 'INGRESO',
-            monto: b.monto,
-            categoriaId,
-            cuentaDestinoId: b.cuentaId,
-            entidadId: cliente.id,
-            fechaComputo: fecha,
-            observacion: obs,
-            estado: EstadoMovimiento.CONFIRMADO,
-            usuarioId: req.usuario!.id,
-          },
-        });
-        await tx.pago.create({
-          data: {
-            movimientoId: m.id,
-            metodo: b.metodo,
-            cuentaId: b.cuentaId,
-            monto: b.monto,
-            numeroReferencia: b.numeroReferencia ?? null,
-            estado: 'CONFIRMADO',
-            fecha,
-          },
-        });
-        await tx.cuenta.update({
-          where: { id: b.cuentaId },
-          data: { saldoActual: { increment: monto } },
-        });
-        // Imputación: los remitos elegidos quedan PAGADO y apuntando a ESTE
-        // movimiento. Va DENTRO de la tx: si falla, no queremos remitos
-        // marcados como cobrados sin el cobro registrado.
-        if (aImputar.length) {
-          await tx.remito.updateMany({
-            where: { id: { in: aImputar } },
-            data: { estado: 'PAGADO', pagadoAt: fecha, pagadoConMovimientoId: m.id },
+      // El cobro de cuenta corriente es PLATA QUE ENTRA A LA CAJA DEL TURNO, así
+      // que necesita `sesionCajaId` como cualquier otro movimiento. Sin esto el
+      // registro queda con sesion_caja_id NULL: NO entra al cierre (que filtra
+      // por sesión) pero SÍ aparece en /admin/movimientos (que filtra por
+      // fecha) — o sea que la encargada lo ve listado y el cierre no lo cuenta,
+      // y la caja le da de menos sin ninguna señal de por qué.
+      //
+      // Es EL MISMO bug que se arregló en alpha.19 para POST /admin/movimientos
+      // y que quedó vivo en esta ruta. Ver el invariante en CLAUDE.md.
+      let sesionId: string;
+      try {
+        sesionId = (await getOrCreateSesionActual(req.usuario!.id)).id;
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error:
+              'No hay un turno abierto en este momento, así que el cobro no ' +
+              'tendría dónde imputarse. Abrí la caja y volvé a registrarlo.',
+            code: 'FUERA_DE_HORARIO',
           });
         }
-        return m;
+        throw e;
+      }
+
+      const mov = await prisma.$transaction((tx) =>
+        registrarCobro(tx, {
+          cliente,
+          lineas,
+          fecha,
+          observacion: obs,
+          categoriaId,
+          usuarioId: req.usuario!.id,
+          sesionId,
+          aImputar,
+          montoTotal: b.monto,
+        }),
+      );
+      // El audit del movimiento se emite DENTRO de la transacción (arriba),
+      // junto con el del pago. Acá había un segundo audit del mismo movimiento
+      // que quedó de más al moverlo adentro.
+      return reply.code(201).send({
+        ...mov,
+        remitosImputados: aImputar.length,
+        pagos: lineas.length,
+        montoTotal: b.monto,
       });
-      await recordAudit({
-        tabla: 'movimientos',
-        registroId: mov.id,
-        accion: 'INSERT',
-        usuarioId: req.usuario!.id,
-        valorNuevo: {
-          tipo: 'INGRESO',
-          concepto: 'Cobro cuenta corriente',
-          cliente: cliente.nombre,
-          monto: b.monto,
-          remitosImputados: aImputar.length,
-        },
-      });
-      return reply.code(201).send({ ...mov, remitosImputados: aImputar.length });
     },
   );
 }

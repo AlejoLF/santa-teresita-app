@@ -13,6 +13,11 @@ import { subtotalItem } from '@sta/shared';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
 import { recordAudit } from './audit.js';
 import { encolarComandasParaVenta, ventaYaEnviadaACocina } from './impresion.js';
+import {
+  resolverDeltasDeLista,
+  deltaDeModificadores,
+  opcionIdsDeItems,
+} from './deltas-lista.js';
 
 /**
  * Desarma promos/combos en ItemVentas componentes, calculando el precio EN EL
@@ -164,6 +169,9 @@ export async function crearVenta(args: {
   });
   const productoMap = new Map(productos.map((p) => [p.id, p]));
 
+  // Deltas de los sabores RESUELTOS CONTRA ESTA LISTA (ver deltas-lista.ts).
+  const deltas = await resolverDeltasDeLista(lista.id, opcionIdsDeItems(data.items));
+
   // Calcular items con snapshot
   const itemsToCreate: Array<Prisma.ItemVentaCreateWithoutVentaInput> = [];
   let subtotalVenta = 0;
@@ -179,14 +187,7 @@ export async function crearVenta(args: {
     const precioListaSinDelta = precioOverride
       ? Number(precioOverride)
       : precioBaseNumber * (1 + ajustePct / 100);
-    // Seguridad: clamp del delta a >= 0 por modificador. El deltaPrecio viene
-    // del cliente y un valor negativo (ej. -999999) llevaba el total a cero o
-    // negativo. Un modificador SUMA (queso extra), nunca resta — las etiquetas
-    // libres van con delta 0. (A6 del audit de seguridad.)
-    const deltaMod = item.modificadores.reduce(
-      (acc, m) => acc + Math.max(0, Number(m.deltaPrecio || 0)),
-      0,
-    );
+    const deltaMod = deltaDeModificadores(item.modificadores, deltas);
     const precioUnitario = precioListaSinDelta + deltaMod;
 
     const subTotalItemStr = subtotalItem({
@@ -434,6 +435,7 @@ export async function agregarItemsAVenta(args: {
   const productoMap = new Map(productos.map((p) => [p.id, p]));
 
   const ajustePct = Number(venta.listaPrecios.ajustePctDefault);
+  const deltas = await resolverDeltasDeLista(venta.listaPreciosId, opcionIdsDeItems(items));
   const ordenInicial = (venta.items[venta.items.length - 1]?.orden ?? -1) + 1;
 
   const itemsToCreate: Array<Prisma.ItemVentaCreateWithoutVentaInput> = [];
@@ -449,14 +451,7 @@ export async function agregarItemsAVenta(args: {
     const precioListaSinDelta = precioOverride
       ? Number(precioOverride)
       : precioBaseNum * (1 + ajustePct / 100);
-    // Seguridad: clamp del delta a >= 0 por modificador. El deltaPrecio viene
-    // del cliente y un valor negativo (ej. -999999) llevaba el total a cero o
-    // negativo. Un modificador SUMA (queso extra), nunca resta — las etiquetas
-    // libres van con delta 0. (A6 del audit de seguridad.)
-    const deltaMod = item.modificadores.reduce(
-      (acc, m) => acc + Math.max(0, Number(m.deltaPrecio || 0)),
-      0,
-    );
+    const deltaMod = deltaDeModificadores(item.modificadores, deltas);
     const precioUnitario = precioListaSinDelta + deltaMod;
 
     const subTotalItemStr = subtotalItem({
