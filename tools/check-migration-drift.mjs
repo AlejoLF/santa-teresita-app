@@ -52,6 +52,15 @@ try {
   }
 }
 
+// El paquete puede resolver pero venir SIN generar (un `install` limpio deja el
+// stub). Ahí `Prisma` existe y `Prisma.dmmf` no, así que sin este chequeo el
+// script muere con un TypeError críptico en vez del mensaje de arriba — que es
+// exactamente lo que pasó en la primera corrida del workflow de release.
+if (!Prisma?.dmmf?.datamodel) {
+  console.error('@prisma/client está sin generar (no trae dmmf). Corré `pnpm db:generate` primero.');
+  process.exit(2);
+}
+
 // Identificador SQL con o sin comillas: las migraciones usan las dos formas
 // (las generadas por Prisma citan todo, las escritas a mano no siempre).
 const ID = '"?([a-z0-9_]+)"?';

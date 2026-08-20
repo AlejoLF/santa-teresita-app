@@ -65,6 +65,14 @@ jobs:
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile
 
+      - name: Generate Prisma client
+        # Va ANTES del chequeo de drift: el checker compara el schema contra las
+        # migraciones leyendo el DMMF del cliente GENERADO, no el .prisma. Sin
+        # esto, `pnpm install` deja un @prisma/client sin datamodel y el chequeo
+        # explota con "Cannot read properties of undefined". El build lo vuelve a
+        # generar más adelante, pero para entonces ya es tarde.
+        run: pnpm --filter @sta/db run generate
+
       - name: Chequear drift de migraciones
         # El invariante de CLAUDE.md: una columna empujada con `db push` que
         # ninguna migración crea existe en Supabase y en las locales, pero NO en
