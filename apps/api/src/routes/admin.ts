@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@sta/db/client';
+import { erroresRecientes, type CategoriaError } from '../services/errores.js';
 import {
   EstadoVenta,
   EstadoLiquidacion,
@@ -168,6 +169,34 @@ async function syncListasCustomDeProducto(
  * Todas las queries usan agregaciones de Postgres (no fetch + sum en app) para que escale.
  */
 export default async function adminRoutes(fastify: FastifyInstance) {
+  // GET /admin/errores — buscar un código que reportó alguien del mostrador.
+  //
+  // Vive en memoria (ver services/errores.ts): si la base es justo lo que
+  // está fallando, un registro que necesita escribir en la base no sirve.
+  fastify.get(
+    '/admin/errores',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        querystring: z.object({
+          codigo: z.string().max(40).optional(),
+          categoria: z
+            .enum(['VAL', 'AUTH', 'HORARIO', 'DB', 'CONN', 'IMPR', 'EXCEL', 'REGLA', 'SRV'])
+            .optional(),
+          limite: z.coerce.number().int().min(1).max(300).default(100),
+        }),
+      },
+    },
+    async (req) => {
+      const q = req.query as {
+        codigo?: string;
+        categoria?: CategoriaError;
+        limite: number;
+      };
+      return { errores: erroresRecientes({ codigo: q.codigo, categoria: q.categoria, limite: q.limite }) };
+    },
+  );
+
   // GET /admin/pendientes — endpoint liviano para el badge de notificaciones
   // del layout admin. El polling del layout llamaba /admin/dashboard (5-10KB,
   // 15 queries) solo para leer 3 contadores; ahora ese poll usa este endpoint
