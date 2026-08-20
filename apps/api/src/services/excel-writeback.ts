@@ -26,6 +26,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { copyFile, access } from 'node:fs/promises';
 import { prisma } from '@sta/db/client';
+import { ReglaNegocioError } from './errores.js';
 import { cargarCierre, type CierreData, type CategoriaCobros } from './cierre-export.js';
 
 const SERVICE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -113,6 +114,28 @@ async function cargarDia(fecha: Date): Promise<{
 }
 
 /**
+ * ¿Está habilitado escribir el CASHFLOW? Apagado por default, a propósito.
+ *
+ * El archivo se baja de Drive con rclone en UNA sola dirección (ver
+ * DEPLOY-SERVIDOR-LOCAL.md §1.5): lo que escriba el servidor lo pisa la próxima
+ * corrida, unos diez minutos después. Y como esta función reescribe el libro
+ * entero, también se lleva puestos los egresos que el cliente carga a mano en
+ * las filas R16-R44.
+ *
+ * Sin candado, un clic en "sincronizar cashflow" devuelve un ✔ verde, deja un
+ * .bak al lado y no pasa nada: el trabajo desaparece en la siguiente
+ * sincronización, sin un solo error. Eso es peor que fallar — nadie lo
+ * investiga porque nadie sabe que pasó. Falla ruidosa y a propósito hasta que
+ * la sincronización sea de ida y vuelta.
+ *
+ * Va acá y no en la ruta para que cubra a cualquier llamador, incluido un
+ * script que alguien corra a mano más adelante.
+ */
+function escrituraHabilitada(): boolean {
+  return /^(1|true|si|sí)$/i.test((process.env.EXCEL_CASHFLOW_ESCRITURA ?? '').trim());
+}
+
+/**
  * Escribe los datos del día al CASHFLOW. Crea un .bak antes de tocar el archivo.
  */
 export async function actualizarCashflow(opts: {
@@ -122,6 +145,16 @@ export async function actualizarCashflow(opts: {
   /** Path explícito al .xlsx (default: <EXCEL_DIR>/CASHFLOW 2026.xlsx). */
   archivoPath?: string;
 }): Promise<SyncResult> {
+  if (!escrituraHabilitada()) {
+    throw new ReglaNegocioError(
+      'La escritura del CASHFLOW está deshabilitada. El archivo se baja de Drive en ' +
+        'una sola dirección, así que lo que se escriba desde acá se pierde en la ' +
+        'próxima sincronización, sin aviso. Para habilitarla hay que configurar la ' +
+        'sincronización de ida y vuelta y recién ahí poner EXCEL_CASHFLOW_ESCRITURA=true.',
+      423,
+    );
+  }
+
   const archivoPath = opts.archivoPath ?? join(EXCEL_DIR, CASHFLOW_FILE);
   await access(archivoPath); // throws si no existe
 
