@@ -40,6 +40,36 @@ encuentran las columnas nuevas cuando se auto-actualizan.
 - **Deploy web + API**: automático en cada push a `main` (Vercel = web,
   Railway = API). No hay que hacer nada más.
 
+## 4. Publicar el servidor local S1 📱
+
+Actions → **Release Server (S1)** → *Run workflow*.
+
+| Campo | Qué poner |
+|-|-|
+| `bump` | `patch` (1.1.9 → 1.1.10) — el caso normal |
+| `inmediato` | dejalo en `false` salvo hotfix |
+
+El workflow bumpea `apps/server/package.json`, commitea a `main` y publica el
+release `server-v*` con el zip. **S1 lo aplica solo en la tarea de las 4 AM**:
+hace backup de la base, para el servicio, reemplaza el código, aplica las
+migraciones nuevas, reinicia y verifica `/health`. Si algo falla, rollback.
+
+Con `inmediato: true` el release sale marcado `STA_DEPLOY_NOW` y lo agarra la
+tarea que corre cada 5 min. Usalo solo para hotfixes: reinicia el servicio en
+medio del día.
+
+> **Ojo con el runner.** El job corre en `windows-latest` y no es preferencia:
+> el build empaqueta el engine nativo de Prisma y el prebuilt de
+> `better-sqlite3` **de la plataforma donde corre**. Compilado en Linux, S1
+> recibe un `.so` y no levanta — y como el updater hace rollback ante el primer
+> error, se ve como "no entró la actualización", no como "está mal compilado".
+
+> **S1 tiene su propio ciclo, separado del `.exe`.** Publicar un alpha NO
+> actualiza S1, ni al revés. Si una feature toca la API y la usás desde S1, hay
+> que correr los dos. Síntoma de haberlo olvidado: la pantalla tira 404 en una
+> ruta que existe en el código — y ese 404 viene sin código `STA-`, porque el
+> código viejo no los emitía.
+
 ## Lo único que TODAVÍA necesita la PC 🖥️
 
 **Testear el `.exe` contra el mirror local** (Docker en la PC). Es inherente a

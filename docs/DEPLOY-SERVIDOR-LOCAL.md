@@ -280,6 +280,129 @@ server la ve, centralizar la impresión por el server resuelve ese problema.
 
 ---
 
+## 1.5 Excel de la encargada desde Google Drive  ── ~20 min
+
+Las pantallas de proveedores/insumos leen `Proveedores 2026.xlsx` del disco de
+S1 (`EXCEL_LOCAL_DIR`). Los archivos viven en el Drive de la encargada y los
+baja **rclone** a una carpeta común, con una tarea programada.
+
+### Por qué rclone y no Google Drive para Escritorio
+
+El API corre como servicio NSSM, o sea como `LocalSystem`. Drive para Escritorio
+monta su unidad **por sesión de usuario interactivo**: un servicio LocalSystem no
+la ve, y deja de sincronizar cuando esa usuaria cierra sesión. Anda mientras
+probás con tu sesión abierta y se rompe sola en el primer reinicio desatendido.
+rclone escribe a un directorio común y no depende de ninguna sesión.
+
+### Los archivos son de otra persona
+
+La encargada comparte cada archivo individualmente, así que no hay una carpeta
+con ID propio. La vuelta: crear `STA-Excel` en **tu** Mi unidad y meter ahí un
+**acceso directo** a cada archivo (clic derecho → Organizar → Añadir acceso
+directo). rclone los resuelve al archivo real, y queda un solo path estable.
+
+La alternativa —`--drive-shared-with-me` con un `--include`— evita tocar Drive
+pero lista *todo* lo que te compartieron alguna vez y filtra después: lento si
+hay muchos, y ambiguo si aparece otro archivo con el mismo nombre.
+
+### Instalación
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+New-Item -ItemType Directory -Force -Path C:\sta\rclone, C:\sta\excel, C:\sta\logs | Out-Null
+Invoke-WebRequest 'https://downloads.rclone.org/rclone-current-windows-amd64.zip' -OutFile "$env:TEMP\rclone.zip"
+Expand-Archive "$env:TEMP\rclone.zip" -DestinationPath "$env:TEMP\rclone" -Force
+Copy-Item (Get-ChildItem "$env:TEMP\rclone" -Recurse -Filter rclone.exe).FullName 'C:\sta\rclone\rclone.exe' -Force
+```
+
+**No lo instales con `winget` ni lo agregues al PATH**: winget lo deja en el
+perfil del usuario, invisible para SYSTEM, y la tarea no hereda tu PATH.
+
+### Configuración del remoto
+
+```powershell
+C:\sta\rclone\rclone.exe config --config C:\sta\rclone\rclone.conf
+```
+
+`n` → nombre `sta-drive` → storage `drive` → **client_id y client_secret
+propios** → scope `2` (drive.readonly) → advanced `n` → navegador `n`.
+
+Dos cosas que no son opcionales:
+
+- **Client ID propio.** rclone está retirando su client_id compartido durante
+  2026; además lo usa todo el mundo, así que come rate limits ajenos y tira 403
+  al azar. Se crea en Google Cloud Console (proyecto → habilitar Google Drive
+  API → pantalla de consentimiento → credenciales → **App de escritorio**).
+- **Publicar la app "En producción"** en la pantalla de consentimiento. En
+  estado "Prueba" el refresh token **vence a los 7 días** y el sync se corta
+  solo la semana siguiente. La advertencia de "app no verificada" es esperable:
+  la verificación sólo hace falta para distribuirla a terceros.
+
+Como S1 no tiene navegador (se entra por SSH), contestá `n` a la autenticación
+automática: imprime un `rclone authorize "drive" "..."` que se corre **en la PC**
+y devuelve un token para pegar de vuelta.
+
+### La bajada
+
+```bat
+@echo off
+"C:\sta\rclone\rclone.exe" copy sta-drive:STA-Excel C:\sta\excel --drive-export-formats xlsx --config "C:\sta\rclone\rclone.conf" --log-file "C:\sta\logs\rclone-excel.log" --log-level INFO
+```
+
+Guardarlo como `C:\sta\rclone\sync-excel.cmd` **con encoding ASCII** (un BOM
+al principio hace que Windows se coma el `@echo off`). Después:
+
+```powershell
+icacls C:\sta\rclone\rclone.conf /inheritance:r /grant *S-1-5-18:R /grant *S-1-5-32-544:F
+schtasks /create /tn "STA-Excel-Sync" /tr "C:\sta\rclone\sync-excel.cmd" /sc minute /mo 10 /ru SYSTEM /rl HIGHEST /f
+```
+
+Los SID en vez de los nombres porque el grupo es "Administradores" o
+"Administrators" según el idioma del Windows.
+
+`copy` y no `sync`/`bisync`: los otros dos no manejan bien los documentos
+nativos de Google.
+
+### La variable va en `.env`, NO con `nssm set`
+
+```powershell
+Add-Content C:\sta-server\.env "`r`nEXCEL_LOCAL_DIR=C:\sta\excel"
+C:\sta-server\update-server.ps1 -SyncEnv
+```
+
+`update-server.ps1` **re-sincroniza el bloque de variables de NSSM desde
+`.env`** en cada actualización. Una variable puesta con `nssm set` directo
+sobrevive hasta la tarea de las 4 AM y desaparece sin dejar rastro.
+
+### Verificación
+
+```powershell
+Remove-Item "C:\sta\excel\Proveedores 2026.xlsx"
+schtasks /run /tn "STA-Excel-Sync"
+Start-Sleep 25
+dir C:\sta\excel
+```
+
+Borrar y ver si SYSTEM lo trae de vuelta prueba las tres cosas de una: que
+puede leer el `.conf`, hablar con Drive y escribir en la carpeta. Que la tarea
+"diga" que corrió no prueba ninguna.
+
+### Notas
+
+- **`Proveedores 2026` es una hoja de Google, no un `.xlsx`.** rclone la exporta
+  al vuelo con `--drive-export-formats xlsx` y la nombra `Proveedores
+  2026.xlsx`, que es exactamente lo que busca `excel-proveedores.ts`. El nombre
+  en Drive tiene que ser exacto: si quedó como "Copia de…", el programa no lo
+  encuentra y el error dice que configures `EXCEL_LOCAL_DIR` — que en ese caso
+  miente. En `rclone ls` se reconoce porque el tamaño sale **-1**: los
+  documentos nativos no tienen tamaño hasta exportarse, y por eso ese archivo se
+  re-descarga en cada corrida (los `.xlsx` de verdad se saltean si no cambiaron).
+- **El CASHFLOW es de ida y vuelta y todavía NO está resuelto.** `excel-writeback.ts`
+  lo reescribe entero, y el cliente carga los egresos R16–R44 a mano. Con la
+  bajada de una sola vía, lo que escriba S1 lo pisa el próximo ciclo. **No usar
+  el botón de sincronizar cashflow** (`POST /admin/caja/sesion/:id/sincronizar-cashflow`)
+  hasta armar las dos vías: el trabajo se pierde sin ningún error.
+
 ## 2. Cajas (`.exe`)  ── ~5 min por caja
 
 En cada PC de caja, una vez que el server está vivo:
