@@ -1,3 +1,4 @@
+import { ReglaNegocioError } from './errores.js';
 import { prisma } from '@sta/db/client';
 import {
   CanalVenta,
@@ -65,9 +66,9 @@ async function expandirPromosAItems(args: {
 
   for (const promo of promos) {
     const combo = comboMap.get(promo.comboId);
-    if (!combo) throw new Error(`Combo ${promo.comboId} no existe o está inactivo`);
+    if (!combo) throw new ReglaNegocioError(`Combo ${promo.comboId} no existe o está inactivo`);
     const comps = combo.componentes.filter((c) => c.producto);
-    if (comps.length === 0) throw new Error(`Combo ${combo.nombre} no tiene productos`);
+    if (comps.length === 0) throw new ReglaNegocioError(`Combo ${combo.nombre} no tiene productos`);
 
     const Q = promo.cantidad;
     const totalCombo = Math.round(Number(combo.precioCombo) * Q * 100) / 100;
@@ -156,7 +157,7 @@ export async function crearVenta(args: {
     where: { canalDefault: canalLista, activa: true },
     orderBy: { nombre: 'asc' },
   });
-  if (!lista) throw new Error(`No hay lista de precios activa para el canal ${canalLista}`);
+  if (!lista) throw new ReglaNegocioError(`No hay lista de precios activa para el canal ${canalLista}`);
 
   const sesion = await getOrCreateSesionActual(usuarioId);
   const numeroOrden = await siguienteNumeroOrdenTurno(sesion.id);
@@ -180,7 +181,7 @@ export async function crearVenta(args: {
 
   for (const [idx, item] of data.items.entries()) {
     const producto = productoMap.get(item.productoId);
-    if (!producto) throw new Error(`Producto ${item.productoId} no existe`);
+    if (!producto) throw new ReglaNegocioError(`Producto ${item.productoId} no existe`);
 
     const precioOverride = producto.preciosPorLista[0]?.precioEfectivo;
     const precioBaseNumber = Number(producto.precioBase);
@@ -422,7 +423,7 @@ export async function agregarItemsAVenta(args: {
     where: { id: ventaId },
     include: { listaPrecios: true, items: true },
   });
-  if (!venta) throw new Error('Venta no encontrada');
+  if (!venta) throw new ReglaNegocioError('Venta no encontrada');
 
   const productoIds = [...new Set(items.map((i) => i.productoId))];
   const productos = await prisma.producto.findMany({
@@ -444,7 +445,7 @@ export async function agregarItemsAVenta(args: {
 
   for (const [idx, item] of items.entries()) {
     const producto = productoMap.get(item.productoId);
-    if (!producto) throw new Error(`Producto ${item.productoId} no existe`);
+    if (!producto) throw new ReglaNegocioError(`Producto ${item.productoId} no existe`);
 
     const precioOverride = producto.preciosPorLista[0]?.precioEfectivo;
     const precioBaseNum = Number(producto.precioBase);
@@ -543,9 +544,9 @@ export async function editarItemDeVenta(args: {
     where: { id: args.ventaId },
     include: { items: true },
   });
-  if (!venta) throw new Error('Venta no encontrada');
+  if (!venta) throw new ReglaNegocioError('Venta no encontrada');
   const item = venta.items.find((i) => i.id === args.itemId);
-  if (!item) throw new Error('Item no encontrado en esta venta');
+  if (!item) throw new ReglaNegocioError('Item no encontrado en esta venta');
 
   await prisma.itemVenta.update({
     where: { id: args.itemId },
@@ -564,9 +565,9 @@ export async function quitarItemDeVenta(args: { ventaId: string; itemId: string 
     where: { id: args.ventaId },
     include: { items: true },
   });
-  if (!venta) throw new Error('Venta no encontrada');
+  if (!venta) throw new ReglaNegocioError('Venta no encontrada');
   const item = venta.items.find((i) => i.id === args.itemId);
-  if (!item) throw new Error('Item no encontrado en esta venta');
+  if (!item) throw new ReglaNegocioError('Item no encontrado en esta venta');
 
   await prisma.itemVenta.delete({ where: { id: args.itemId } });
 

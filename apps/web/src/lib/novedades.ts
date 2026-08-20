@@ -34,6 +34,18 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.63',
+    fecha: '20 de agosto',
+    titulo: 'Se arregló el error al mandar porciones calientes',
+    cambios: [
+      'Ya se pueden mandar de nuevo las porciones calientes con aceite, aceite de oliva, manteca, mixta o rosa. Desde la actualización anterior, elegir cualquiera de ésas hacía que el pedido no saliera y apareciera "error interno del servidor". Los pedidos que no llevaban ninguna de esas opciones nunca tuvieron problema — por eso fallaba a veces sí y a veces no.',
+      'Los precios no cambian: esas opciones siguen sin costar nada y se siguen imprimiendo en la comanda igual que siempre.',
+      'De ahora en adelante, cuando algo falle el cartel te va a dar un código, tipo "STA-DB-7K4M2P". Anotalo o sacale una foto y pasalo — con ese código se puede ver exactamente qué pasó, en vez de tener que adivinar.',
+      'El cartel también dice mejor qué pasó. Antes, muchas cosas salían como "error interno del servidor"; ahora, si el problema es que falta un producto o que no hay lista de precios, lo dice con esas palabras.',
+      'Julio: en Administración hay una pantalla nueva, "Errores". Pegás ahí el código que te pasaron y aparece qué falló, en qué pantalla, quién lo hizo y a qué hora.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.62',
     fecha: '16 de agosto',
     titulo: 'Exportar a Excel, precios por sabor y remitos que se cobran solos',
