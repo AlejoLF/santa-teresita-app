@@ -2548,6 +2548,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           warnings: r.warnings,
         };
       } catch (e) {
+        // Un error con status propio (el candado de escritura del cashflow tira
+        // 423) es una decisión deliberada, no una falla: va al manejador global,
+        // que le pone la categoría y el código que corresponden. Envolverlo en un
+        // 500 lo haría leer como "error inesperado del sistema" — justo lo que
+        // los códigos de error vinieron a evitar.
+        if (typeof (e as { statusCode?: number })?.statusCode === 'number') throw e;
         return reply
           .code(500)
           .send({ error: e instanceof Error ? e.message : 'Error sincronizando' });

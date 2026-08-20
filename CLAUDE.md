@@ -285,6 +285,12 @@ Detalle en [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md). Resumen:
   El workflow bumpea, commitea a `main`, taggea y buildea. No toques versiones a mano:
   el drift versión/tag es lo que hizo fallar alpha.54.
 - **Migrar Supabase** → Actions → *Cloud Migrate* → Run workflow. Idempotente.
+- **Actualizar el servidor S1** → Actions → *Release Server (S1)* → Run workflow
+  (`bump=patch`). S1 lo aplica solo a las 4 AM; `inmediato=true` lo baja en ~5 min.
+  **Ciclo separado del `.exe`**: publicar un alpha NO actualiza S1. Si tocás la
+  API y la usás desde S1, corré los dos. El job va en `windows-latest` a la
+  fuerza — el build empaqueta binarios nativos (engine de Prisma,
+  `better-sqlite3`) de la plataforma donde corre.
 - **Orden cuando el release trae cambio de schema**: primero Cloud Migrate, después
   Release Desktop (así las cajas encuentran las columnas nuevas al actualizarse).
 - Web y API deployan solos en cada push a `main` (Vercel + Railway).
