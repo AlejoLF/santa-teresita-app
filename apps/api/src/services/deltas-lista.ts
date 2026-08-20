@@ -24,11 +24,32 @@ export type DeltasResueltos = Map<string, number>;
  * inexistentes quedan afuera del Map a propósito: quien cobra decide qué hacer
  * (hoy: tratarlas como delta 0, ver `deltaDeModificadores`).
  */
+/**
+ * ¿Es un id de opción REAL de la base, o una etiqueta libre?
+ *
+ * No todos los `opcionId` que manda el front existen en `opciones_modificador`.
+ * Las porciones calientes llevan extras sintéticos —`__aceite_oliva`,
+ * `__manteca`, `__mixta`…— que el cajero elige junto con la salsa y que NO son
+ * filas de la tabla: van con delta 0 y sólo viajan para que salgan impresos en
+ * la comanda.
+ *
+ * `opciones_modificador.id` es UUID, así que meter `"__aceite_oliva"` en un
+ * `WHERE id IN (...)` no devuelve vacío: Postgres tira
+ * `22P02 invalid input syntax for type uuid` y se cae la query entera. Es decir,
+ * un solo extra sintético hacía fallar TODO el pedido con 500.
+ *
+ * Incidente real: alpha.62, ~60% de las porciones calientes por teléfono.
+ */
+const ES_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 export async function resolverDeltasDeLista(
   listaId: string | null | undefined,
   opcionIds: string[],
 ): Promise<DeltasResueltos> {
-  const ids = [...new Set(opcionIds.filter(Boolean))];
+  // Sólo los ids con forma de UUID llegan a la base. Los demás quedan fuera del
+  // Map y `deltaDeModificadores` los cobra 0 — que es exactamente lo que hacían
+  // antes, cuando el delta se sumaba sin consultar nada.
+  const ids = [...new Set(opcionIds.filter((id) => id && ES_UUID.test(id)))];
   const out: DeltasResueltos = new Map();
   if (ids.length === 0) return out;
 
