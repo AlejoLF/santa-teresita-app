@@ -5,6 +5,19 @@ import { RolUsuario, EstadoMovimiento } from '@sta/db';
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
+import {
+  resolverFiltroTemporal,
+  whereRangoFecha,
+  periodoBusquedaSchema,
+  paginacionSchema,
+  armarPaginacion,
+  type PeriodoBusqueda,
+} from '../services/filtro-temporal.js';
+import {
+  construirExcelBusqueda,
+  descripcionFiltros,
+  nombreArchivoExport,
+} from '../services/export-busqueda.js';
 
 /**
  * CRUD de empleados + carga de movimientos de personal (sueldos, adelantos, comisiones).
@@ -12,7 +25,13 @@ import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion
  * y categoría "Sueldos" / "Adelanto a empleado" / "Comisiones".
  */
 export default async function empleadosRoutes(fastify: FastifyInstance) {
-  // GET /admin/empleados — lista con saldo mes actual y total adelantos pendientes
+  // GET /admin/empleados — lista con búsqueda, filtro temporal, paginación y
+  // export a Excel. Mismo contrato que las otras tablas pesadas del admin.
+  //
+  // El filtro temporal acota los MOVIMIENTOS (lo pagado, los adelantos), no la
+  // lista de empleados: se ven todos, con sus números del período elegido. Una
+  // lista de personal que esconde gente según un rango de fechas no tendría
+  // sentido — el empleado existe igual aunque no haya cobrado esta semana.
   fastify.get(
     '/admin/empleados',
     {
@@ -20,104 +39,214 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
       schema: {
         querystring: z.object({
           incluirInactivos: queryBool(false),
-          q: z.string().optional(),
+          q: z.string().trim().min(1).max(80).optional(),
+          periodo: periodoBusquedaSchema.optional(),
+          desde: z.string().datetime().optional(),
+          hasta: z.string().datetime().optional(),
+          ...paginacionSchema,
+          formato: z.enum(['json', 'xlsx']).optional(),
         }),
       },
     },
-    async (req) => {
-      const q = req.query as { incluirInactivos: boolean; q?: string };
-      const empleados = await prisma.empleado.findMany({
-        where: {
-          ...(q.incluirInactivos ? {} : { activo: true }),
-          ...(q.q && {
-            // Multi-campo: además de nombre/apellido, por DNI, CUIL, teléfono
-            // y email — para poder encontrar a alguien por cualquiera de sus datos.
-            OR: [
-              { nombre: { contains: q.q, mode: 'insensitive' as const } },
-              { apellido: { contains: q.q, mode: 'insensitive' as const } },
-              { dni: { contains: q.q, mode: 'insensitive' as const } },
-              { cuil: { contains: q.q, mode: 'insensitive' as const } },
-              { telefono: { contains: q.q, mode: 'insensitive' as const } },
-              { email: { contains: q.q, mode: 'insensitive' as const } },
-            ],
-          }),
-        },
-        orderBy: [{ activo: 'desc' }, { nombre: 'asc' }],
+    async (req, reply) => {
+      const q = req.query as {
+        incluirInactivos: boolean;
+        q?: string;
+        periodo?: PeriodoBusqueda;
+        desde?: string;
+        hasta?: string;
+        page: number;
+        pageSize: number;
+        formato?: 'json' | 'xlsx';
+      };
+
+      const ft = await resolverFiltroTemporal({
+        periodo: q.periodo,
+        desde: q.desde,
+        hasta: q.hasta,
       });
 
-      // Sumar movimientos del mes actual por empleado y categoría
-      const ahora = new Date();
-      const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1);
+      const texto = q.q?.trim();
+      const where = {
+        ...(q.incluirInactivos ? {} : { activo: true }),
+        ...(texto && {
+          // Multi-campo: además de nombre/apellido, por DNI, CUIL, teléfono
+          // y email — para poder encontrar a alguien por cualquiera de sus datos.
+          OR: [
+            { nombre: { contains: texto, mode: 'insensitive' as const } },
+            { apellido: { contains: texto, mode: 'insensitive' as const } },
+            { dni: { contains: texto, mode: 'insensitive' as const } },
+            { cuil: { contains: texto, mode: 'insensitive' as const } },
+            { telefono: { contains: texto, mode: 'insensitive' as const } },
+            { email: { contains: texto, mode: 'insensitive' as const } },
+          ],
+        }),
+      };
 
-      const movsMes = await prisma.movimiento.groupBy({
-        by: ['entidadId', 'categoriaId'],
-        _sum: { monto: true },
-        _count: { _all: true },
-        where: {
-          entidadId: { in: empleados.map((e) => e.id) },
-          tipo: 'EGRESO',
-          estado: EstadoMovimiento.CONFIRMADO,
-          fechaComputo: { gte: inicioMes },
-        },
-      });
+      const orderBy = [{ activo: 'desc' as const }, { nombre: 'asc' as const }];
+      const exportando = q.formato === 'xlsx';
+      const TOPE_EXPORT = 5000;
 
-      // Cargar nombres de categorías
+      const skip = exportando ? 0 : (q.page - 1) * q.pageSize;
+      const take = exportando ? TOPE_EXPORT : q.pageSize;
+
+      const [empleados, total] = await Promise.all([
+        prisma.empleado.findMany({ where, orderBy, skip, take }),
+        prisma.empleado.count({ where }),
+      ]);
+
+      // Los movimientos se suman SOLO para los empleados que se van a devolver.
+      // Sumarlos para toda la base y después descartar sería pagar la query
+      // entera para mostrar doce filas.
+      const ids = empleados.map((e) => e.id);
+      const movs = ids.length
+        ? await prisma.movimiento.groupBy({
+            by: ['entidadId', 'categoriaId'],
+            _sum: { monto: true },
+            where: {
+              entidadId: { in: ids },
+              tipo: 'EGRESO',
+              estado: EstadoMovimiento.CONFIRMADO,
+              // Igual que en movimientos: por sesión se filtra por sesionCajaId,
+              // no por un rango de fechas — son dos criterios distintos.
+              ...(ft.sesionCajaId
+                ? { sesionCajaId: ft.sesionCajaId }
+                : whereRangoFecha('fechaComputo', ft)),
+            },
+          })
+        : [];
+
       const categorias = await prisma.categoriaMovimiento.findMany({
-        where: {
-          id: { in: [...new Set(movsMes.map((m) => m.categoriaId))] },
-        },
+        where: { id: { in: [...new Set(movs.map((m) => m.categoriaId))] } },
       });
       const catById = new Map(categorias.map((c) => [c.id, c.nombre]));
 
-      // Agrupar por empleado
-      type ResumenEmpleado = {
-        sueldosMes: number;
-        adelantosMes: number;
-        comisionesMes: number;
-        otrosMes: number;
-        totalMes: number;
-      };
-      const resumen = new Map<string, ResumenEmpleado>();
-      for (const m of movsMes) {
+      type Resumen = { sueldos: number; adelantos: number; comisiones: number; otros: number };
+      const resumen = new Map<string, Resumen>();
+      for (const m of movs) {
         if (!m.entidadId) continue;
         const cur = resumen.get(m.entidadId) ?? {
-          sueldosMes: 0,
-          adelantosMes: 0,
-          comisionesMes: 0,
-          otrosMes: 0,
-          totalMes: 0,
+          sueldos: 0,
+          adelantos: 0,
+          comisiones: 0,
+          otros: 0,
         };
         const monto = Number(m._sum.monto ?? 0);
-        const catNombre = catById.get(m.categoriaId) ?? '';
-        if (catNombre === 'Sueldos') cur.sueldosMes += monto;
-        else if (catNombre === 'Adelanto a empleado') cur.adelantosMes += monto;
-        else if (catNombre === 'Comisiones') cur.comisionesMes += monto;
-        else cur.otrosMes += monto;
-        cur.totalMes += monto;
+        const cat = catById.get(m.categoriaId) ?? '';
+        if (cat === 'Sueldos') cur.sueldos += monto;
+        else if (cat === 'Adelanto a empleado') cur.adelantos += monto;
+        else if (cat === 'Comisiones') cur.comisiones += monto;
+        else cur.otros += monto;
         resumen.set(m.entidadId, cur);
       }
 
+      const filas = empleados.map((e) => {
+        const r = resumen.get(e.id);
+        const sueldoBase = e.sueldoBase ? Number(e.sueldoBase) : 0;
+        const sueldos = r?.sueldos ?? 0;
+        const adelantos = r?.adelantos ?? 0;
+        const comisiones = r?.comisiones ?? 0;
+        const otros = r?.otros ?? 0;
+        return {
+          e,
+          sueldoBase,
+          sueldos,
+          adelantos,
+          comisiones,
+          otros,
+          total: sueldos + adelantos + comisiones + otros,
+          // Sueldo base menos lo cobrado EN EL PERÍODO ELEGIDO. Sólo significa
+          // algo si el período se parece a un mes; con "hoy" o "7 días" va a dar
+          // casi el sueldo entero. Por eso la lista arranca en 30 días.
+          saldoSueldo: sueldoBase > 0 ? Math.max(0, sueldoBase - sueldos - adelantos) : 0,
+        };
+      });
+
+      if (exportando) {
+        const buf = await construirExcelBusqueda({
+          titulo: 'Empleados',
+          filtros: descripcionFiltros({
+            periodo: q.periodo,
+            desde: ft.desde,
+            hasta: ft.hasta,
+            texto,
+            extra: q.incluirInactivos ? 'Incluye inactivos' : 'Sólo activos',
+          }),
+          columnas: [
+            { header: 'Nombre', key: 'nombre', width: 22 },
+            { header: 'Apellido', key: 'apellido', width: 22 },
+            { header: 'Puesto', key: 'puesto', width: 16 },
+            { header: 'Estado', key: 'estado', width: 10 },
+            { header: 'DNI', key: 'dni', width: 14 },
+            { header: 'CUIL', key: 'cuil', width: 16 },
+            { header: 'Teléfono', key: 'telefono', width: 16 },
+            { header: 'Email', key: 'email', width: 26 },
+            { header: 'Forma de pago', key: 'formaPago', width: 14 },
+            { header: 'Ingreso', key: 'ingreso', tipo: 'fecha' },
+            { header: 'Egreso', key: 'egreso', tipo: 'fecha' },
+            { header: 'Sueldo base', key: 'sueldoBase', tipo: 'dinero' },
+            { header: 'Sueldos pagados', key: 'sueldos', tipo: 'dinero' },
+            { header: 'Adelantos', key: 'adelantos', tipo: 'dinero' },
+            { header: 'Comisiones', key: 'comisiones', tipo: 'dinero' },
+            { header: 'Otros', key: 'otros', tipo: 'dinero' },
+            { header: 'Total cobrado', key: 'total', tipo: 'dinero' },
+            { header: 'Saldo de sueldo', key: 'saldo', tipo: 'dinero' },
+            { header: 'Observaciones', key: 'observaciones', width: 34 },
+          ],
+          filas: filas.map((f) => ({
+            nombre: f.e.nombre,
+            apellido: f.e.apellido ?? '',
+            puesto: f.e.puesto,
+            estado: f.e.activo ? 'Activo' : 'Inactivo',
+            dni: f.e.dni ?? '',
+            cuil: f.e.cuil ?? '',
+            telefono: f.e.telefono ?? '',
+            email: f.e.email ?? '',
+            formaPago: f.e.formaPago ?? '',
+            ingreso: f.e.fechaIngreso,
+            egreso: f.e.fechaEgreso,
+            sueldoBase: f.sueldoBase,
+            sueldos: f.sueldos,
+            adelantos: f.adelantos,
+            comisiones: f.comisiones,
+            otros: f.otros,
+            total: f.total,
+            saldo: f.saldoSueldo,
+            observaciones: f.e.observaciones ?? '',
+          })),
+          totales: [
+            { etiqueta: 'TOTAL COBRADO', columna: 'total' },
+            { etiqueta: 'ADELANTOS', columna: 'adelantos' },
+            { etiqueta: 'SALDO DE SUELDOS', columna: 'saldo' },
+            { etiqueta: 'Cantidad de empleados', valor: filas.length },
+          ],
+          hayMas:
+            total > filas.length ? { exportadas: filas.length, totales: total } : undefined,
+        });
+        return reply
+          .header(
+            'Content-Type',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          )
+          .header(
+            'Content-Disposition',
+            `attachment; filename="${nombreArchivoExport('empleados')}"`,
+          )
+          .send(buf);
+      }
+
       return {
-        empleados: empleados.map((e) => {
-          const r = resumen.get(e.id);
-          const sueldoBase = e.sueldoBase ? Number(e.sueldoBase) : 0;
-          const adelantos = r?.adelantosMes ?? 0;
-          const comisiones = r?.comisionesMes ?? 0;
-          const sueldosPagados = r?.sueldosMes ?? 0;
-          // Si tiene sueldo base mensual, se calcula saldo a pagar.
-          const saldoSueldo =
-            sueldoBase > 0
-              ? Math.max(0, sueldoBase - sueldosPagados - adelantos)
-              : 0;
-          return {
-            ...e,
-            sueldoBase: e.sueldoBase?.toFixed(2) ?? null,
-            sueldosPagadosMes: sueldosPagados.toFixed(2),
-            adelantosMes: adelantos.toFixed(2),
-            comisionesMes: comisiones.toFixed(2),
-            saldoSueldoMes: saldoSueldo.toFixed(2),
-          };
-        }),
+        empleados: filas.map((f) => ({
+          ...f.e,
+          sueldoBase: f.e.sueldoBase?.toFixed(2) ?? null,
+          sueldosPagados: f.sueldos.toFixed(2),
+          adelantos: f.adelantos.toFixed(2),
+          comisiones: f.comisiones.toFixed(2),
+          otros: f.otros.toFixed(2),
+          totalCobrado: f.total.toFixed(2),
+          saldoSueldo: f.saldoSueldo.toFixed(2),
+        })),
+        meta: armarPaginacion(total, q.page, q.pageSize),
       };
     },
   );
