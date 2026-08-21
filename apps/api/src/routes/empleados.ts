@@ -24,6 +24,21 @@ import {
  * Cada movimiento de personal es un Movimiento (egreso) con entidadId apuntando al Empleado
  * y categoría "Sueldos" / "Adelanto a empleado" / "Comisiones".
  */
+/**
+ * El puesto en criollo para el Excel. En la base es un enum en mayúsculas
+ * (CAJERO, COCINERO…) y así se ve como un volcado de tabla; la pantalla ya
+ * muestra la etiqueta linda y el archivo tiene que coincidir con lo que la
+ * encargada ve.
+ */
+const PUESTO_LABEL: Record<string, string> = {
+  CAJERO: 'Cajero',
+  COCINERO: 'Cocinero',
+  ENCARGADO: 'Encargado',
+  MOTOQUERO: 'Motoquero',
+  ADMINISTRATIVO: 'Administrativo',
+  OTRO: 'Otro',
+};
+
 export default async function empleadosRoutes(fastify: FastifyInstance) {
   // GET /admin/empleados — lista con búsqueda, filtro temporal, paginación y
   // export a Excel. Mismo contrato que las otras tablas pesadas del admin.
@@ -196,7 +211,7 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
           filas: filas.map((f) => ({
             nombre: f.e.nombre,
             apellido: f.e.apellido ?? '',
-            puesto: f.e.puesto,
+            puesto: PUESTO_LABEL[f.e.puesto] ?? f.e.puesto,
             estado: f.e.activo ? 'Activo' : 'Inactivo',
             dni: f.e.dni ?? '',
             cuil: f.e.cuil ?? '',
@@ -246,7 +261,11 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
           totalCobrado: f.total.toFixed(2),
           saldoSueldo: f.saldoSueldo.toFixed(2),
         })),
-        meta: armarPaginacion(total, q.page, q.pageSize),
+        // La paginación va en el NIVEL SUPERIOR, no anidada en `meta`: es lo que
+        // lee `useBusquedaPaginada` (res.total, res.page…) y lo que devuelven
+        // las otras tablas. Anidada, la pantalla mostraba "0 empleados" con
+        // cuatro filas en la tabla y el botón de exportar deshabilitado.
+        ...armarPaginacion(total, q.page, q.pageSize),
       };
     },
   );
