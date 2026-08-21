@@ -5084,6 +5084,201 @@ Si se contratan más manos (2 devs en paralelo), la duración baja a ~9–10 sem
 
 ---
 
+## Sección 14 — Banco de horas de empleados
+
+> Estado: **especificado, no implementado.** Decisiones cerradas con el dueño el
+> 2026-08-21. Antes de codear, leer 14.2 y 14.7 — son las dos partes donde la
+> implementación obvia es la incorrecta.
+
+### 14.1 El problema
+
+Las horas trabajadas no siempre se pagan en el momento: quedan "en el banco"
+como deuda del empleador. En paralelo, la gente pide adelantos de sueldo o
+préstamos, que son deuda en el otro sentido. Hoy los adelantos ya salen por caja
+(categoría de EGRESO "Adelanto a empleado", sembrada en `seed.ts`), pero no
+existe ningún lugar donde se vea el saldo: cuántas horas se deben, cuánto es eso
+en plata, y cuánto debe cada persona.
+
+La encargada necesita responder tres preguntas: **cuánto le debo a cada uno**,
+**cuánto debo en total**, y **cuánto me deben a mí**.
+
+### 14.2 Las dos decisiones de fondo
+
+**Las horas se revalúan.** La deuda está expresada en *horas*, no en pesos. Si
+sube el valor hora de la categoría, todo lo adeudado y no liquidado pasa a valer
+más. Es lo que significa "banco de horas" y protege al empleado de la inflación.
+
+**Los adelantos quedan en pesos.** Si alguien se lleva $50.000, debe $50.000,
+pase lo que pase con el valor hora. La alternativa —convertirlos a horas— indexa
+la deuda en contra del empleado: subiría el valor hora y terminaría debiendo más
+plata de la que se llevó.
+
+**Consecuencia directa: el saldo no se puede guardar.** Se calcula al leerlo:
+
+```
+saldo = (horas pendientes × valor hora vigente) − adelantos pendientes en pesos
+```
+
+Un saldo persistido en pesos quedaría desactualizado apenas se toca una
+categoría. El libro guarda **dos columnas** (horas y pesos) y sólo se colapsa a
+un número en el momento de mostrarlo.
+
+**Las horas dejan de flotar al liquidarse.** La liquidación estampa el
+`valorHoraAplicado` y ese número no se mueve nunca más. Es el único punto donde
+la revaluación se detiene.
+
+### 14.3 Modelo de datos
+
+**`CategoriaLaboral`** — Cocina, Mostrador, Reparto. Separada de
+`PuestoEmpleado`: el puesto es lo que la persona hace, la categoría es lo que
+cuesta. Un cocinero con antigüedad puede estar en otra categoría que uno nuevo.
+
+**`ValorHoraCategoria`** — el histórico: `categoriaId`, `valorHora`,
+`vigenciaDesde`, `usuarioId`. **El valor nunca se pisa con UPDATE**: cada cambio
+inserta una fila. Hace falta igual para responder "¿por qué en marzo se le pagó
+esto?", y es el mismo criterio que ya usan los precios por lista
+(`DeltaOpcionPorLista`).
+
+**`Empleado`** suma `categoriaLaboralId` y un `valorHoraPropio` opcional que pisa
+la categoría. El override va desde el día uno: siempre aparece el arreglo
+especial, y sin él la encargada termina creando una categoría de una sola
+persona.
+
+**`TipoHora`** — NORMAL, EXTRA 50%, FERIADO… Cada uno define **o** un
+`multiplicador` sobre el valor de la categoría **o** un `valorHoraFijo`, nunca
+los dos (XOR, mismo patrón que `horaEntregaExacta` / `franjaEntrega` en
+encargos).
+
+> ⚠️ El `valorHoraFijo` **no** se revalúa con la categoría: queda quieto hasta
+> que alguien lo edita. Por eso necesita su propio histórico con
+> `vigenciaDesde`, igual que el de la categoría. Sin eso, el día que aumenten
+> todo, las horas de feriado se quedan viejas y nadie se entera.
+
+**`MovimientoBancoHoras`** — un solo libro, filas firmadas, append-only:
+
+| tipo | horas | pesos | notas |
+|-|-|-|-|
+| `HORAS_TRABAJADAS` | + | — | lleva `fecha` (día trabajado) y `tipoHoraId` |
+| `ADELANTO` | — | − | lleva `movimientoId` (ver 14.5) |
+| `LIQUIDACION` | − | − | lleva `liquidacionId` y `movimientoId` |
+| `AJUSTE` | ± | ± | correcciones y bajas |
+
+Campos comunes: `empleadoId`, `fecha`, `observacion`, `usuarioId`, `creadoAt`,
+`liquidacionId?`.
+
+**Un error no se edita: se corrige con un `AJUSTE`.** Está en la línea del resto
+del sistema (ventas que se anulan en vez de borrarse, cadena de auditoría) y
+evita que alguien "arregle" el pasado sin dejar rastro.
+
+**`LiquidacionEmpleado`** — agrupa lo que se pagó: `empleadoId`, `fecha`,
+`horasLiquidadas`, `valorHoraAplicado`, `montoPesos`, `movimientoId`,
+`usuarioId`. Cada fila del libro que entró queda marcada con su
+`liquidacionId` — **así es imposible pagar dos veces las mismas horas**, que es
+el bug clásico de estos sistemas. Un booleano `pagado` no alcanza: no dice en
+qué liquidación entró.
+
+### 14.4 Carga de horas
+
+Se cargan **por día**. Cada fila `HORAS_TRABAJADAS` tiene la fecha del día
+trabajado, la cantidad de horas y el tipo de hora.
+
+**No se pone constraint único por (empleado, fecha)**: un turno partido
+—mañana y tarde— son dos cargas legítimas del mismo día. Lo que sí hace la
+pantalla es **avisar si ese día ya tiene horas cargadas**, porque el error real
+y frecuente no es el turno partido: es cargar dos veces lo mismo.
+
+### 14.5 Adelantos: una acción, dos efectos
+
+Un adelanto **no es sólo un apunte del banco de horas: es plata que sale de la
+caja**. Genera las dos cosas de una:
+
+1. Un `Movimiento` de tipo EGRESO, categoría "Adelanto a empleado", con
+   `entidadId` = el empleado (el campo ya existe y el schema lo documenta como
+   "proveedor o empleado").
+2. Una fila `ADELANTO` en el libro, referenciando ese `movimientoId`.
+
+Si fueran dos cargas separadas, tarde o temprano queda un adelanto en el banco
+de horas que nunca salió de la caja, o al revés.
+
+> ⚠️ **Ese movimiento tiene que pasar por `getOrCreateSesionActual`** y manejar
+> el `FueraDeHorarioError` devolviendo 423. Sin `sesionCajaId`, el adelanto no
+> entra al cierre de caja pero sí aparece en `/admin/movimientos` — el incidente
+> de alpha.18, textual. Ver Invariantes en `CLAUDE.md`.
+
+**No hay tope de adelanto.** Se puede quedar en negativo indefinidamente. La
+pantalla igual muestra el saldo negativo destacado, pero no bloquea.
+
+### 14.6 Aumentos de categoría
+
+Cuando la encargada sube el valor hora de una categoría, el aumento no toca sólo
+lo que viene: **mueve toda la deuda acumulada de golpe**, porque las horas se
+revalúan (14.2).
+
+Por eso la pantalla de configuración **muestra cuánto sube el pasivo total antes
+de confirmar**. Sin ese aviso, se entera cuando ya está hecho.
+
+### 14.7 Baja de empleado con saldo pendiente
+
+Caso de último recurso, escondido en la ficha del empleado. Lo que hace:
+
+- **Cierra la deuda del banco de horas** con un `AJUSTE` de baja por el saldo
+  completo, y marca el empleado como inactivo. Desaparece de la pantalla.
+- **NO toca los movimientos de caja.**
+
+> ⚠️ La segunda parte no es negociable. Si esa persona se llevó $50.000, eso
+> salió de un turno que **ya cerró**. Borrar el movimiento cambiaría un cierre de
+> caja del pasado y dejaría un descuadre permanente y sin explicación en un día
+> ya cerrado. La plata salió: eso es un hecho, y el libro de caja lo refleja.
+
+Aunque la opción esté oculta, **deja registro de quién la ejecutó, por cuánto y
+cuándo**. Una función que hace desaparecer plata adeudada sin dejar rastro es
+justo la que no se quiere tener el día que haya que entender qué pasó.
+
+### 14.8 Permisos
+
+Todo el módulo es **ADMIN-only**. La intención del dueño es "sólo la encargada",
+pero el sistema tiene dos roles operativos (Vendedor / Admin) y Julio también es
+Admin, así que no se puede excluir sin inventar un nivel de permisos nuevo.
+
+En su lugar: **cada carga registra su `usuarioId`**. Si un día carga Julio, se
+ve. Cubre la intención sin agregar una capa de permisos que después hay que
+mantener. Si más adelante hace falta de verdad, se agrega ahí.
+
+### 14.9 Pantallas
+
+**Pestaña nueva "Banco de horas"** (Admin). Lista de empleados con horas
+pendientes, valor hora vigente, su equivalente en pesos, adelantos pendientes y
+saldo neto. **Total abajo** — es la pregunta principal: cuánto se debe en total.
+
+**Detalle por empleado.** El libro completo y tres acciones: cargar horas, dar
+un adelanto, liquidar.
+
+**Configuración de categorías y tipos de hora.** Valor hora, historial, y el
+aviso de impacto del 14.6.
+
+Wireframe: `docs/wireframes/11-admin-banco-horas.md`.
+
+### 14.10 Invariantes
+
+1. El valor hora **nunca** se actualiza en su lugar: se inserta una fila nueva
+   con `vigenciaDesde`.
+2. El libro es **append-only**. Correcciones vía `AJUSTE`.
+3. El saldo **no se persiste**: se calcula al leer.
+4. Toda fila que mueva plata lleva su `movimientoId`, y ese movimiento pasa por
+   `getOrCreateSesionActual`.
+5. Una fila liquidada lleva `liquidacionId` y no puede entrar en otra
+   liquidación.
+6. Dar de baja un empleado **no** borra movimientos de caja.
+
+### 14.11 Pendientes
+
+- Qué tipos de hora arranca teniendo el local (¿extra 50 y 100? ¿feriado?) y si
+  cada uno va por multiplicador o por valor fijo.
+- Si la liquidación se hace por período cerrado (quincena) o eligiendo filas
+  sueltas.
+- Si el saldo del banco de horas debe aparecer en el dashboard como pasivo, o
+  queda sólo en su pestaña.
+
 ## Cierre del documento
 
 Este SPEC.md (v1) tiene **13 secciones** que cubren la totalidad del scope acordado. Es la base sobre la cual se construye el sistema. Las decisiones cerradas están marcadas como tales; los pendientes están consolidados en la Sección 12; el plan de ejecución está en la Sección 13.
