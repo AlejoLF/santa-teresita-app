@@ -144,7 +144,11 @@ export async function buildServer() {
     name: 'santa-teresita-api',
     // Versión del .exe (la pasa Electron al spawnear el API). En modo dev
     // local sin Electron, sale como "dev".
-    version: process.env.STA_DESKTOP_VERSION ?? 'dev',
+    // STA_SERVER_VERSION la estampa el build del servidor local (S1) en el
+    // bundle; STA_DESKTOP_VERSION la setea el .exe de las cajas. Antes sólo se
+    // miraba la segunda, así que S1 reportaba 'dev' siempre y no había forma de
+    // saber qué release corría — hubo que deducirlo probando si una ruta existía.
+    version: process.env.STA_SERVER_VERSION ?? process.env.STA_DESKTOP_VERSION ?? 'dev',
     env: config.NODE_ENV,
     dbState: dbRouterEnabled() ? dbState() : 'PRIMARY',
     time: new Date().toISOString(),
@@ -330,7 +334,7 @@ export async function buildServer() {
       // /api/v1/version — duplicado público de /health para que el web pueda
       // consultar la versión del .exe via api.getCached() (que prefija /api/v1).
       api.get('/version', async () => ({
-        version: process.env.STA_DESKTOP_VERSION ?? 'dev',
+        version: process.env.STA_SERVER_VERSION ?? process.env.STA_DESKTOP_VERSION ?? 'dev',
         time: new Date().toISOString(),
       }));
       await api.register(authRoutes);
