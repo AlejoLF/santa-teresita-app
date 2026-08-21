@@ -67,13 +67,28 @@ const esbuildBin = path.join(
   '.bin',
   process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild',
 );
+// La versión del release queda ESTAMPADA en el bundle. Va por el banner y no
+// por `--define` a propósito: `--define` necesita comillas dobles anidadas y
+// eso se rompe en cmd.exe, mientras que el banner usa sólo comillas simples
+// (es el mismo mecanismo que ya inyecta el createRequire, acá abajo).
+//
+// Estampada y no leída de un archivo al lado: así la versión que reporta
+// `/health` es, por construcción, la del código que está corriendo. Un número
+// que vive en un archivo aparte puede quedar desfasado del binario justo
+// cuando más importa — un update a medias, un rollback — que es exactamente el
+// caso en el que uno va a mirarlo.
+const serverPkg = JSON.parse(fs.readFileSync(path.join(SERVER_DIR, 'package.json'), 'utf8'));
+const banner =
+  `import { createRequire } from 'module'; const require = createRequire(import.meta.url); ` +
+  `process.env.STA_SERVER_VERSION = process.env.STA_SERVER_VERSION || '${serverPkg.version}';`;
 run(
   `"${esbuildBin}" "${path.join(apiDir, 'src', 'server.ts')}" --bundle --platform=node ` +
     `--target=node20 --format=esm --outfile="${path.join(apiDest, 'server.mjs')}" ` +
-    `--banner:js="import { createRequire } from 'module'; const require = createRequire(import.meta.url);" ` +
+    `--banner:js="${banner}" ` +
     externalArgs,
   REPO_ROOT,
 );
+console.log(`  versión estampada: ${serverPkg.version}`);
 
 // ── Externals via npm (better-sqlite3 = prebuilt Node, sin rebuild Electron) ──
 step('npm install externals en dist/api/');
