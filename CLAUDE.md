@@ -319,6 +319,7 @@ Detalle en [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md). Resumen:
 | 5 | Cola real para impresión (hoy DB + polling cada 3s) | Throughput alto |
 | 6 | Tests E2E con Playwright | Calidad |
 | 7 | Completar Camino A de PLAN-PARIDAD (una sola app en la nube) | Que el admin opere 100% desde el celu |
+| 8 | **Banco de horas de empleados** (especificado en SPEC §14, sin implementar) | Que la encargada sepa cuánto se debe |
 
 ### 🔒 Pendientes de seguridad — HACER CUANDO ESTÉ EL SERVER LISTO
 

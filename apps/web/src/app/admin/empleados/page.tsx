@@ -1,11 +1,16 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { cn } from '@/lib/cn';
+import {
+  useBusquedaPaginada,
+  BuscadorFiltros,
+  Paginacion,
+} from '@/components/admin/BusquedaTabla';
 
 interface Empleado {
   id: string;
@@ -16,10 +21,12 @@ interface Empleado {
   formaPago: string | null;
   sueldoBase: string | null;
   activo: boolean;
-  sueldosPagadosMes: string;
-  adelantosMes: string;
-  comisionesMes: string;
-  saldoSueldoMes: string;
+  sueldosPagados: string;
+  adelantos: string;
+  comisiones: string;
+  otros: string;
+  totalCobrado: string;
+  saldoSueldo: string;
 }
 
 const PUESTO_LABEL: Record<Empleado['puesto'], string> = {
@@ -32,37 +39,34 @@ const PUESTO_LABEL: Record<Empleado['puesto'], string> = {
 };
 
 export default function EmpleadosListPage() {
-  const [empleados, setEmpleados] = useState<Empleado[]>([]);
-  const [search, setSearch] = useState('');
   const [incluirInactivos, setIncluirInactivos] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   // Modal de pago de sueldo. Si se abre desde una fila, viene con empleadoId pre-seleccionado.
   const [pagarSueldo, setPagarSueldo] = useState<{ empleadoId: string | null } | null>(null);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({ incluirInactivos: String(incluirInactivos) });
-      if (search.trim()) params.set('q', search.trim());
-      const res = await api.get<{ empleados: Empleado[] }>(
-        `/admin/empleados?${params.toString()}`,
-      );
-      setEmpleados(res.empleados);
-      setError(null);
-    } catch (e) {
-      if (!(e instanceof ApiError) || e.status !== 401) {
-        setError('No se pudieron cargar los empleados');
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [search, incluirInactivos]);
+  // Objeto estable: si se recreara en cada render, el hook refetchearía en loop.
+  const paramsExtra = useMemo(
+    () => ({ incluirInactivos: String(incluirInactivos) }),
+    [incluirInactivos],
+  );
 
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+  // Arranca en 30 días y no en "todo" a propósito: con toda la base, el saldo de
+  // sueldo daría 0 para todos (el sueldo base menos años de pagos), y eso se lee
+  // como "no se le debe nada" cuando en realidad la pregunta no tiene sentido en
+  // ese período. Treinta días es lo más parecido al mes que mostraba antes.
+  const b = useBusquedaPaginada<Empleado>({
+    endpoint: '/admin/empleados',
+    extraerItems: (res) => (res as { empleados?: Empleado[] }).empleados ?? [],
+    paramsExtra,
+    periodoInicial: '30dias',
+    // 25 y no 12: los empleados son pocos y las filas cortas — paginar de a 12
+    // mandaría a la página 2 por tres personas.
+    pageSize: 25,
+  });
+
+  const empleados = b.items;
+  const loading = b.loading;
 
   async function eliminarEmpleado(id: string, nombre: string) {
     if (!confirm(`¿Eliminar al empleado "${nombre}"? Se oculta de los listados (sus pagos históricos se conservan).`)) {
@@ -70,20 +74,13 @@ export default function EmpleadosListPage() {
     }
     try {
       await api.delete(`/admin/empleados/${id}`);
-      void fetchData();
+      void b.refetch();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo eliminar el empleado');
     }
   }
 
-  const totalPagadoMes = empleados.reduce(
-    (acc, e) =>
-      acc +
-      Number(e.sueldosPagadosMes) +
-      Number(e.adelantosMes) +
-      Number(e.comisionesMes),
-    0,
-  );
+  const totalPagado = empleados.reduce((acc, e) => acc + Number(e.totalCobrado), 0);
 
   return (
     <div className="max-w-6xl mx-auto space-y-4">
@@ -91,8 +88,8 @@ export default function EmpleadosListPage() {
         <div>
           <h1 className="font-display text-xl text-ink-900">Empleados</h1>
           <p className="text-sm text-ink-500">
-            {empleados.length} empleado{empleados.length !== 1 && 's'} ·{' '}
-            <MoneyAmount value={totalPagadoMes.toFixed(2)} /> pagado este mes
+            {b.meta.total} empleado{b.meta.total !== 1 && 's'} ·{' '}
+            <MoneyAmount value={totalPagado.toFixed(2)} /> pagado en esta página
           </p>
         </div>
         <div className="flex gap-2">
@@ -106,15 +103,23 @@ export default function EmpleadosListPage() {
         </div>
       </header>
 
-      <section className="card p-3 flex items-center gap-3">
-        <input
-          type="search"
-          placeholder="🔍 Buscar por nombre, DNI, teléfono..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="input flex-1"
-        />
-        <label className="flex items-center gap-2 text-sm text-ink-700 cursor-pointer">
+      <BuscadorFiltros
+        q={b.q}
+        onQ={b.setQ}
+        periodo={b.periodo}
+        onPeriodo={b.setPeriodo}
+        desde={b.desde}
+        onDesde={b.setDesde}
+        hasta={b.hasta}
+        onHasta={b.setHasta}
+        placeholder="🔎 Buscar: nombre, apellido, DNI, CUIL, teléfono, email…"
+        total={b.meta.total}
+        loading={b.loading}
+        onLimpiar={b.limpiar}
+        hayFiltro={b.hayFiltro}
+        exportar={{ path: b.pathExport, nombre: 'empleados.xlsx' }}
+      >
+        <label className="flex items-center gap-2 text-sm text-ink-700 cursor-pointer whitespace-nowrap">
           <input
             type="checkbox"
             checked={incluirInactivos}
@@ -123,10 +128,12 @@ export default function EmpleadosListPage() {
           />
           Mostrar inactivos
         </label>
-      </section>
+      </BuscadorFiltros>
 
-      {error && (
-        <div className="bg-pomodoro-100 text-pomodoro-600 px-4 py-2 rounded text-sm">{error}</div>
+      {(error || b.error) && (
+        <div className="bg-pomodoro-100 text-pomodoro-600 px-4 py-2 rounded text-sm">
+          {error ?? b.error}
+        </div>
       )}
 
       <section className="card overflow-hidden">
@@ -137,7 +144,7 @@ export default function EmpleadosListPage() {
               <th className="text-left px-4 py-2">Puesto</th>
               <th className="text-left px-4 py-2">Forma de pago</th>
               <th className="text-right px-4 py-2">Sueldo base</th>
-              <th className="text-right px-4 py-2">Pagado este mes</th>
+              <th className="text-right px-4 py-2">Pagado</th>
               <th className="text-right px-4 py-2">Adelantos</th>
               <th className="text-right px-4 py-2">Saldo a pagar</th>
               <th className="px-4 py-2 w-8"></th>
@@ -159,8 +166,7 @@ export default function EmpleadosListPage() {
               </tr>
             )}
             {empleados.map((e) => {
-              const pagado =
-                Number(e.sueldosPagadosMes) + Number(e.adelantosMes) + Number(e.comisionesMes);
+              const pagado = Number(e.totalCobrado);
               return (
                 <tr
                   key={e.id}
@@ -202,16 +208,16 @@ export default function EmpleadosListPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    {Number(e.adelantosMes) > 0 ? (
-                      <MoneyAmount value={e.adelantosMes} className="text-saffron-600" />
+                    {Number(e.adelantos) > 0 ? (
+                      <MoneyAmount value={e.adelantos} className="text-saffron-600" />
                     ) : (
                       <span className="text-ink-300">—</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    {Number(e.saldoSueldoMes) > 0 ? (
+                    {Number(e.saldoSueldo) > 0 ? (
                       <MoneyAmount
-                        value={e.saldoSueldoMes}
+                        value={e.saldoSueldo}
                         className="text-pomodoro-600 font-medium"
                       />
                     ) : (
@@ -252,8 +258,7 @@ export default function EmpleadosListPage() {
             <div className="p-6 text-center text-ink-500">Sin empleados</div>
           )}
           {empleados.map((e) => {
-            const pagado =
-              Number(e.sueldosPagadosMes) + Number(e.adelantosMes) + Number(e.comisionesMes);
+            const pagado = Number(e.totalCobrado);
             return (
               <div key={e.id} className={cn('p-3', !e.activo && 'opacity-50')}>
                 <div className="flex items-start justify-between gap-2">
@@ -279,14 +284,14 @@ export default function EmpleadosListPage() {
                       {pagado > 0
                         ? `$${pagado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`
                         : '—'}
-                      {Number(e.adelantosMes) > 0 &&
-                        ` · adel. $${Number(e.adelantosMes).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`}
+                      {Number(e.adelantos) > 0 &&
+                        ` · adel. $${Number(e.adelantos).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`}
                     </div>
                   </div>
                   <div className="shrink-0 text-right">
-                    {Number(e.saldoSueldoMes) > 0 ? (
+                    {Number(e.saldoSueldo) > 0 ? (
                       <MoneyAmount
-                        value={e.saldoSueldoMes}
+                        value={e.saldoSueldo}
                         className="text-pomodoro-600 font-medium"
                       />
                     ) : (
@@ -322,12 +327,21 @@ export default function EmpleadosListPage() {
         </div>
       </section>
 
+      <Paginacion
+        page={b.meta.page}
+        totalPages={b.meta.totalPages}
+        total={b.meta.total}
+        pageSize={b.meta.pageSize}
+        onPage={b.setPage}
+        loading={b.loading}
+      />
+
       {showForm && (
         <FormNuevoEmpleado
           onClose={() => setShowForm(false)}
           onCreated={() => {
             setShowForm(false);
-            void fetchData();
+            void b.refetch();
           }}
         />
       )}
@@ -339,7 +353,7 @@ export default function EmpleadosListPage() {
           onClose={() => setPagarSueldo(null)}
           onPagado={() => {
             setPagarSueldo(null);
-            void fetchData();
+            void b.refetch();
           }}
         />
       )}
@@ -682,10 +696,10 @@ function PagarSueldoModal({
                   </option>
                 ))}
             </select>
-            {empleado && Number(empleado.saldoSueldoMes) > 0 && (
+            {empleado && Number(empleado.saldoSueldo) > 0 && (
               <div className="text-2xs text-pomodoro-600 mt-1">
-                Saldo a pagar mes:{' '}
-                <MoneyAmount value={empleado.saldoSueldoMes} className="font-mono" />
+                Saldo a pagar:{' '}
+                <MoneyAmount value={empleado.saldoSueldo} className="font-mono" />
               </div>
             )}
           </div>
