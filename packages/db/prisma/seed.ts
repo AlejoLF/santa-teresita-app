@@ -145,6 +145,18 @@ const CATEGORIAS_MOVIMIENTO_SISTEMA: Array<{
 ];
 
 async function seedCategoriasMovimiento() {
+  // El tipo de hora base del banco de horas. Va acá ADEMÁS de en la migración
+  // porque las dos formas de armar una base no se solapan: S1 aplica
+  // migraciones, pero Supabase y las locales se arman con `db push` + seed, y
+  // ésas nunca correrían el INSERT de la migración. Sin esto, cargar horas
+  // fallaría sólo en la nube — el peor tipo de diferencia entre entornos.
+  console.log('▸ Seeding tipo de hora base...');
+  await prisma.tipoHora.upsert({
+    where: { nombre: 'Normales' },
+    create: { nombre: 'Normales', multiplicador: 1, orden: 0 },
+    update: {},
+  });
+
   console.log('▸ Seeding categorías de movimiento...');
   for (const c of CATEGORIAS_MOVIMIENTO_SISTEMA) {
     await prisma.categoriaMovimiento.upsert({

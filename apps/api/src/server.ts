@@ -38,6 +38,7 @@ import { runMirrorSyncOnce } from './services/mirror-sync.js';
 import { startDbRouter, dbRouterEnabled, dbState } from './services/db-router.js';
 import proveedoresRoutes from './routes/proveedores.js';
 import empleadosRoutes from './routes/empleados.js';
+import bancoHorasRoutes from './routes/banco-horas.js';
 import configuracionRoutes from './routes/configuracion.js';
 import clientesRoutes from './routes/clientes.js';
 import mayoristasRoutes from './routes/mayoristas.js';
@@ -346,6 +347,7 @@ export async function buildServer() {
       await api.register(syncRoutes);
       await api.register(proveedoresRoutes);
       await api.register(empleadosRoutes);
+      await api.register(bancoHorasRoutes);
       await api.register(configuracionRoutes);
       await api.register(clientesRoutes);
       await api.register(mayoristasRoutes);
