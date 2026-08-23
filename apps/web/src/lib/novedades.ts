@@ -44,6 +44,8 @@ export const NOVEDADES: Novedad[] = [
       'El valor de la hora se configura por categoría (Cocina, Mostrador…): la cambiás una vez y vale para todos los de esa categoría, sin tocar empleado por empleado.',
       'Si aumentás una categoría, antes de confirmar te muestra cuánto sube la deuda que ya tenías acumulada.',
       'En Empleados ahora hay buscador con filtro por período y botón para bajar todo a Excel.',
+      'Las pantallas que leen y escriben los Excels ahora los agarran directo del Drive. Antes andaban sólo desde las computadoras del local; ahora funcionan también desde el celular y desde cualquier lado.',
+      'Cuando el sistema escribe en un Excel, Drive te guarda la versión anterior: si algo sale mal, se puede volver atrás desde el propio Drive.',
     ],
   },
   {

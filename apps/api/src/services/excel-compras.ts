@@ -30,19 +30,13 @@
  */
 
 import ExcelJS from 'exceljs';
-import { access } from 'node:fs/promises';
-import { join, resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { prisma } from '@sta/db/client';
 import { CategoriaInsumo, UnidadCompra } from '@sta/db';
-import { editarHojaXlsx, type EdicionCelda } from './xlsx-quirurgico.js';
+import { type EdicionCelda } from './xlsx-quirurgico.js';
+import { exigir, abrirLibro, editarCeldas } from './fuente-excel.js';
 import { normalizarNombre } from './proveedor-match.js';
 
-const SERVICE_DIR = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = process.env.REPO_ROOT
-  ? resolve(process.env.REPO_ROOT)
-  : resolve(SERVICE_DIR, '../../../..');
-const EXCEL_DIR = process.env.EXCEL_LOCAL_DIR ?? REPO_ROOT;
 
 const ARCHIVO = 'Proveedores 2026.xlsx';
 const HOJA = 'Compras';
@@ -263,17 +257,8 @@ export interface ResultadoImportacion {
 export async function importarCompras(opts: {
   simular?: boolean;
 }): Promise<ResultadoImportacion> {
-  const ruta = join(EXCEL_DIR, ARCHIVO);
-  try {
-    await access(ruta);
-  } catch {
-    throw new Error(
-      `No encuentro "${ARCHIVO}" en ${EXCEL_DIR}. ` +
-        'Configurá EXCEL_LOCAL_DIR apuntando a la carpeta sincronizada de Drive.',
-    );
-  }
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(ruta);
+  const refArchivo = await exigir(ARCHIVO);
+  const wb = await abrirLibro(refArchivo);
   const ws = wb.getWorksheet(HOJA);
   if (!ws) throw new Error(`El archivo no tiene la hoja "${HOJA}"`);
 
@@ -417,9 +402,8 @@ export async function volcarCantidadesCompras(opts: {
   simulado: boolean;
 }> {
   const fecha = opts.fecha ?? new Date();
-  const ruta = join(EXCEL_DIR, ARCHIVO);
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(ruta);
+  const refArchivo = await exigir(ARCHIVO);
+  const wb = await abrirLibro(refArchivo);
   const ws = wb.getWorksheet(HOJA);
   if (!ws) throw new Error(`El archivo no tiene la hoja "${HOJA}"`);
 
@@ -515,7 +499,7 @@ export async function volcarCantidadesCompras(opts: {
   }));
 
   if (!opts.simular && ediciones.length > 0) {
-    await editarHojaXlsx({ archivo: ruta, hoja: HOJA, ediciones });
+    await editarCeldas(refArchivo, HOJA, ediciones);
   }
 
   return {
@@ -576,9 +560,8 @@ export async function actualizarPrecioEnExcel(args: {
   nombreExcel: string;
   precioNuevo: number;
 }): Promise<{ ref: string } | null> {
-  const ruta = join(EXCEL_DIR, ARCHIVO);
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(ruta);
+  const refArchivo = await exigir(ARCHIVO);
+  const wb = await abrirLibro(refArchivo);
   const ws = wb.getWorksheet(HOJA);
   if (!ws) return null;
 
@@ -587,11 +570,9 @@ export async function actualizarPrecioEnExcel(args: {
     const p = b.productos.find((x) => x.nombre === args.nombreExcel);
     if (!p) continue;
     const ref = `${numeroACol(COL_PRECIO)}${p.fila}`;
-    await editarHojaXlsx({
-      archivo: ruta,
-      hoja: HOJA,
-      ediciones: [{ ref, valor: valorParaPrecio(ws.getCell(ref).value, args.precioNuevo) }],
-    });
+    await editarCeldas(refArchivo, HOJA, [
+      { ref, valor: valorParaPrecio(ws.getCell(ref).value, args.precioNuevo) },
+    ]);
     return { ref };
   }
   return null;

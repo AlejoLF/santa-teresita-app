@@ -280,128 +280,128 @@ server la ve, centralizar la impresión por el server resuelve ese problema.
 
 ---
 
-## 1.5 Excel de la encargada desde Google Drive  ── ~20 min
+## 1.5 Excel de la encargada desde Google Drive  ── ~15 min, una sola vez
 
-Las pantallas de proveedores/insumos leen `Proveedores 2026.xlsx` del disco de
-S1 (`EXCEL_LOCAL_DIR`). Los archivos viven en el Drive de la encargada y los
-baja **rclone** a una carpeta común, con una tarea programada.
+**Esto ya no se hace en S1.** La API habla con Google Drive directamente (API
+oficial, service account), así que los archivos no tienen que estar en ningún
+disco: los lee y los escribe la API que esté corriendo, sea la de Railway, la de
+S1 o la que empaqueta el `.exe`. Se configura **una vez, en la nube**, y las tres
+quedan servidas.
 
-### Por qué rclone y no Google Drive para Escritorio
+> Lo que había antes —rclone bajando los archivos a `C:\sta\excel` cada 10
+> minutos + `EXCEL_LOCAL_DIR`— quedó **obsoleto**. Si S1 todavía tiene la tarea
+> `STA-Excel-Sync`, ver "Desmontar rclone" al final. `EXCEL_LOCAL_DIR` sigue
+> existiendo, pero sólo como fallback de desarrollo.
 
-El API corre como servicio NSSM, o sea como `LocalSystem`. Drive para Escritorio
-monta su unidad **por sesión de usuario interactivo**: un servicio LocalSystem no
-la ve, y deja de sincronizar cuando esa usuaria cierra sesión. Anda mientras
-probás con tu sesión abierta y se rompe sola en el primer reinicio desatendido.
-rclone escribe a un directorio común y no depende de ninguna sesión.
+### Por qué la API y no una carpeta sincronizada
 
-### Los archivos son de otra persona
+Tres problemas se cierran de una:
 
-La encargada comparte cada archivo individualmente, así que no hay una carpeta
-con ID propio. La vuelta: crear `STA-Excel` en **tu** Mi unidad y meter ahí un
-**acceso directo** a cada archivo (clic derecho → Organizar → Añadir acceso
-directo). rclone los resuelve al archivo real, y queda un solo path estable.
+- **El writeback funciona.** rclone bajaba en UNA dirección: lo que S1
+  escribiera en el CASHFLOW lo pisaba el ciclo siguiente, sin error. Con la API
+  se edita el archivo vivo, y Drive guarda historial de versiones.
+- **No depende de una máquina.** La feature andaba sólo en S1 y sólo si el mini
+  PC estaba prendido. Ahora la sirve cualquier instancia de la API.
+- **No hay sesión de usuario de por medio.** Drive para Escritorio monta la
+  unidad por sesión interactiva y un servicio NSSM (LocalSystem) no la ve. La
+  service account no tiene sesión: es una credencial.
 
-La alternativa —`--drive-shared-with-me` con un `--include`— evita tocar Drive
-pero lista *todo* lo que te compartieron alguna vez y filtra después: lento si
-hay muchos, y ambiguo si aparece otro archivo con el mismo nombre.
+### Crear la service account
 
-### Instalación
+En [Google Cloud Console](https://console.cloud.google.com):
 
-```powershell
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-New-Item -ItemType Directory -Force -Path C:\sta\rclone, C:\sta\excel, C:\sta\logs | Out-Null
-Invoke-WebRequest 'https://downloads.rclone.org/rclone-current-windows-amd64.zip' -OutFile "$env:TEMP\rclone.zip"
-Expand-Archive "$env:TEMP\rclone.zip" -DestinationPath "$env:TEMP\rclone" -Force
-Copy-Item (Get-ChildItem "$env:TEMP\rclone" -Recurse -Filter rclone.exe).FullName 'C:\sta\rclone\rclone.exe' -Force
-```
+1. Proyecto nuevo (o el que ya usabas para rclone).
+2. **APIs y servicios → Biblioteca → Google Drive API → Habilitar.**
+3. **Credenciales → Crear credenciales → Cuenta de servicio.** Nombre libre
+   (ej. `sta-excel`). Sin roles: los permisos salen de compartir los archivos,
+   no de IAM.
+4. Entrar a la cuenta creada → **Claves → Agregar clave → Crear nueva → JSON.**
+   Se baja un `.json`. **Ese archivo es la credencial: no va al repo.**
 
-**No lo instales con `winget` ni lo agregues al PATH**: winget lo deja en el
-perfil del usuario, invisible para SYSTEM, y la tarea no hereda tu PATH.
+No hace falta pantalla de consentimiento, ni publicar la app, ni renovar nada a
+los 7 días — todo eso era del flujo OAuth de usuario que usaba rclone.
 
-### Configuración del remoto
+### Compartir los archivos con ella
 
-```powershell
-C:\sta\rclone\rclone.exe config --config C:\sta\rclone\rclone.conf
-```
+El `.json` tiene un campo `client_email`, algo como
+`sta-excel@<proyecto>.iam.gserviceaccount.com`. **Ese mail es un usuario más de
+Drive.** Hay que compartirle la carpeta donde están los Excels:
 
-`n` → nombre `sta-drive` → storage `drive` → **client_id y client_secret
-propios** → scope `2` (drive.readonly) → advanced `n` → navegador `n`.
+- Si la carpeta es tuya: clic derecho → Compartir → pegar el `client_email`.
+  **Editor** (necesita escribir el CASHFLOW y las deudas de proveedores), no
+  Lector.
+- Si los archivos son de la encargada: que ella comparta **la carpeta** con ese
+  mail, también como Editor.
 
-Dos cosas que no son opcionales:
+El **id de la carpeta** es lo que va después de `/folders/` en su URL:
+`https://drive.google.com/drive/folders/`**`1AbC…XyZ`**.
 
-- **Client ID propio.** rclone está retirando su client_id compartido durante
-  2026; además lo usa todo el mundo, así que come rate limits ajenos y tira 403
-  al azar. Se crea en Google Cloud Console (proyecto → habilitar Google Drive
-  API → pantalla de consentimiento → credenciales → **App de escritorio**).
-- **Publicar la app "En producción"** en la pantalla de consentimiento. En
-  estado "Prueba" el refresh token **vence a los 7 días** y el sync se corta
-  solo la semana siguiente. La advertencia de "app no verificada" es esperable:
-  la verificación sólo hace falta para distribuirla a terceros.
+> Una service account no tiene Drive propio y **no puede crear archivos sueltos**
+> en una carpeta ajena de Mi unidad sin cuota. Acá sólo lee y sobreescribe
+> archivos que ya existen, que sí puede.
 
-Como S1 no tiene navegador (se entra por SSH), contestá `n` a la autenticación
-automática: imprime un `rclone authorize "drive" "..."` que se corre **en la PC**
-y devuelve un token para pegar de vuelta.
+### Setear las dos variables
 
-### La bajada
+En **Railway** (Variables del servicio de la API) — y en el `.env` de S1 si
+querés que también funcione ahí:
 
-```bat
-@echo off
-"C:\sta\rclone\rclone.exe" copy sta-drive:STA-Excel C:\sta\excel --drive-export-formats xlsx --config "C:\sta\rclone\rclone.conf" --log-file "C:\sta\logs\rclone-excel.log" --log-level INFO
-```
+| Variable | Valor |
+|-|-|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | el contenido del `.json` entero (o el mismo en base64, si el panel se pelea con los saltos de línea) |
+| `GOOGLE_DRIVE_FOLDER_ID` | el id de la carpeta |
 
-Guardarlo como `C:\sta\rclone\sync-excel.cmd` **con encoding ASCII** (un BOM
-al principio hace que Windows se coma el `@echo off`). Después:
+**Nunca en el repo, nunca en un chat.** Es una credencial: quien la tenga entra
+a todo lo que esté compartido con esa cuenta.
 
-```powershell
-icacls C:\sta\rclone\rclone.conf /inheritance:r /grant *S-1-5-18:R /grant *S-1-5-32-544:F
-schtasks /create /tn "STA-Excel-Sync" /tr "C:\sta\rclone\sync-excel.cmd" /sc minute /mo 10 /ru SYSTEM /rl HIGHEST /f
-```
+En S1, además, acordate de que la variable va en `C:\sta-server\.env` y después
+`C:\sta-server\update-server.ps1 -SyncEnv` — `update-server.ps1` re-sincroniza
+el bloque de NSSM desde `.env` en cada actualización, así que una variable puesta
+con `nssm set` directo desaparece en la tarea de las 4 AM sin dejar rastro.
 
-Los SID en vez de los nombres porque el grupo es "Administradores" o
-"Administrators" según el idioma del Windows.
-
-`copy` y no `sync`/`bisync`: los otros dos no manejan bien los documentos
-nativos de Google.
-
-### La variable va en `.env`, NO con `nssm set`
-
-```powershell
-Add-Content C:\sta-server\.env "`r`nEXCEL_LOCAL_DIR=C:\sta\excel"
-C:\sta-server\update-server.ps1 -SyncEnv
-```
-
-`update-server.ps1` **re-sincroniza el bloque de variables de NSSM desde
-`.env`** en cada actualización. Una variable puesta con `nssm set` directo
-sobrevive hasta la tarea de las 4 AM y desaparece sin dejar rastro.
+**Media configuración es un error, no un fallback.** Si está una sola de las dos,
+la API responde **503 diciendo cuál falta**. Es a propósito: la alternativa era
+leer calladamente un archivo local viejo y que todos los números salieran
+desactualizados sin ningún síntoma.
 
 ### Verificación
 
-```powershell
-Remove-Item "C:\sta\excel\Proveedores 2026.xlsx"
-schtasks /run /tn "STA-Excel-Sync"
-Start-Sleep 25
-dir C:\sta\excel
+```
+GET /admin/excel/origen     (con token de ADMIN)
 ```
 
-Borrar y ver si SYSTEM lo trae de vuelta prueba las tres cosas de una: que
-puede leer el `.conf`, hablar con Drive y escribir en la carpeta. Que la tarea
-"diga" que corrió no prueba ninguna.
+Devuelve el origen que está usando, el `client_email` —para saber a quién
+compartirle si algo no aparece—, el id de carpeta y, archivo por archivo, si lo
+encuentra. Es la forma rápida de distinguir "falta la credencial" de "el archivo
+no está compartido" de "el nombre no coincide".
 
 ### Notas
 
-- **`Proveedores 2026` es una hoja de Google, no un `.xlsx`.** rclone la exporta
-  al vuelo con `--drive-export-formats xlsx` y la nombra `Proveedores
-  2026.xlsx`, que es exactamente lo que busca `excel-proveedores.ts`. El nombre
-  en Drive tiene que ser exacto: si quedó como "Copia de…", el programa no lo
-  encuentra y el error dice que configures `EXCEL_LOCAL_DIR` — que en ese caso
-  miente. En `rclone ls` se reconoce porque el tamaño sale **-1**: los
-  documentos nativos no tienen tamaño hasta exportarse, y por eso ese archivo se
-  re-descarga en cada corrida (los `.xlsx` de verdad se saltean si no cambiaron).
-- **El CASHFLOW es de ida y vuelta y todavía NO está resuelto.** `excel-writeback.ts`
-  lo reescribe entero, y el cliente carga los egresos R16–R44 a mano. Con la
-  bajada de una sola vía, lo que escriba S1 lo pisa el próximo ciclo. **No usar
-  el botón de sincronizar cashflow** (`POST /admin/caja/sesion/:id/sincronizar-cashflow`)
-  hasta armar las dos vías: el trabajo se pierde sin ningún error.
+- **`Proveedores 2026` es una hoja nativa de Google, no un `.xlsx`.** Se exporta
+  al vuelo al bajarla, así que para leer da igual. Para **escribir** no: una hoja
+  nativa no se puede pisar con bytes de xlsx, y el intento devuelve un error
+  claro en vez de romper el archivo. Si hiciera falta escribirla, hay que
+  convertirla a `.xlsx` en Drive (Archivo → Descargar → subir el resultado).
+- **El nombre en Drive tiene que ser exacto.** Se prueba con y sin `.xlsx`, pero
+  un "Copia de Proveedores 2026" no lo encuentra.
+- **El writeback del CASHFLOW se habilita solo cuando el origen es Drive.** En
+  disco sigue apagado por default (`EXCEL_CASHFLOW_ESCRITURA`), porque ahí sí
+  puede pisar una copia que nadie sincroniza.
+- **El sync/aprobación de precios NO migró.** `excel-sync.ts` shellea parsers
+  Python contra un path de disco; sigue necesitando `EXCEL_LOCAL_DIR` + python +
+  openpyxl, y por eso hoy sólo corre donde eso exista. Es el pendiente #2 del
+  CLAUDE.md.
+
+### Desmontar rclone (si S1 lo tiene)
+
+```powershell
+schtasks /delete /tn "STA-Excel-Sync" /f
+# y sacar la línea EXCEL_LOCAL_DIR de C:\sta-server\.env, después:
+C:\sta-server\update-server.ps1 -SyncEnv
+```
+
+Dejar `C:\sta\rclone` y `C:\sta\excel` no molesta, pero conviene borrar
+`rclone.conf`: tiene un refresh token de Drive con acceso de lectura a lo que
+haya compartido esa cuenta.
 
 ## 2. Cajas (`.exe`)  ── ~5 min por caja
 

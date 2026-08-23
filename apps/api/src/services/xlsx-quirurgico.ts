@@ -200,6 +200,49 @@ export async function rutaDeHoja(zip: JSZip, nombreHoja: string): Promise<string
  * entero en vez de quedar truncado. En una carpeta sincronizada esto además
  * evita que Drive suba un archivo a medio escribir.
  */
+/**
+ * Igual que `editarHojaXlsx` pero sobre BYTES, sin tocar el disco.
+ *
+ * Es la forma que necesita Google Drive: el archivo se baja, se edita en
+ * memoria y se sube. La versión con ruta de abajo delega acá, así que la
+ * garantía de este módulo —que el .xlsx salga con exactamente las mismas partes
+ * que entró— vale igual para los dos caminos.
+ */
+export async function editarHojaEnBuffer(opts: {
+  contenido: Buffer;
+  hoja: string;
+  ediciones: EdicionCelda[];
+  /** Si es true, calcula todo pero NO produce el archivo nuevo. */
+  simular?: boolean;
+}): Promise<{ hojaXml: string; celdasEscritas: number; salida: Buffer | null }> {
+  const zip = await JSZip.loadAsync(opts.contenido);
+
+  const ruta = await rutaDeHoja(zip, opts.hoja);
+  if (!ruta) throw new Error(`El archivo no tiene una hoja llamada "${opts.hoja}"`);
+
+  const xml = await zip.file(ruta)!.async('string');
+  const nuevo = aplicarEdiciones(xml, opts.ediciones);
+
+  if (opts.simular) {
+    return { hojaXml: ruta, celdasEscritas: opts.ediciones.length, salida: null };
+  }
+
+  // `createFolders: false`: sin esto JSZip agrega entradas de carpeta ("xl/",
+  // "xl/worksheets/") que el archivo original no tenía. Excel las ignora, pero
+  // el punto de este módulo es que el .xlsx salga con exactamente las mismas
+  // partes que entró: si el zip cambia de forma, verificar que no se perdió
+  // nada deja de significar algo.
+  zip.file(ruta, nuevo, { createFolders: false });
+  // DEFLATE como el original: sin compresión el archivo se triplica y subirlo
+  // a Drive se vuelve pesado al pedo.
+  const salida = await zip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 },
+  });
+  return { hojaXml: ruta, celdasEscritas: opts.ediciones.length, salida };
+}
+
 export async function editarHojaXlsx(opts: {
   archivo: string;
   hoja: string;
