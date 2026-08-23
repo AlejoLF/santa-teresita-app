@@ -22,18 +22,11 @@
  */
 
 import ExcelJS from 'exceljs';
-import { join, resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { copyFile, access } from 'node:fs/promises';
+import { exigir, abrirLibro, guardarLibro, respaldar, origenExcel } from './fuente-excel.js';
 import { prisma } from '@sta/db/client';
 import { ReglaNegocioError } from './errores.js';
 import { cargarCierre, type CierreData, type CategoriaCobros } from './cierre-export.js';
 
-const SERVICE_DIR = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = process.env.REPO_ROOT
-  ? resolve(process.env.REPO_ROOT)
-  : resolve(SERVICE_DIR, '../../../..');
-const EXCEL_DIR = process.env.EXCEL_LOCAL_DIR ?? REPO_ROOT;
 
 const CASHFLOW_FILE = 'CASHFLOW 2026.xlsx';
 
@@ -114,24 +107,19 @@ async function cargarDia(fecha: Date): Promise<{
 }
 
 /**
- * ¿Está habilitado escribir el CASHFLOW? Apagado por default, a propósito.
+ * ¿Está habilitado escribir el CASHFLOW?
  *
- * El archivo se baja de Drive con rclone en UNA sola dirección (ver
- * DEPLOY-SERVIDOR-LOCAL.md §1.5): lo que escriba el servidor lo pisa la próxima
- * corrida, unos diez minutos después. Y como esta función reescribe el libro
- * entero, también se lleva puestos los egresos que el cliente carga a mano en
- * las filas R16-R44.
+ * El candado nació cuando el archivo se bajaba de Drive en UNA sola dirección:
+ * lo que escribía el servidor lo pisaba la sincronización diez minutos después,
+ * en silencio. Leyendo y escribiendo el archivo VIVO de Drive ese problema
+ * desaparece —se lee, se modifica y se sube la misma versión—, así que con
+ * Drive configurado la escritura queda habilitada sola.
  *
- * Sin candado, un clic en "sincronizar cashflow" devuelve un ✔ verde, deja un
- * .bak al lado y no pasa nada: el trabajo desaparece en la siguiente
- * sincronización, sin un solo error. Eso es peor que fallar — nadie lo
- * investiga porque nadie sabe que pasó. Falla ruidosa y a propósito hasta que
- * la sincronización sea de ida y vuelta.
- *
- * Va acá y no en la ruta para que cubra a cualquier llamador, incluido un
- * script que alguien corra a mano más adelante.
+ * Sobre disco el candado sigue vigente: ahí el archivo puede seguir siendo una
+ * copia que algo más sobrescribe.
  */
 function escrituraHabilitada(): boolean {
+  if (origenExcel() === 'drive') return true;
   return /^(1|true|si|sí)$/i.test((process.env.EXCEL_CASHFLOW_ESCRITURA ?? '').trim());
 }
 
@@ -142,21 +130,17 @@ export async function actualizarCashflow(opts: {
   fecha: Date;
   /** Si es true, hace backup `CASHFLOW 2026.bak.xlsx` antes de modificar. */
   hacerBackup?: boolean;
-  /** Path explícito al .xlsx (default: <EXCEL_DIR>/CASHFLOW 2026.xlsx). */
-  archivoPath?: string;
 }): Promise<SyncResult> {
   if (!escrituraHabilitada()) {
     throw new ReglaNegocioError(
-      'La escritura del CASHFLOW está deshabilitada. El archivo se baja de Drive en ' +
-        'una sola dirección, así que lo que se escriba desde acá se pierde en la ' +
-        'próxima sincronización, sin aviso. Para habilitarla hay que configurar la ' +
-        'sincronización de ida y vuelta y recién ahí poner EXCEL_CASHFLOW_ESCRITURA=true.',
+      'La escritura del CASHFLOW está deshabilitada porque se está leyendo de un ' +
+        'archivo en disco, que algo puede sobrescribir. Configurá Google Drive ' +
+        '(GOOGLE_SERVICE_ACCOUNT_JSON y GOOGLE_DRIVE_FOLDER_ID) y se habilita sola.',
       423,
     );
   }
 
-  const archivoPath = opts.archivoPath ?? join(EXCEL_DIR, CASHFLOW_FILE);
-  await access(archivoPath); // throws si no existe
+  const ref = await exigir(CASHFLOW_FILE);
 
   const { manana, tarde } = await cargarDia(opts.fecha);
   if (!manana && !tarde) {
@@ -166,18 +150,10 @@ export async function actualizarCashflow(opts: {
     );
   }
 
-  // Backup
-  if (opts.hacerBackup ?? true) {
-    const bak = archivoPath.replace(/\.xlsx$/i, '.bak.xlsx');
-    try {
-      await copyFile(archivoPath, bak);
-    } catch (e) {
-      console.warn('[excel-writeback] no se pudo hacer backup:', e);
-    }
-  }
+  // Backup. En Drive no hace nada: Drive ya guarda historial de versiones.
+  if (opts.hacerBackup ?? true) await respaldar(ref);
 
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(archivoPath);
+  const wb = await abrirLibro(ref);
 
   const hojaNombre = nombreHojaCashflow(opts.fecha);
   const ws = wb.getWorksheet(hojaNombre);
@@ -267,10 +243,12 @@ export async function actualizarCashflow(opts: {
     (catTarde?.delivery.efectivoDeliverate ?? 0);
   setCelda(ROW_DELIVERATE, 'DELIVERATE A COBRAR', deliverate);
 
-  await wb.xlsx.writeFile(archivoPath);
+  await guardarLibro(ref, wb);
 
   return {
-    archivoPath,
+    // Con Drive no hay ruta de disco: se informa de dónde salió, que es lo que
+    // la pantalla necesita mostrar ("se guardó en Drive" vs una ruta local).
+    archivoPath: ref.origen === 'disco' ? ref.ruta : `Google Drive · ${ref.nombre}`,
     hoja: hojaNombre,
     columna: col,
     diaLabel: opts.fecha.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' }),

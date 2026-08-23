@@ -329,6 +329,9 @@ model Usuario {
   sesionesAprobadas SesionCaja[] @relation("SesionAprobacion")
 
   movimientos      Movimiento[]
+  bancoHoras       MovimientoBancoHoras[]
+  liquidaciones    LiquidacionEmpleado[]
+  valoresHora      ValorHoraCategoria[]
   loginAudits      LoginAudit[] @relation("LoginAuditUsuario")
   loginSolicitudes LoginAudit[] @relation("LoginAuditSolicitante")
 
@@ -867,6 +870,8 @@ model Movimiento {
   sesionCaja    SesionCaja?         @relation(fields: [sesionCajaId], references: [id])
 
   pagos             Pago[]
+  bancoHoras        MovimientoBancoHoras[]
+  liquidaciones     LiquidacionEmpleado[]
   pagosFactura      PagoFactura[]       @relation("MovimientoPagoFactura")
   facturasAsociadas MovimientoFactura[]
   remitosSaldados   Remito[]
@@ -1302,7 +1307,19 @@ model Empleado {
   activo        Boolean        @default(true)
   creadoAt      DateTime       @default(now()) @map("creado_at")
 
+  /// Categoría laboral: de dónde sale su valor hora.
+  categoriaLaboralId String? @map("categoria_laboral_id") @db.Uuid
+  /// Excepción por persona: pisa el valor de la categoría. Siempre aparece el
+  /// arreglo especial, y sin esto la encargada termina creando una categoría de
+  /// una sola persona.
+  valorHoraPropio    Decimal? @map("valor_hora_propio") @db.Decimal(18, 2)
+
+  categoriaLaboral CategoriaLaboral?      @relation(fields: [categoriaLaboralId], references: [id])
+  bancoHoras       MovimientoBancoHoras[]
+  liquidaciones    LiquidacionEmpleado[]
+
   @@index([activo])
+  @@index([categoriaLaboralId])
   @@map("empleados")
 }
 
@@ -1733,4 +1750,151 @@ model MapeoExcelProveedor {
   @@unique([etiquetaExcel, proveedorId])
   @@index([proveedorId])
   @@map("mapeo_excel_proveedores")
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//   BANCO DE HORAS (sección 14)
+// ════════════════════════════════════════════════════════════════════════
+
+/// Qué clase de asiento es cada fila del libro del banco de horas.
+enum TipoMovimientoBancoHoras {
+  HORAS_TRABAJADAS
+  ADELANTO
+  LIQUIDACION
+  AJUSTE
+}
+
+/// Categoría laboral con su valor hora. Separada de `PuestoEmpleado`: el puesto
+/// es lo que la persona HACE, la categoría es lo que CUESTA. Un cocinero con
+/// antigüedad puede estar en otra categoría que uno nuevo.
+///
+/// Subir el valor acá impacta a todos los empleados de la categoría — que es
+/// justamente el pedido: no tener que editar persona por persona.
+model CategoriaLaboral {
+  id        String   @id @default(uuid()) @db.Uuid
+  nombre    String   @unique @db.VarChar(80)
+  /// Valor hora VIGENTE. El histórico vive en `ValorHoraCategoria`.
+  valorHora Decimal  @map("valor_hora") @db.Decimal(18, 2)
+  activo    Boolean  @default(true)
+  orden     Int      @default(0)
+  creadoAt  DateTime @default(now()) @map("creado_at")
+
+  empleados Empleado[]
+  historial ValorHoraCategoria[]
+
+  @@index([activo])
+  @@map("categorias_laborales")
+}
+
+/// Histórico del valor hora. **El valor nunca se pisa con UPDATE**: cada cambio
+/// inserta una fila. Sirve para responder "¿por qué en marzo se le pagó esto?",
+/// y es el mismo criterio que usan los precios por lista.
+model ValorHoraCategoria {
+  id            String   @id @default(uuid()) @db.Uuid
+  categoriaId   String   @map("categoria_id") @db.Uuid
+  valorHora     Decimal  @map("valor_hora") @db.Decimal(18, 2)
+  vigenciaDesde DateTime @map("vigencia_desde")
+  usuarioId     String   @map("usuario_id") @db.Uuid
+  creadoAt      DateTime @default(now()) @map("creado_at")
+
+  categoria CategoriaLaboral @relation(fields: [categoriaId], references: [id], onDelete: Cascade)
+  usuario   Usuario          @relation(fields: [usuarioId], references: [id])
+
+  @@index([categoriaId, vigenciaDesde])
+  @@map("valores_hora_categoria")
+}
+
+/// Tipo de hora: normales, extra, feriado, nocturna…
+///
+/// Define **o** un `multiplicador` sobre el valor de la categoría **o** un
+/// `valorHoraFijo`, nunca los dos (XOR, chequeado por constraint en la base).
+///
+/// La diferencia importa: el multiplicador SIGUE a la categoría —si sube el
+/// valor hora, la hora extra sube sola—, mientras que el valor fijo queda
+/// quieto hasta que alguien lo edita a mano.
+model TipoHora {
+  id            String   @id @default(uuid()) @db.Uuid
+  nombre        String   @unique @db.VarChar(60)
+  multiplicador Decimal? @db.Decimal(6, 3)
+  valorHoraFijo Decimal? @map("valor_hora_fijo") @db.Decimal(18, 2)
+  activo        Boolean  @default(true)
+  orden         Int      @default(0)
+  creadoAt      DateTime @default(now()) @map("creado_at")
+
+  movimientos MovimientoBancoHoras[]
+
+  @@index([activo])
+  @@map("tipos_hora")
+}
+
+/// El libro del banco de horas. **Append-only**: un error no se edita, se
+/// corrige con un `AJUSTE`. Va en la línea del resto del sistema (las ventas se
+/// anulan en vez de borrarse) y evita que alguien "arregle" el pasado sin dejar
+/// rastro.
+///
+/// Guarda DOS cantidades porque la deuda tiene dos unidades: las horas a favor
+/// del empleado se revalúan con la categoría, y los adelantos quedan en pesos.
+/// Por eso el saldo NO se persiste: se calcula al leer como
+/// `(horas pendientes × valor vigente) − adelantos pendientes`.
+model MovimientoBancoHoras {
+  id          String                   @id @default(uuid()) @db.Uuid
+  empleadoId  String                   @map("empleado_id") @db.Uuid
+  tipo        TipoMovimientoBancoHoras
+  /// Horas (+ trabajadas / − liquidadas). Null en los asientos de plata.
+  horas       Decimal?                 @db.Decimal(8, 2)
+  /// Pesos (− adelanto / − pago). Null en los asientos de horas.
+  montoPesos  Decimal?                 @map("monto_pesos") @db.Decimal(18, 2)
+  tipoHoraId  String?                  @map("tipo_hora_id") @db.Uuid
+  /// Día trabajado (o fecha del adelanto). No es `creadoAt`: se puede cargar
+  /// el lunes lo que se trabajó el sábado.
+  fecha       DateTime                 @db.Date
+  observacion String?
+  /// El movimiento de caja de un adelanto o una liquidación. Sin esto, la plata
+  /// del banco de horas y la de la caja se separan y no vuelven a juntarse.
+  movimientoId   String?               @map("movimiento_id") @db.Uuid
+  /// Marca de liquidación: una fila liquidada no puede entrar en otra. Un
+  /// booleano `pagado` no alcanza — no dice en cuál entró.
+  liquidacionId  String?               @map("liquidacion_id") @db.Uuid
+  usuarioId   String                   @map("usuario_id") @db.Uuid
+  creadoAt    DateTime                 @default(now()) @map("creado_at")
+
+  empleado    Empleado             @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
+  tipoHora    TipoHora?            @relation(fields: [tipoHoraId], references: [id])
+  movimiento  Movimiento?          @relation(fields: [movimientoId], references: [id])
+  liquidacion LiquidacionEmpleado? @relation(fields: [liquidacionId], references: [id])
+  usuario     Usuario              @relation(fields: [usuarioId], references: [id])
+
+  @@index([empleadoId, fecha])
+  @@index([empleadoId, liquidacionId])
+  @@index([liquidacionId])
+  @@map("movimientos_banco_horas")
+}
+
+/// Una liquidación: lo que se le pagó a alguien de una vez.
+///
+/// Estampa el `valorHoraAplicado`. **Es el único punto donde la revaluación se
+/// detiene**: hasta acá las horas valían lo que valiera la categoría hoy;
+/// desde acá, este número ya no se mueve nunca más.
+model LiquidacionEmpleado {
+  id                String   @id @default(uuid()) @db.Uuid
+  empleadoId        String   @map("empleado_id") @db.Uuid
+  fecha             DateTime @db.Date
+  horasLiquidadas   Decimal  @map("horas_liquidadas") @db.Decimal(8, 2)
+  valorHoraAplicado Decimal  @map("valor_hora_aplicado") @db.Decimal(18, 2)
+  /// Bruto de las horas, lo descontado por adelantos y lo que se pagó en mano.
+  montoHoras        Decimal  @map("monto_horas") @db.Decimal(18, 2)
+  adelantosAplicados Decimal @map("adelantos_aplicados") @db.Decimal(18, 2)
+  montoPagado       Decimal  @map("monto_pagado") @db.Decimal(18, 2)
+  movimientoId      String?  @map("movimiento_id") @db.Uuid
+  observacion       String?
+  usuarioId         String   @map("usuario_id") @db.Uuid
+  creadoAt          DateTime @default(now()) @map("creado_at")
+
+  empleado    Empleado               @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
+  movimiento  Movimiento?            @relation(fields: [movimientoId], references: [id])
+  usuario     Usuario                @relation(fields: [usuarioId], references: [id])
+  movimientos MovimientoBancoHoras[]
+
+  @@index([empleadoId, fecha])
+  @@map("liquidaciones_empleado")
 }

@@ -15,6 +15,8 @@ import {
   volcarSemanaProveedores,
   leerEtiquetasDelExcel,
 } from '../services/excel-proveedores.js';
+import { origenExcel, ubicar } from '../services/fuente-excel.js';
+import { configuracionIncompleta, driveCuenta } from '../services/drive.js';
 import {
   importarCompras,
   volcarCantidadesCompras,
@@ -2099,6 +2101,54 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
   // ══════════════════════════════════════════════════════════════════════
   //   EXCEL "Proveedores 2026.xlsx" — hoja Deudas
   // ══════════════════════════════════════════════════════════════════════
+
+  // Diagnóstico de dónde salen los Excels.
+  //
+  // Existe por un motivo concreto: los archivos hay que COMPARTIRLOS con la
+  // cuenta de servicio, y esa cuenta es un mail largo que nadie tiene a mano.
+  // Sin este endpoint, "Drive dice que no encuentra el archivo" se debuggea a
+  // ciegas; con él se ve el mail para pegar en "Compartir" y qué archivos
+  // están efectivamente al alcance.
+  fastify.get(
+    '/admin/excel/origen',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const origen = origenExcel();
+      const problema = configuracionIncompleta();
+      const nombres = ['Proveedores 2026.xlsx', 'CASHFLOW 2026.xlsx', 'Lista de Precios.xlsx'];
+      const archivos: Array<{ nombre: string; encontrado: boolean; detalle: string | null }> = [];
+      for (const nombre of nombres) {
+        try {
+          const ref = await ubicar(nombre);
+          archivos.push({
+            nombre,
+            encontrado: ref !== null,
+            detalle:
+              ref === null
+                ? null
+                : ref.origen === 'drive'
+                  ? ref.archivo.esHojaGoogle
+                    ? 'hoja nativa de Google (sólo lectura)'
+                    : 'xlsx en Drive'
+                  : ref.ruta,
+          });
+        } catch (e) {
+          archivos.push({
+            nombre,
+            encontrado: false,
+            detalle: e instanceof Error ? e.message : 'error',
+          });
+        }
+      }
+      return {
+        origen,
+        problema,
+        cuentaDeServicio: driveCuenta(),
+        carpetaId: process.env.GOOGLE_DRIVE_FOLDER_ID ?? null,
+        archivos,
+      };
+    },
+  );
 
   // Las filas del Excel + las semanas que tiene el archivo. Es lo que la
   // pantalla de mapeo necesita para ofrecer las etiquetas reales en vez de

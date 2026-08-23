@@ -47,7 +47,7 @@ orquestación confiable.
 | Auth | PIN 4 dígitos (bcryptjs) + Bearer token | token en localStorage → funciona cross-origin |
 | Agente local | Node daemon + node-thermal-printer | EPSON TM-T20II |
 | Cola de impresión | tabla `TrabajoImpresion` + polling del agente (3s) | **no** hay BullMQ (ver nota abajo) |
-| Excel | exceljs (en la API) | export/import; **sin** Google Drive API todavía |
+| Excel | exceljs (en la API) + Google Drive API | los `.xlsx` de la encargada se leen/escriben en su Drive, no en disco |
 | OCR facturas | LLM con visión en N8N | bot Telegram |
 | Deploy | Vercel (web) + Railway (API) + GitHub Actions | Docker Compose + Caddy para local/LAN |
 
@@ -239,6 +239,20 @@ Ver SPEC §1.5. Punteo:
   `_prisma_migrations` + recrear los índices. Para sincronizar una DB local
   nueva: aplicar los `migration.sql` en orden con un script, no `migrate dev`.
 
+- **Los Excels de la encargada NO están en disco: salen de Google Drive.**
+  `services/fuente-excel.ts` es la única capa que sabe de dónde vienen los bytes
+  (`GOOGLE_SERVICE_ACCOUNT_JSON` + `GOOGLE_DRIVE_FOLDER_ID`); `excel-proveedores`,
+  `excel-compras` y `excel-writeback` piden un archivo por nombre y reciben un
+  `RefExcel`. Si agregás un servicio que toque un `.xlsx` del cliente, usá
+  `exigir()`/`abrirLibro()`/`editarCeldas()` — no `readFile(join(EXCEL_DIR,…))`.
+  Dos cosas a no romper: **media configuración es 503, no fallback a disco**
+  (leer un archivo local viejo en silencio desactualiza todos los números sin
+  ningún síntoma), y **`Proveedores 2026` es una hoja NATIVA de Google**: se
+  exporta para leer, pero no se puede sobreescribir con bytes de xlsx.
+  `EXCEL_LOCAL_DIR` sobrevive sólo como fallback de desarrollo. Excepción
+  conocida: `excel-sync.ts` (aprobación de precios) todavía shellea Python
+  contra un path de disco.
+
 - **Cliente API: nunca mandar `Content-Type: application/json` sin body.**
   Fastify rechaza body vacío con ese header (FST_ERR_CTP_EMPTY_JSON_BODY,
   400) — rompía todos los DELETE sin body (quitar item, eliminar producto).
@@ -313,13 +327,13 @@ Detalle en [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md). Resumen:
 | # | Item | Bloqueante para |
 |-|-|-|
 | 1 | Resolver pendientes del cliente (PREGUNTAS.md) | Producción |
-| 2 | Sync Excel ↔ programa (falta Google Drive API; hoy solo exceljs) | Aprobación de cambios masivos |
+| 2 | Sync/aprobación de precios: `excel-sync.ts` sigue atado a disco + parsers Python (el resto del Excel ya va por Drive API) | Aprobación de cambios masivos |
 | 3 | Webhooks reales de RAPPI/PYA/MELI (la ingesta existe, falta el push de las plataformas) | Integración delivery automática |
 | 4 | Hash-chain audit triggers en Postgres (no solo app-level) | Forensic strength |
 | 5 | Cola real para impresión (hoy DB + polling cada 3s) | Throughput alto |
 | 6 | Tests E2E con Playwright | Calidad |
 | 7 | Completar Camino A de PLAN-PARIDAD (una sola app en la nube) | Que el admin opere 100% desde el celu |
-| 8 | **Banco de horas de empleados** (especificado en SPEC §14, sin implementar) | Que la encargada sepa cuánto se debe |
+| 8 | Banco de horas — cerrar lo que quedó afuera (SPEC §14.11: ajustes manuales, baja con deuda, export) | Reemplazar del todo el control en papel |
 
 ### 🔒 Pendientes de seguridad — HACER CUANDO ESTÉ EL SERVER LISTO
 

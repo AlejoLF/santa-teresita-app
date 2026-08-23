@@ -34,6 +34,21 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.64',
+    fecha: '22 de agosto',
+    titulo: 'Banco de horas: llevá la cuenta de lo que se le debe a cada uno',
+    cambios: [
+      'Nueva pestaña "Banco de horas": cargás las horas que trabajó cada persona y el sistema te dice cuánto se le debe, en horas y en plata.',
+      'Los adelantos se cargan desde ahí: salen de la caja como siempre y además se descuentan solos del saldo de esa persona.',
+      'Para pagarle, el botón "Liquidar" hace la cuenta completa —horas menos adelantos— y descuenta de la cuenta que elijas.',
+      'El valor de la hora se configura por categoría (Cocina, Mostrador…): la cambiás una vez y vale para todos los de esa categoría, sin tocar empleado por empleado.',
+      'Si aumentás una categoría, antes de confirmar te muestra cuánto sube la deuda que ya tenías acumulada.',
+      'En Empleados ahora hay buscador con filtro por período y botón para bajar todo a Excel.',
+      'Las pantallas que leen y escriben los Excels ahora los agarran directo del Drive. Antes andaban sólo desde las computadoras del local; ahora funcionan también desde el celular y desde cualquier lado.',
+      'Cuando el sistema escribe en un Excel, Drive te guarda la versión anterior: si algo sale mal, se puede volver atrás desde el propio Drive.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.63',
     fecha: '20 de agosto',
     titulo: 'Se arregló el error al mandar porciones calientes',

@@ -5086,9 +5086,14 @@ Si se contratan más manos (2 devs en paralelo), la duración baja a ~9–10 sem
 
 ## Sección 14 — Banco de horas de empleados
 
-> Estado: **especificado, no implementado.** Decisiones cerradas con el dueño el
-> 2026-08-21. Antes de codear, leer 14.2 y 14.7 — son las dos partes donde la
-> implementación obvia es la incorrecta.
+> Estado: **implementado** (2026-08-22), salvo lo listado en 14.11. Antes de
+> tocarlo, leer 14.2 y 14.7 — son las dos partes donde la implementación obvia
+> es la incorrecta.
+>
+> **Dato del local que cambió el diseño**: liquidan casi todos los días. Por eso
+> liquidar es un botón —"todo lo pendiente"— y no un formulario con selección de
+> filas, y por eso el saldo total NO va como tarjeta del dashboard: mostraría $0
+> casi siempre.
 
 ### 14.1 El problema
 
@@ -5150,9 +5155,19 @@ los dos (XOR, mismo patrón que `horaEntregaExacta` / `franjaEntrega` en
 encargos).
 
 > ⚠️ El `valorHoraFijo` **no** se revalúa con la categoría: queda quieto hasta
-> que alguien lo edita. Por eso necesita su propio histórico con
-> `vigenciaDesde`, igual que el de la categoría. Sin eso, el día que aumenten
-> todo, las horas de feriado se quedan viejas y nadie se entera.
+> que alguien lo edita. La pantalla lo dice explícitamente al crear el tipo
+> ("no sigue a la categoría, se actualiza aparte") porque es la diferencia que
+> la encargada está eligiendo.
+>
+> El histórico propio de ese valor **no está implementado** (ver 14.11): como la
+> liquidación estampa lo aplicado y en el local liquidan a diario, no hay horas
+> viejas que revaluar. Quién lo cambió y cuándo queda en el audit log.
+
+Se siembra **una sola**: `Normales ×1`. Una hora es una hora; la encargada crea
+las demás desde la pantalla si algún día las necesita. Va sembrada en la
+migración **y** en `seed.ts`: S1 se arma aplicando migraciones, pero Supabase y
+las locales con `db push` + seed, y ésas nunca correrían el INSERT de la
+migración.
 
 **`MovimientoBancoHoras`** — un solo libro, filas firmadas, append-only:
 
@@ -5270,14 +5285,18 @@ Wireframe: `docs/wireframes/11-admin-banco-horas.md`.
    liquidación.
 6. Dar de baja un empleado **no** borra movimientos de caja.
 
-### 14.11 Pendientes
+### 14.11 Lo que quedó afuera
 
-- Qué tipos de hora arranca teniendo el local (¿extra 50 y 100? ¿feriado?) y si
-  cada uno va por multiplicador o por valor fijo.
-- Si la liquidación se hace por período cerrado (quincena) o eligiendo filas
-  sueltas.
-- Si el saldo del banco de horas debe aparecer en el dashboard como pasivo, o
-  queda sólo en su pestaña.
+- **Histórico del `valorHoraFijo` de los tipos de hora.** El de las categorías sí
+  está (`ValorHoraCategoria`). Ver la nota de 14.3.
+- **La baja con borrado de deuda (14.7)**: el `AJUSTE` de baja no tiene todavía
+  su botón. Hoy un empleado se archiva desde su ficha y su saldo queda como
+  estaba.
+- **Ajustes manuales.** El tipo `AJUSTE` existe en el modelo y es el mecanismo
+  previsto para corregir un error, pero no hay pantalla que lo cargue. Mientras
+  tanto, un error se compensa cargando horas o un adelanto.
+- **Export a Excel del banco de horas.** El helper de `export-busqueda.ts` ya
+  sirve; falta engancharlo.
 
 ## Cierre del documento
 

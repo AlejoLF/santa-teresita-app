@@ -34,17 +34,11 @@
  */
 
 import ExcelJS from 'exceljs';
-import { access } from 'node:fs/promises';
-import { join, resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { prisma } from '@sta/db/client';
-import { editarHojaXlsx, type EdicionCelda } from './xlsx-quirurgico.js';
+import { type EdicionCelda } from './xlsx-quirurgico.js';
+import { exigir, abrirLibro, editarCeldas } from './fuente-excel.js';
 
-const SERVICE_DIR = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = process.env.REPO_ROOT
-  ? resolve(process.env.REPO_ROOT)
-  : resolve(SERVICE_DIR, '../../../..');
-const EXCEL_DIR = process.env.EXCEL_LOCAL_DIR ?? REPO_ROOT;
 
 const ARCHIVO = 'Proveedores 2026.xlsx';
 const HOJA = 'Deudas';
@@ -237,20 +231,11 @@ export async function volcarSemanaProveedores(opts: {
   pisarDiferencias?: boolean;
 }): Promise<ResultadoVolcado> {
   const fecha = opts.fecha ?? new Date();
-  const ruta = join(EXCEL_DIR, ARCHIVO);
-  try {
-    await access(ruta);
-  } catch {
-    throw new Error(
-      `No encuentro "${ARCHIVO}" en ${EXCEL_DIR}. ` +
-        'Configurá EXCEL_LOCAL_DIR apuntando a la carpeta sincronizada de Drive.',
-    );
-  }
+  const ref = await exigir(ARCHIVO);
 
   // Lectura con exceljs (leer no rompe nada); la ESCRITURA va por el editor
   // quirúrgico, que no toca el resto del archivo. Ver xlsx-quirurgico.ts.
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(ruta);
+  const wb = await abrirLibro(ref);
   const ws = wb.getWorksheet(HOJA);
   if (!ws) throw new Error(`El archivo no tiene la hoja "${HOJA}"`);
 
@@ -418,11 +403,11 @@ export async function volcarSemanaProveedores(opts: {
   }));
 
   if (!opts.simular && ediciones.length > 0) {
-    await editarHojaXlsx({ archivo: ruta, hoja: HOJA, ediciones });
+    await editarCeldas(ref, HOJA, ediciones);
   }
 
   return {
-    archivo: ruta,
+    archivo: ref.origen === 'disco' ? ref.ruta : `Google Drive · ${ref.nombre}`,
     semana: semana.etiqueta,
     desde: semana.desde.toISOString().slice(0, 10),
     hasta: semana.hasta.toISOString().slice(0, 10),
@@ -441,14 +426,13 @@ export async function leerEtiquetasDelExcel(): Promise<{
   etiquetas: string[];
   semanas: Array<{ etiqueta: string; desde: string; hasta: string }>;
 }> {
-  const ruta = join(EXCEL_DIR, ARCHIVO);
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(ruta);
+  const ref = await exigir(ARCHIVO);
+  const wb = await abrirLibro(ref);
   const ws = wb.getWorksheet(HOJA);
   if (!ws) throw new Error(`El archivo no tiene la hoja "${HOJA}"`);
   const semanas = leerSemanas(ws, new Date().getFullYear());
   return {
-    archivo: ruta,
+    archivo: ref.origen === 'disco' ? ref.ruta : `Google Drive · ${ref.nombre}`,
     etiquetas: [...leerFilasProveedor(ws).keys()],
     semanas: semanas.map((s) => ({
       etiqueta: s.etiqueta,
