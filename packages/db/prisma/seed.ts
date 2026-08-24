@@ -128,6 +128,8 @@ const CATEGORIAS_MOVIMIENTO_SISTEMA: Array<{
   { nombre: 'Venta DELIVERATE', tipo: TipoCategoriaMovimiento.INGRESO, orden: 3 },
   { nombre: 'Venta plataforma', tipo: TipoCategoriaMovimiento.INGRESO, orden: 4 },
   { nombre: 'Otros ingresos', tipo: TipoCategoriaMovimiento.INGRESO, orden: 5 },
+  // Cuando un empleado devuelve plata de un préstamo. Entra a la caja.
+  { nombre: 'Devolución de préstamo', tipo: TipoCategoriaMovimiento.INGRESO, orden: 6 },
   { nombre: 'Sueldos', tipo: TipoCategoriaMovimiento.EGRESO, orden: 10 },
   { nombre: 'Adelanto a empleado', tipo: TipoCategoriaMovimiento.EGRESO, orden: 11 },
   { nombre: 'Comisiones', tipo: TipoCategoriaMovimiento.EGRESO, orden: 12 },

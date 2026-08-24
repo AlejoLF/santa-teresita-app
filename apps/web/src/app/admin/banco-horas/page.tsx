@@ -74,7 +74,7 @@ export default function BancoHorasPage() {
         <div>
           <h1 className="font-display text-xl text-ink-900">Banco de horas</h1>
           <p className="text-sm text-ink-500">
-            Horas trabajadas pendientes de pago y adelantos entregados.
+            Horas trabajadas sin cobrar y préstamos sin devolver.
           </p>
         </div>
         <Link href="/admin/banco-horas/configuracion">
@@ -129,7 +129,7 @@ export default function BancoHorasPage() {
               <th className="text-right px-4 py-2">Hs. pend.</th>
               <th className="text-right px-4 py-2">$/h</th>
               <th className="text-right px-4 py-2">En pesos</th>
-              <th className="text-right px-4 py-2">Adelantos</th>
+              <th className="text-right px-4 py-2">Préstamos</th>
               <th className="text-right px-4 py-2">Saldo</th>
             </tr>
           </thead>

@@ -20,6 +20,8 @@ interface Empleado {
   telefono: string | null;
   formaPago: string | null;
   sueldoBase: string | null;
+  categoriaLaboral: { id: string; nombre: string } | null;
+  valorHoraPropio: string | null;
   activo: boolean;
   sueldosPagados: string;
   adelantos: string;
@@ -27,6 +29,28 @@ interface Empleado {
   otros: string;
   totalCobrado: string;
   saldoSueldo: string;
+}
+
+/**
+ * La categoría laboral, o el aviso de que falta.
+ *
+ * Se muestra en la lista y no sólo en la ficha porque el error que importa es
+ * el que nadie va a ir a buscar: dar de alta a alguien, olvidar la categoría,
+ * cargarle horas — y que esas horas valgan $0 sin ningún síntoma más que un
+ * total más bajo de lo que corresponde.
+ */
+function CategoriaChip({ empleado }: { empleado: Empleado }) {
+  if (empleado.categoriaLaboral) {
+    return (
+      <div className="text-2xs text-ink-500 mt-0.5">{empleado.categoriaLaboral.nombre}</div>
+    );
+  }
+  // Un valor propio es una configuración válida, no un problema.
+  if (empleado.valorHoraPropio) {
+    return <div className="text-2xs text-ink-500 mt-0.5">valor propio</div>;
+  }
+  if (!empleado.activo) return null;
+  return <div className="text-2xs text-saffron-700 mt-0.5">sin categoría</div>;
 }
 
 const PUESTO_LABEL: Record<Empleado['puesto'], string> = {
@@ -191,6 +215,9 @@ export default function EmpleadosListPage() {
                     <span className="text-2xs font-medium px-2 py-0.5 rounded bg-cream-200 text-ink-700">
                       {PUESTO_LABEL[e.puesto]}
                     </span>
+                    {/* La categoría laboral decide cuánto vale su hora. Sin
+                        ella, las horas cargadas valen $0 y no lo dice nadie. */}
+                    <CategoriaChip empleado={e} />
                   </td>
                   <td className="px-4 py-3 text-ink-500 text-xs">{e.formaPago ?? '—'}</td>
                   <td className="px-4 py-3 text-right">
@@ -274,6 +301,7 @@ export default function EmpleadosListPage() {
                       <span className="text-2xs font-medium px-2 py-0.5 rounded bg-cream-200 text-ink-700">
                         {PUESTO_LABEL[e.puesto]}
                       </span>
+                      <CategoriaChip empleado={e} />
                       {e.formaPago && (
                         <span className="text-2xs text-ink-500">{e.formaPago}</span>
                       )}
@@ -377,11 +405,25 @@ function FormNuevoEmpleado({
   const [puesto, setPuesto] = useState<Empleado['puesto']>('CAJERO');
   const [sueldoBase, setSueldoBase] = useState('');
   const [formaPago, setFormaPago] = useState('mensual');
+  // Categoría laboral: de dónde sale su valor hora en el banco de horas. Se
+  // pide en el alta porque un empleado sin categoría acumula horas que valen
+  // $0, y el único síntoma sería un total más bajo de lo que corresponde.
+  const [categoriaLaboralId, setCategoriaLaboralId] = useState('');
+  const [categorias, setCategorias] = useState<Array<{ id: string; nombre: string }>>([]);
   const [telefono, setTelefono] = useState('');
   const [dni, setDni] = useState('');
   const [observaciones, setObservaciones] = useState('');
   const [creando, setCreando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api
+      .get<{ categorias: Array<{ id: string; nombre: string; activo: boolean }> }>(
+        '/admin/banco-horas-config',
+      )
+      .then((r) => setCategorias(r.categorias.filter((c) => c.activo)))
+      .catch(() => {});
+  }, []);
 
   async function submit() {
     if (!nombre.trim()) return setError('Falta el nombre');
@@ -393,6 +435,7 @@ function FormNuevoEmpleado({
         puesto,
         sueldoBase: sueldoBase || undefined,
         formaPago: formaPago || undefined,
+        categoriaLaboralId: categoriaLaboralId || undefined,
         telefono: telefono || undefined,
         dni: dni || undefined,
         observaciones: observaciones || undefined,
@@ -460,6 +503,28 @@ function FormNuevoEmpleado({
                 <option value="comisión">Comisión</option>
               </select>
             </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-700 mb-1">
+              Categoría laboral
+            </label>
+            <select
+              value={categoriaLaboralId}
+              onChange={(e) => setCategoriaLaboralId(e.target.value)}
+              className="input"
+            >
+              <option value="">Sin categoría</option>
+              {categorias.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nombre}
+                </option>
+              ))}
+            </select>
+            {!categoriaLaboralId && (
+              <p className="text-2xs text-saffron-700 mt-1">
+                Sin categoría, las horas que le cargues valen $0. Se puede cambiar después.
+              </p>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>

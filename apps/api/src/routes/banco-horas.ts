@@ -20,8 +20,132 @@ import {
   filasPendientesDe,
   exigirValorHora,
   valorHoraBase,
+  valorHoraDeFila,
   valorDeTipoHora,
+  liquidarEnTransaccion,
+  resumenPendiente,
+  resolverCategoriaPago,
+  aplicarDevolucion,
+  asentarDevolucion,
+  restanteHoras,
+  restantePrestamo,
+  type LineaPagoLiq,
+  type MetodoPagoLiq,
+  type ResumenLiquidacion,
+  type PlanLiquidacion,
 } from '../services/banco-horas.js';
+
+const METODOS = [
+  'EFECTIVO',
+  'TRANSFERENCIA',
+  'DEPOSITO',
+  'CHEQUE',
+  'MERCADOPAGO_QR',
+  'OTRO',
+] as const;
+
+/**
+ * Cómo se paga: una cuenta o varias.
+ *
+ * Es el mismo contrato que `POST /admin/empleados/:id/movimientos`, a
+ * propósito: la encargada ya sabe repartir un sueldo entre efectivo y
+ * transferencia, y el pago de horas no es un pago distinto.
+ */
+const pagoSchema = z.object({
+  conceptoEtiqueta: z.string().min(1).max(120).optional(),
+  cuentaId: z.string().uuid().optional(),
+  metodo: z.enum(METODOS).default('EFECTIVO'),
+  pagos: z
+    .array(
+      z.object({
+        cuentaId: z.string().uuid(),
+        monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
+        metodo: z.enum(METODOS).default('EFECTIVO'),
+        numeroReferencia: z.string().max(80).optional(),
+      }),
+    )
+    .min(1)
+    .optional(),
+  fechaComputo: z.string().datetime().optional(),
+  observacion: z.string().max(300).optional(),
+});
+
+type CuerpoPago = z.infer<typeof pagoSchema>;
+
+/**
+ * Qué se paga y qué va contra el préstamo.
+ *
+ * El default es el caso de todos los días: **se le paga todo lo que valen las
+ * horas pendientes y el préstamo no se toca.** Antes el préstamo se neteaba
+ * solo, lo que obligaba a la persona a trabajar gratis hasta cubrirlo — no es
+ * cómo funciona el local, donde el préstamo se devuelve de a poco y mientras
+ * tanto se sigue cobrando normal.
+ */
+function armarPlan(
+  resumen: ResumenLiquidacion,
+  montoPagado: number | undefined,
+  montoAlPrestamo: number,
+): PlanLiquidacion {
+  const alPrestamo = Math.round(montoAlPrestamo * 100) / 100;
+  const pagado =
+    montoPagado != null
+      ? Math.round(montoPagado * 100) / 100
+      : Math.max(0, Math.round((resumen.montoHoras - alPrestamo) * 100) / 100);
+  return { montoPagado: pagado, montoAlPrestamo: alPrestamo };
+}
+
+/**
+ * Antepone el concepto a la observación cuando aporta algo.
+ *
+ * Mismo criterio que el pago de sueldo de la ficha del empleado: los conceptos
+ * que comparten la categoría "Sueldos" —Jornada, Horas extra, Feriado— son
+ * indistinguibles en la lista de movimientos si no se escriben. Sin esto, dos
+ * egresos del mismo monto y la misma categoría se ven iguales y no hay forma
+ * de saber cuál fue cuál.
+ */
+function observacionConConcepto(
+  etiqueta: string,
+  categoriaNombre: string,
+  observacion: string | null | undefined,
+): string | null {
+  if (categoriaNombre === 'Sueldos' && etiqueta.toLowerCase() !== 'sueldo') {
+    return `${etiqueta}${observacion ? ' · ' + observacion : ''}`;
+  }
+  return observacion ?? null;
+}
+
+/**
+ * Normaliza el pago a una lista de líneas que sume exactamente `aPagar`.
+ *
+ * El modo simple (una cuenta, sin monto) toma el total calculado: el monto de
+ * una liquidación lo decide el sistema, no quien paga. En multicuenta sí se
+ * valida la suma — repartir mal dejaría el arqueo de una cuenta mordido y la
+ * otra sobrada, sin ningún error a la vista.
+ */
+function armarLineas(body: CuerpoPago, aPagar: number): LineaPagoLiq[] {
+  // No sale plata: se trabajó para descontar el préstamo y nada más. No hace
+  // falta cuenta ni método, y exigirlos sería pedir un dato que no existe.
+  if (aPagar <= 0) return [];
+  if (body.pagos?.length) {
+    const ids = body.pagos.map((l) => l.cuentaId);
+    if (new Set(ids).size !== ids.length) {
+      throw new ReglaNegocioError('No repitas la misma cuenta en el reparto.');
+    }
+    const suma = Math.round(body.pagos.reduce((a, l) => a + Number(l.monto), 0) * 100) / 100;
+    if (Math.abs(suma - aPagar) > 0.009) {
+      throw new ReglaNegocioError(
+        `El reparto suma $${suma.toFixed(2)} y hay que pagar $${aPagar.toFixed(2)}.`,
+      );
+    }
+    return body.pagos.map((l) => ({ ...l, metodo: l.metodo as MetodoPagoLiq }));
+  }
+  if (!body.cuentaId) {
+    throw new ReglaNegocioError('Falta la cuenta de la que sale la plata.');
+  }
+  return [
+    { cuentaId: body.cuentaId, monto: aPagar.toFixed(2), metodo: body.metodo as MetodoPagoLiq },
+  ];
+}
 
 const SELECT_TARIFA = {
   id: true,
@@ -151,6 +275,7 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
             liquidacionId: true,
             creadoAt: true,
             tipoHora: { select: { nombre: true, multiplicador: true, valorHoraFijo: true } },
+            categoriaLaboral: { select: { id: true, nombre: true, valorHora: true } },
             usuario: { select: { nombre: true } },
           },
         }),
@@ -185,9 +310,15 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
           observacion: m.observacion,
           liquidado: m.liquidacionId != null,
           tipoHora: m.tipoHora?.nombre ?? null,
-          // El valor que tendría HOY esa hora. En las filas ya liquidadas es
-          // informativo: lo que se pagó quedó estampado en la liquidación.
-          valorHoraFila: m.horas ? valorDeTipoHora(base, m.tipoHora).toFixed(2) : null,
+          // La categoría sólo aparece cuando ese día fue una excepción. Si es
+          // la de siempre no se muestra: repetirla en cada fila es ruido.
+          categoria: m.categoriaLaboral?.nombre ?? null,
+          // El valor que tendría HOY esa hora, con la categoría de la fila si
+          // la tiene. En las filas ya liquidadas es informativo: lo que se pagó
+          // quedó estampado en la liquidación.
+          valorHoraFila: m.horas
+            ? valorDeTipoHora(valorHoraDeFila(empleado, m.categoriaLaboral), m.tipoHora).toFixed(2)
+            : null,
           usuario: m.usuario.nombre,
           creadoAt: m.creadoAt,
         })),
@@ -195,7 +326,17 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // ── Cargar horas de un día ──────────────────────────────────────────────
+  // ── Cargar horas de un día (y, si se pide, pagarlas en el acto) ─────────
+  //
+  // El "pagar ahora" existe porque el flujo de antes era cargar el sueldo y
+  // listo, en un solo gesto. Partirlo en dos pantallas —cargar horas, después
+  // liquidar— sería pedirle a la encargada más trabajo del que hacía para el
+  // caso más común del local, que es pagar el día trabajado ese mismo día.
+  //
+  // Paga TODO lo pendiente, no sólo las horas que se acaban de cargar: si
+  // quedara un adelanto viejo sin descontar, el saldo nunca cerraría en cero y
+  // esa plata se pagaría dos veces. La pantalla muestra la cuenta completa
+  // antes de confirmar.
   fastify.post(
     '/admin/banco-horas/:empleadoId/horas',
     {
@@ -206,7 +347,17 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
           fecha: z.string().datetime(),
           horas: z.number().positive().max(24),
           tipoHoraId: z.string().uuid().optional(),
+          /// Excepción del día: se trabajó en otra categoría. Omitir = la de siempre.
+          categoriaLaboralId: z.string().uuid().nullish(),
           observacion: z.string().max(300).optional(),
+          pagarAhora: z.boolean().default(false),
+          pago: pagoSchema.optional(),
+          /// Cuánto pagarle. Omitido = todo lo que valen las horas pendientes,
+          /// que es el caso de todos los días: trabajó, se le paga.
+          montoPagado: z.number().nonnegative().optional(),
+          /// Cuánto descontar del préstamo en vez de pagárselo. 0 por defecto:
+          /// el préstamo NO se netea solo.
+          montoAlPrestamo: z.number().nonnegative().default(0),
         }),
       },
     },
@@ -216,30 +367,121 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
         fecha: string;
         horas: number;
         tipoHoraId?: string;
+        categoriaLaboralId?: string | null;
         observacion?: string;
+        pagarAhora: boolean;
+        pago?: CuerpoPago;
+        montoPagado?: number;
+        montoAlPrestamo: number;
       };
-      const empleado = await prisma.empleado.findUnique({ where: { id: empleadoId } });
+      const empleado = await prisma.empleado.findUnique({
+        where: { id: empleadoId },
+        select: SELECT_TARIFA,
+      });
       if (!empleado) return reply.code(404).send({ error: 'Empleado no encontrado' });
 
-      const fila = await prisma.movimientoBancoHoras.create({
-        data: {
-          empleadoId,
-          tipo: 'HORAS_TRABAJADAS',
-          horas: body.horas,
-          tipoHoraId: body.tipoHoraId ?? null,
-          fecha: new Date(body.fecha),
-          observacion: body.observacion ?? null,
+      if (body.categoriaLaboralId) {
+        const cat = await prisma.categoriaLaboral.findUnique({
+          where: { id: body.categoriaLaboralId },
+          select: { id: true, activo: true },
+        });
+        if (!cat) return reply.code(404).send({ error: 'Categoría laboral no encontrada' });
+        if (!cat.activo) {
+          throw new ReglaNegocioError('Esa categoría laboral está desactivada.');
+        }
+      }
+
+      const datosFila = {
+        empleadoId,
+        tipo: 'HORAS_TRABAJADAS' as const,
+        horas: body.horas,
+        tipoHoraId: body.tipoHoraId ?? null,
+        categoriaLaboralId: body.categoriaLaboralId ?? null,
+        fecha: new Date(body.fecha),
+        observacion: body.observacion ?? null,
+        usuarioId: req.usuario!.id,
+      };
+
+      // ── Camino simple: sólo cargar ──
+      if (!body.pagarAhora) {
+        const fila = await prisma.movimientoBancoHoras.create({ data: datosFila });
+        await recordAudit({
+          tabla: 'movimientos_banco_horas',
+          registroId: fila.id,
+          accion: 'INSERT',
           usuarioId: req.usuario!.id,
-        },
+          valorNuevo: fila,
+        });
+        return reply.code(201).send({ ok: true, id: fila.id });
+      }
+
+      // ── Camino "pagar ahora": cargar Y liquidar, en una sola transacción ──
+      const pago = body.pago ?? ({ metodo: 'EFECTIVO' } as CuerpoPago);
+      const nombre = `${empleado.nombre}${empleado.apellido ? ' ' + empleado.apellido : ''}`;
+      // Sin categoría en la fila, la tarifa tiene que salir del empleado. Con
+      // categoría en la fila alcanza con ésa, y no se exige la del empleado.
+      if (!body.categoriaLaboralId) exigirValorHora(empleado, nombre);
+
+      const etiqueta = pago.conceptoEtiqueta?.trim() || 'Sueldo';
+      const categoriaMov = await resolverCategoriaPago(etiqueta);
+      const observacionPago = observacionConConcepto(
+        etiqueta,
+        categoriaMov.nombre,
+        pago.observacion,
+      );
+
+      let sesion;
+      try {
+        sesion = await getOrCreateSesionActual(req.usuario!.id);
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error: 'Fuera del horario de atención — no hay sesión de caja abierta',
+            codigo: 'FUERA_DE_HORARIO',
+            resolucion: e.resolucion,
+          });
+        }
+        throw e;
+      }
+
+      const out = await prisma.$transaction(async (tx) => {
+        const fila = await tx.movimientoBancoHoras.create({ data: datosFila });
+        // El resumen se calcula DESPUÉS de insertar y dentro de la misma
+        // transacción: así incluye las horas recién cargadas sin recalcularlas
+        // por separado, que es donde se colaría una diferencia.
+        const resumen = await resumenPendiente(empleado, tx);
+        const plan = armarPlan(resumen, body.montoPagado, body.montoAlPrestamo);
+        const liq = await liquidarEnTransaccion(tx, {
+          empleado,
+          resumen,
+          plan,
+          lineas: armarLineas(pago, plan.montoPagado),
+          categoriaMovimientoId: categoriaMov.id,
+          sesionCajaId: sesion.id,
+          usuarioId: req.usuario!.id,
+          fechaComputo: pago.fechaComputo ? new Date(pago.fechaComputo) : new Date(),
+          fechaHoy: hoyFecha(),
+          observacion: observacionPago,
+        });
+        return { fila, resumen, plan, liq };
       });
+
       await recordAudit({
         tabla: 'movimientos_banco_horas',
-        registroId: fila.id,
+        registroId: out.fila.id,
         accion: 'INSERT',
         usuarioId: req.usuario!.id,
-        valorNuevo: fila,
+        valorNuevo: out.fila,
       });
-      return reply.code(201).send({ ok: true, id: fila.id });
+
+      return reply.code(201).send({
+        ok: true,
+        id: out.fila.id,
+        liquidacionId: out.liq.liquidacionId,
+        horasCobradas: out.liq.horasConsumidas.toFixed(2),
+        montoPagado: out.plan.montoPagado.toFixed(2),
+        alPrestamo: out.plan.montoAlPrestamo.toFixed(2),
+      });
     },
   );
 
@@ -268,6 +510,66 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
         where: { empleadoId, tipo: 'HORAS_TRABAJADAS', fecha: dia },
       });
       return { horas: Number(r._sum.horas ?? 0).toFixed(2) };
+    },
+  );
+
+  // ── Cuánto quedaría a pagar si cargo estas horas y pago ahora ───────────
+  //
+  // Lo calcula el servidor y no la pantalla. Podría hacerse en el navegador
+  // —tiene el saldo, el multiplicador del tipo y el valor de la categoría—,
+  // pero entonces el número que la encargada ve antes de confirmar saldría de
+  // una fórmula distinta de la que después mueve la plata. Con esto, el
+  // preview y el cobro son literalmente el mismo código.
+  fastify.get(
+    '/admin/banco-horas/:empleadoId/preview-pago',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ empleadoId: z.string().uuid() }),
+        querystring: z.object({
+          horas: z.coerce.number().positive().max(24),
+          tipoHoraId: z.string().uuid().optional(),
+          categoriaLaboralId: z.string().uuid().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { empleadoId } = req.params as { empleadoId: string };
+      const q = req.query as { horas: number; tipoHoraId?: string; categoriaLaboralId?: string };
+
+      const [empleado, tipoHora, categoria] = await Promise.all([
+        prisma.empleado.findUnique({ where: { id: empleadoId }, select: SELECT_TARIFA }),
+        q.tipoHoraId
+          ? prisma.tipoHora.findUnique({
+              where: { id: q.tipoHoraId },
+              select: { multiplicador: true, valorHoraFijo: true },
+            })
+          : null,
+        q.categoriaLaboralId
+          ? prisma.categoriaLaboral.findUnique({
+              where: { id: q.categoriaLaboralId },
+              select: { id: true, nombre: true, valorHora: true },
+            })
+          : null,
+      ]);
+      if (!empleado) return reply.code(404).send({ error: 'Empleado no encontrado' });
+
+      const pendiente = await resumenPendiente(empleado);
+      const valorHoraNueva = valorDeTipoHora(valorHoraDeFila(empleado, categoria), tipoHora);
+      const montoNuevo = Math.round(q.horas * valorHoraNueva * 100) / 100;
+      // El techo de lo que se puede liquidar: las horas viejas más las nuevas.
+      // El préstamo NO se resta acá — la encargada decide cuánto descontar.
+      const montoHoras = Math.round((pendiente.montoHoras + montoNuevo) * 100) / 100;
+
+      return {
+        valorHora: valorHoraNueva.toFixed(2),
+        montoNuevo: montoNuevo.toFixed(2),
+        horasPendientes: pendiente.horas.toFixed(2),
+        montoPendiente: pendiente.montoHoras.toFixed(2),
+        prestamos: pendiente.prestamos.toFixed(2),
+        montoHoras: montoHoras.toFixed(2),
+        sinValorHora: valorHoraNueva <= 0,
+      };
     },
   );
 
@@ -381,73 +683,49 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // ── Liquidar: pagar lo pendiente ────────────────────────────────────────
+  // ── Devolución: el empleado paga parte del préstamo con plata ───────────
   //
-  // En el local liquidan casi todos los días, así que esto es un botón y no un
-  // formulario: por defecto se liquida TODO lo pendiente.
-  //
-  // Es el único punto donde la revaluación se detiene. Hasta acá las horas
-  // valían lo que valiera la categoría hoy; desde acá, el valor queda estampado
-  // en la liquidación y no se mueve nunca más.
+  // La contracara del adelanto. Entra plata a la caja y baja la deuda, en una
+  // sola acción: si fueran dos cargas separadas, tarde o temprano queda una
+  // devolución cobrada que la deuda no registra, o al revés.
   fastify.post(
-    '/admin/banco-horas/:empleadoId/liquidar',
+    '/admin/banco-horas/:empleadoId/devolucion',
     {
       preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
       schema: {
         params: z.object({ empleadoId: z.string().uuid() }),
         body: z.object({
+          monto: z.number().positive(),
           cuentaId: z.string().uuid(),
-          metodo: z.string().min(1).max(40).default('EFECTIVO'),
+          metodo: z.enum(METODOS).default('EFECTIVO'),
+          numeroReferencia: z.string().max(80).optional(),
           observacion: z.string().max(300).optional(),
         }),
       },
     },
     async (req, reply) => {
       const { empleadoId } = req.params as { empleadoId: string };
-      const body = req.body as { cuentaId: string; metodo: string; observacion?: string };
+      const body = req.body as {
+        monto: number;
+        cuentaId: string;
+        metodo: string;
+        numeroReferencia?: string;
+        observacion?: string;
+      };
 
       const empleado = await prisma.empleado.findUnique({
         where: { id: empleadoId },
-        select: SELECT_TARIFA,
+        select: { id: true, nombre: true, apellido: true },
       });
       if (!empleado) return reply.code(404).send({ error: 'Empleado no encontrado' });
-
       const nombre = `${empleado.nombre}${empleado.apellido ? ' ' + empleado.apellido : ''}`;
-      const base = exigirValorHora(empleado, nombre);
 
-      const pendientes = await prisma.movimientoBancoHoras.findMany({
-        where: { empleadoId, liquidacionId: null },
-        select: {
-          id: true,
-          horas: true,
-          montoPesos: true,
-          tipoHora: { select: { multiplicador: true, valorHoraFijo: true } },
-        },
+      const categoria = await prisma.categoriaMovimiento.findUnique({
+        where: { nombre: 'Devolución de préstamo' },
       });
-      if (!pendientes.length) {
-        throw new ReglaNegocioError(`${nombre} no tiene nada pendiente de liquidar.`);
-      }
-
-      let horas = 0;
-      let montoHoras = 0;
-      let adelantos = 0;
-      for (const f of pendientes) {
-        const h = f.horas != null ? Number(f.horas) : 0;
-        if (h) {
-          horas += h;
-          montoHoras += h * valorDeTipoHora(base, f.tipoHora);
-        }
-        if (f.montoPesos != null) adelantos += Number(f.montoPesos);
-      }
-      const r2 = (n: number) => Math.round(n * 100) / 100;
-      horas = r2(horas);
-      montoHoras = r2(montoHoras);
-      adelantos = r2(adelantos);
-      const aPagar = r2(montoHoras - adelantos);
-
-      if (aPagar < 0) {
+      if (!categoria) {
         throw new ReglaNegocioError(
-          `${nombre} debe $${(-aPagar).toFixed(2)}: los adelantos superan las horas trabajadas, así que no hay nada que pagarle. Cargá las horas que falten antes de liquidar.`,
+          'Falta la categoría de movimiento "Devolución de préstamo". Corré las migraciones de la base.',
         );
       }
 
@@ -465,121 +743,183 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
         throw e;
       }
 
-      const categoria = await prisma.categoriaMovimiento.findFirst({
-        where: { nombre: 'Sueldos' },
-      });
-      if (!categoria) {
-        throw new ReglaNegocioError(
-          'Falta la categoría de movimiento "Sueldos". Creala en Configuración antes de liquidar.',
-        );
-      }
-
       const fecha = new Date();
-      const idsPendientes = pendientes.map((p) => p.id);
-
       const out = await prisma.$transaction(async (tx) => {
-        let mov = null;
-        // Puede dar 0 si las horas cubren justo los adelantos: la liquidación
-        // existe igual (cierra las filas), pero no sale plata de la caja y por
-        // lo tanto no corresponde un movimiento.
-        if (aPagar > 0) {
-          mov = await tx.movimiento.create({
-            data: {
-              tipo: 'EGRESO',
-              monto: aPagar,
-              categoriaId: categoria.id,
-              cuentaOrigenId: body.cuentaId,
-              entidadId: empleadoId,
-              sesionCajaId: sesion.id,
-              fechaComputo: fecha,
-              observacion:
-                body.observacion ?? `Liquidación de ${horas.toFixed(2)} hs a ${nombre}`,
-              estado: EstadoMovimiento.CONFIRMADO,
-              usuarioId: req.usuario!.id,
-            },
-          });
-          await tx.pago.create({
-            data: {
-              movimientoId: mov.id,
-              metodo: body.metodo as never,
-              cuentaId: body.cuentaId,
-              monto: aPagar,
-              estado: 'CONFIRMADO',
-              fecha,
-            },
-          });
-          await tx.cuenta.update({
-            where: { id: body.cuentaId },
-            data: { saldoActual: { decrement: aPagar } },
-          });
-        }
-
-        const liq = await tx.liquidacionEmpleado.create({
-          data: {
-            empleadoId,
-            fecha: hoyFecha(),
-            horasLiquidadas: horas,
-            // El valor BASE aplicado. El monto sale de valuar fila por fila con
-            // su tipo, así que con tipos mezclados este número es la referencia,
-            // no una multiplicación directa.
-            valorHoraAplicado: base,
-            montoHoras,
-            adelantosAplicados: adelantos,
-            montoPagado: aPagar,
-            movimientoId: mov?.id ?? null,
-            observacion: body.observacion ?? null,
-            usuarioId: req.usuario!.id,
-          },
-        });
-
-        // Cerrar SÓLO las filas que se leyeron. Si entre la lectura y el update
-        // entrara una fila nueva, `liquidacionId: null` a secas la arrastraría
-        // sin haberla contado — y se pagaría de menos.
-        const cerradas = await tx.movimientoBancoHoras.updateMany({
-          where: { id: { in: idsPendientes }, liquidacionId: null },
-          data: { liquidacionId: liq.id },
-        });
-        if (cerradas.count !== idsPendientes.length) {
-          // Alguien liquidó en paralelo. Abortar es lo correcto: pagar dos veces
-          // las mismas horas no se deshace solo.
+        const r = await aplicarDevolucion(tx, empleadoId, body.monto);
+        // Devolver más de lo que se debe sería plata que entra sin contra-
+        // partida: mejor negarse y decir cuánto es la deuda de verdad.
+        if (r.sobrante > 0.004) {
           throw new ReglaNegocioError(
-            'Otra persona liquidó a este empleado al mismo tiempo. Volvé a abrir la ficha y fijate el saldo antes de reintentar.',
+            r.aplicado > 0
+              ? `${nombre} debe $${r.aplicado.toFixed(2)} y estás cargando $${body.monto.toFixed(2)}. Cargá como mucho lo que debe.`
+              : `${nombre} no tiene préstamos pendientes.`,
           );
         }
 
-        // El asiento que deja el saldo en cero, ya marcado como liquidado.
-        await tx.movimientoBancoHoras.create({
+        const mov = await tx.movimiento.create({
           data: {
-            empleadoId,
-            tipo: 'LIQUIDACION',
-            horas: -horas,
-            montoPesos: aPagar > 0 ? -aPagar : null,
-            fecha: hoyFecha(),
-            observacion: body.observacion ?? null,
-            movimientoId: mov?.id ?? null,
-            liquidacionId: liq.id,
+            tipo: 'INGRESO',
+            monto: body.monto,
+            categoriaId: categoria.id,
+            cuentaDestinoId: body.cuentaId,
+            entidadId: empleadoId,
+            sesionCajaId: sesion.id,
+            fechaComputo: fecha,
+            observacion: body.observacion ?? `Devolución de préstamo — ${nombre}`,
+            estado: EstadoMovimiento.CONFIRMADO,
             usuarioId: req.usuario!.id,
           },
+          select: { id: true },
+        });
+        await tx.pago.create({
+          data: {
+            movimientoId: mov.id,
+            metodo: body.metodo as never,
+            cuentaId: body.cuentaId,
+            monto: body.monto,
+            numeroReferencia: body.numeroReferencia ?? null,
+            estado: 'CONFIRMADO',
+            fecha,
+          },
+        });
+        await tx.cuenta.update({
+          where: { id: body.cuentaId },
+          data: { saldoActual: { increment: body.monto } },
         });
 
-        return { liq, mov };
+        await asentarDevolucion(tx, {
+          empleadoId,
+          monto: body.monto,
+          fecha: hoyFecha(),
+          movimientoId: mov.id,
+          observacion: body.observacion ?? null,
+          usuarioId: req.usuario!.id,
+        });
+
+        return { mov, r };
       });
 
       await recordAudit({
-        tabla: 'liquidaciones_empleado',
-        registroId: out.liq.id,
+        tabla: 'movimientos',
+        registroId: out.mov.id,
         accion: 'INSERT',
         usuarioId: req.usuario!.id,
-        valorNuevo: out.liq,
+        valorNuevo: { tipo: 'DEVOLUCION', empleadoId, monto: body.monto },
       });
 
       return reply.code(201).send({
         ok: true,
-        liquidacionId: out.liq.id,
-        horas: horas.toFixed(2),
-        montoHoras: montoHoras.toFixed(2),
-        adelantosAplicados: adelantos.toFixed(2),
-        montoPagado: aPagar.toFixed(2),
+        movimientoId: out.mov.id,
+        aplicado: out.r.aplicado.toFixed(2),
+        prestamoRestante: out.r.prestamoRestante.toFixed(2),
+        cancelado: out.r.prestamoRestante <= 0.004,
+      });
+    },
+  );
+
+  // ── Liquidar: pagar lo pendiente ────────────────────────────────────────
+  //
+  // En el local liquidan casi todos los días, así que esto es un botón y no un
+  // formulario: por defecto se liquida TODO lo pendiente.
+  //
+  // Es el único punto donde la revaluación se detiene. Hasta acá las horas
+  // valían lo que valiera la categoría hoy; desde acá, el valor queda estampado
+  // en la liquidación y no se mueve nunca más.
+  fastify.post(
+    '/admin/banco-horas/:empleadoId/liquidar',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ empleadoId: z.string().uuid() }),
+        body: pagoSchema.extend({
+          /// Cuánto pagarle. Omitido = todo lo que valen las horas pendientes.
+          montoPagado: z.number().nonnegative().optional(),
+          /// Cuánto descontar del préstamo. 0 por defecto: no se netea solo.
+          montoAlPrestamo: z.number().nonnegative().default(0),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { empleadoId } = req.params as { empleadoId: string };
+      const body = req.body as CuerpoPago & { montoPagado?: number; montoAlPrestamo: number };
+
+      const empleado = await prisma.empleado.findUnique({
+        where: { id: empleadoId },
+        select: SELECT_TARIFA,
+      });
+      if (!empleado) return reply.code(404).send({ error: 'Empleado no encontrado' });
+
+      const nombre = `${empleado.nombre}${empleado.apellido ? ' ' + empleado.apellido : ''}`;
+      const resumen = await resumenPendiente(empleado);
+
+      if (resumen.horas <= 0) {
+        throw new ReglaNegocioError(
+          resumen.prestamos > 0
+            ? `${nombre} no tiene horas cargadas sin cobrar. Debe $${resumen.prestamos.toFixed(2)} de préstamo: para descontarlo hay que cargarle las horas primero.`
+            : `${nombre} no tiene nada pendiente de liquidar.`,
+        );
+      }
+      // Con horas pendientes pero sin valor, el total daría $0 y se cerrarían
+      // las filas pagando nada. Mejor negarse y decir por qué.
+      if (resumen.montoHoras <= 0) {
+        exigirValorHora(empleado, nombre);
+      }
+
+      const plan = armarPlan(resumen, body.montoPagado, body.montoAlPrestamo);
+
+      const etiqueta = body.conceptoEtiqueta?.trim() || 'Sueldo';
+      const categoriaMov = await resolverCategoriaPago(etiqueta);
+      const observacionPago = observacionConConcepto(
+        etiqueta,
+        categoriaMov.nombre,
+        body.observacion,
+      );
+
+      let sesion;
+      try {
+        sesion = await getOrCreateSesionActual(req.usuario!.id);
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error: 'Fuera del horario de atención — no hay sesión de caja abierta',
+            codigo: 'FUERA_DE_HORARIO',
+            resolucion: e.resolucion,
+          });
+        }
+        throw e;
+      }
+
+      const lineas = armarLineas(body, plan.montoPagado);
+
+      const out = await prisma.$transaction((tx) =>
+        liquidarEnTransaccion(tx, {
+          empleado,
+          resumen,
+          plan,
+          lineas,
+          categoriaMovimientoId: categoriaMov.id,
+          sesionCajaId: sesion.id,
+          usuarioId: req.usuario!.id,
+          fechaComputo: body.fechaComputo ? new Date(body.fechaComputo) : new Date(),
+          fechaHoy: hoyFecha(),
+          observacion: observacionPago,
+        }),
+      );
+
+      await recordAudit({
+        tabla: 'liquidaciones_empleado',
+        registroId: out.liquidacionId,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { ...plan, empleadoId, movimientoId: out.movimientoId },
+      });
+
+      return reply.code(201).send({
+        ok: true,
+        liquidacionId: out.liquidacionId,
+        horasCobradas: out.horasConsumidas.toFixed(2),
+        montoPagado: plan.montoPagado.toFixed(2),
+        alPrestamo: plan.montoAlPrestamo.toFixed(2),
       });
     },
   );
@@ -640,34 +980,53 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
       const cat = await prisma.categoriaLaboral.findUnique({ where: { id } });
       if (!cat) return reply.code(404).send({ error: 'Categoría no encontrada' });
 
-      // Sólo los que realmente cobran por esta categoría: el que tiene valor
-      // propio no se entera del aumento.
+      // A quién le pega el aumento, por DOS vías:
+      //
+      //   1. Los que cobran habitualmente por esta categoría (el que tiene
+      //      valor propio no se entera del aumento).
+      //   2. Cualquiera con horas pendientes cargadas COMO esta categoría —el
+      //      de Mostrador que cubrió Cocina—, aunque su categoría sea otra o
+      //      tenga valor propio. Sin esta segunda vía el aviso mostraría un
+      //      número más chico que el que después se paga.
+      const [porCategoria, porFila] = await Promise.all([
+        prisma.empleado.findMany({
+          where: { categoriaLaboralId: id, valorHoraPropio: null },
+          select: { id: true },
+        }),
+        prisma.movimientoBancoHoras.findMany({
+          where: { categoriaLaboralId: id, liquidacionId: null },
+          select: { empleadoId: true },
+          distinct: ['empleadoId'],
+        }),
+      ]);
+      const ids = [...new Set([...porCategoria.map((e) => e.id), ...porFila.map((f) => f.empleadoId)])];
       const empleados = await prisma.empleado.findMany({
-        where: { categoriaLaboralId: id, valorHoraPropio: null },
+        where: { id: { in: ids } },
         select: SELECT_TARIFA,
       });
-      const pendientes = await filasPendientesDe(empleados.map((e) => e.id));
+      const pendientes = await filasPendientesDe(ids);
+      const sim = { categoriaId: id, valorHora };
 
       let horas = 0;
       let antes = 0;
       let despues = 0;
+      let afectados = 0;
       for (const e of empleados) {
         const filas = pendientes.get(e.id) ?? [];
         const actual = calcularSaldo(e, filas);
+        // La misma valuación, con el valor propuesto sustituido adentro: así el
+        // "después" sale del mismo código que el "antes" y no de una fórmula
+        // paralela que podría desincronizarse.
+        const nuevo = calcularSaldo(e, filas, sim);
+        if (nuevo.montoHoras === actual.montoHoras) continue; // a éste no le pega
+        afectados += 1;
         horas += actual.horasPendientes;
         antes += actual.montoHoras;
-        // La misma valuación, pero con el valor propuesto: así el "después"
-        // sale del mismo código que el "antes" y no de una fórmula paralela
-        // que podría desincronizarse.
-        const simulado = {
-          ...e,
-          categoriaLaboral: { ...e.categoriaLaboral!, valorHora },
-        };
-        despues += calcularSaldo(simulado, filas).montoHoras;
+        despues += nuevo.montoHoras;
       }
       const r2 = (n: number) => Math.round(n * 100) / 100;
       return {
-        empleadosAfectados: empleados.length,
+        empleadosAfectados: afectados,
         horasPendientes: r2(horas).toFixed(2),
         valorActual: cat.valorHora.toFixed(2),
         valorNuevo: valorHora.toFixed(2),
