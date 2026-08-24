@@ -133,23 +133,50 @@ jobs:
         working-directory: apps/desktop
         run: pnpm run ensure:vcredist
 
-      # `cloud-config.json` está gitignored (la URL incluye password). Lo
-      # generamos en CI desde el secret SUPABASE_DB_URL para que el installer
-      # ya venga preconfigurado y la encargada no tenga que crear archivos a
-      # mano. Si el secret no está, el .exe se buildea igual pero al primer
-      # arranque va a pedir config manual en %APPDATA%/Santa Teresita/config.json.
-      - name: Write cloud-config.json from SUPABASE_DB_URL secret
+      # `cloud-config.json` está gitignored (lleva credenciales). Lo generamos
+      # en CI desde secrets para que el installer venga preconfigurado y nadie
+      # tenga que crear archivos a mano en cada caja.
+      #
+      # ── El cutover a modo proxy se hace ACÁ, no caja por caja ──────────────
+      #
+      # `main.js` busca `lanApiUrl` primero en el config por-máquina y después
+      # en este archivo del bundle. O sea que setear el secret CAJA_LAN_API_URL
+      # y publicar un release pasa TODAS las cajas al modo proxy cuando se
+      # auto-actualizan, sin entrar a ninguna PC. Mismo mecanismo que usó el
+      # cutover de alpha.40.
+      #
+      # Y cuando el modo proxy está activo, `cloudDbUrl` NO se escribe: la caja
+      # no necesita credenciales de base, y mandarlas igual dejaría la password
+      # en cada PC — que es exactamente el pendiente C4 que esto cierra. El
+      # respaldo de lectura en ese modo es `cloudApiUrl`, por HTTP.
+      - name: Write cloud-config.json from secrets
         working-directory: apps/desktop
         shell: pwsh
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          CAJA_LAN_API_URL: ${{ secrets.CAJA_LAN_API_URL }}
+          CAJA_CLOUD_API_URL: ${{ secrets.CAJA_CLOUD_API_URL }}
         run: |
-          if ([string]::IsNullOrEmpty($env:SUPABASE_DB_URL)) {
-            Write-Output "::warning::SUPABASE_DB_URL secret no seteada — installer va a requerir config manual al primer arranque"
+          $cfg = [ordered]@{}
+          $modo = 'legacy (credenciales de base en la caja)'
+
+          if (-not [string]::IsNullOrEmpty($env:CAJA_LAN_API_URL)) {
+            $cfg.lanApiUrl = $env:CAJA_LAN_API_URL
+            if (-not [string]::IsNullOrEmpty($env:CAJA_CLOUD_API_URL)) {
+              $cfg.cloudApiUrl = $env:CAJA_CLOUD_API_URL
+            } else {
+              Write-Output "::warning::CAJA_LAN_API_URL seteada sin CAJA_CLOUD_API_URL — si S1 no responde, las cajas no van a tener ni siquiera lecturas"
+            }
+            $modo = "PROXY → $($env:CAJA_LAN_API_URL) (sin credenciales de base)"
+          } elseif (-not [string]::IsNullOrEmpty($env:SUPABASE_DB_URL)) {
+            $cfg.cloudDbUrl = $env:SUPABASE_DB_URL
+          }
+
+          if ($cfg.Count -eq 0) {
+            Write-Output "::warning::Ni CAJA_LAN_API_URL ni SUPABASE_DB_URL seteadas — el installer va a requerir config manual en %APPDATA%/Santa Teresita/config.json"
           } else {
-            $cfg = @{ cloudDbUrl = $env:SUPABASE_DB_URL } | ConvertTo-Json -Compress
-            Set-Content -Path cloud-config.json -Value $cfg -Encoding utf8 -NoNewline
-            Write-Output "OK cloud-config.json escrito ($($env:SUPABASE_DB_URL.Length) chars en URL)"
+            Set-Content -Path cloud-config.json -Value ($cfg | ConvertTo-Json -Compress) -Encoding utf8 -NoNewline
+            Write-Output "OK cloud-config.json escrito — modo: $modo"
           }
 
       - name: Build resources (api + seed + web + agent)
