@@ -405,6 +405,38 @@ haya compartido esa cuenta.
 
 ## 2. Cajas (`.exe`)  ── ~5 min por caja
 
+### 2.0 El cutover a modo proxy, sin tocar ninguna PC
+
+`main.js` busca `lanApiUrl` en dos lugares: el `config.json` de esa máquina y,
+si no está, el `cloud-config.json` que viene **adentro del `.exe`**. Ese segundo
+archivo lo escribe el workflow *Release Desktop* desde secrets del repo, así que
+alcanza con:
+
+1. Repo → Settings → Secrets and variables → Actions:
+   - `CAJA_LAN_API_URL` = `http://<IP-LAN-de-S1>:3001`
+   - `CAJA_CLOUD_API_URL` = la URL del API de Railway
+2. Actions → *Release Desktop* → Run workflow.
+
+Todas las cajas pasan a modo proxy cuando se auto-actualizan. Es el mismo
+mecanismo con el que se hizo el cutover de alpha.40.
+
+**Con `CAJA_LAN_API_URL` seteada, el build NO incluye `cloudDbUrl`**: la caja
+deja de recibir la password de Postgres, que es el punto del pendiente C4. El
+respaldo cuando S1 no responde pasa a ser `CAJA_CLOUD_API_URL`, por HTTP — si
+no la seteás, con S1 caído las cajas se quedan sin ni siquiera lecturas.
+
+> ⚠️ **Esto migra TODAS las cajas de una, y sin nadie mirando.** Cada una
+> flipea cuando se reinicia, que puede ser en medio de un turno. El modo proxy
+> nunca se probó contra una caja real. Si querés la red de seguridad, migrá
+> primero UNA caja a mano (§2.1), operá un turno, y recién después seteá los
+> secrets. Y si vas por el camino rápido, publicá el release **cuando estés en
+> el local**, antes de abrir, para que las cajas se actualicen con vos ahí.
+>
+> **Para volver atrás:** borrá el secret `CAJA_LAN_API_URL` y publicá otro
+> release. Las cajas vuelven al modo anterior al actualizarse.
+
+
+
 En cada PC de caja, una vez que el server está vivo:
 
 ### 2.1 Cerrar el `.exe` y editar el config
@@ -413,6 +445,11 @@ En cada PC de caja, una vez que el server está vivo:
 # Cerrar Santa Teresita.exe completamente (verificar en Administrador de tareas)
 notepad "$env:APPDATA\Santa Teresita\config.json"
 ```
+
+> **Antes de leer esto: probablemente no haga falta entrar a cada PC.**
+> El cutover a modo proxy se puede hacer **desde el release**, seteando dos
+> secrets del repo y publicando un `.exe`. Ver §2.0. Lo de acá abajo es para
+> migrar UNA caja suelta —la primera, la de prueba— o para volver atrás.
 
 Contenido **recomendado** (modo proxy, sin credenciales de base en la caja):
 
