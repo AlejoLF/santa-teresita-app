@@ -280,6 +280,129 @@ server la ve, centralizar la impresión por el server resuelve ese problema.
 
 ---
 
+## 1.5 Excel de la encargada desde Google Drive  ── ~15 min, una sola vez
+
+**Esto ya no se hace en S1.** La API habla con Google Drive directamente (API
+oficial, service account), así que los archivos no tienen que estar en ningún
+disco: los lee y los escribe la API que esté corriendo, sea la de Railway, la de
+S1 o la que empaqueta el `.exe`. Se configura **una vez, en la nube**, y las tres
+quedan servidas.
+
+> Lo que había antes —rclone bajando los archivos a `C:\sta\excel` cada 10
+> minutos + `EXCEL_LOCAL_DIR`— quedó **obsoleto**. Si S1 todavía tiene la tarea
+> `STA-Excel-Sync`, ver "Desmontar rclone" al final. `EXCEL_LOCAL_DIR` sigue
+> existiendo, pero sólo como fallback de desarrollo.
+
+### Por qué la API y no una carpeta sincronizada
+
+Tres problemas se cierran de una:
+
+- **El writeback funciona.** rclone bajaba en UNA dirección: lo que S1
+  escribiera en el CASHFLOW lo pisaba el ciclo siguiente, sin error. Con la API
+  se edita el archivo vivo, y Drive guarda historial de versiones.
+- **No depende de una máquina.** La feature andaba sólo en S1 y sólo si el mini
+  PC estaba prendido. Ahora la sirve cualquier instancia de la API.
+- **No hay sesión de usuario de por medio.** Drive para Escritorio monta la
+  unidad por sesión interactiva y un servicio NSSM (LocalSystem) no la ve. La
+  service account no tiene sesión: es una credencial.
+
+### Crear la service account
+
+En [Google Cloud Console](https://console.cloud.google.com):
+
+1. Proyecto nuevo (o el que ya usabas para rclone).
+2. **APIs y servicios → Biblioteca → Google Drive API → Habilitar.**
+3. **Credenciales → Crear credenciales → Cuenta de servicio.** Nombre libre
+   (ej. `sta-excel`). Sin roles: los permisos salen de compartir los archivos,
+   no de IAM.
+4. Entrar a la cuenta creada → **Claves → Agregar clave → Crear nueva → JSON.**
+   Se baja un `.json`. **Ese archivo es la credencial: no va al repo.**
+
+No hace falta pantalla de consentimiento, ni publicar la app, ni renovar nada a
+los 7 días — todo eso era del flujo OAuth de usuario que usaba rclone.
+
+### Compartir los archivos con ella
+
+El `.json` tiene un campo `client_email`, algo como
+`sta-excel@<proyecto>.iam.gserviceaccount.com`. **Ese mail es un usuario más de
+Drive.** Hay que compartirle la carpeta donde están los Excels:
+
+- Si la carpeta es tuya: clic derecho → Compartir → pegar el `client_email`.
+  **Editor** (necesita escribir el CASHFLOW y las deudas de proveedores), no
+  Lector.
+- Si los archivos son de la encargada: que ella comparta **la carpeta** con ese
+  mail, también como Editor.
+
+El **id de la carpeta** es lo que va después de `/folders/` en su URL:
+`https://drive.google.com/drive/folders/`**`1AbC…XyZ`**.
+
+> Una service account no tiene Drive propio y **no puede crear archivos sueltos**
+> en una carpeta ajena de Mi unidad sin cuota. Acá sólo lee y sobreescribe
+> archivos que ya existen, que sí puede.
+
+### Setear las dos variables
+
+En **Railway** (Variables del servicio de la API) — y en el `.env` de S1 si
+querés que también funcione ahí:
+
+| Variable | Valor |
+|-|-|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | el contenido del `.json` entero (o el mismo en base64, si el panel se pelea con los saltos de línea) |
+| `GOOGLE_DRIVE_FOLDER_ID` | el id de la carpeta |
+
+**Nunca en el repo, nunca en un chat.** Es una credencial: quien la tenga entra
+a todo lo que esté compartido con esa cuenta.
+
+En S1, además, acordate de que la variable va en `C:\sta-server\.env` y después
+`C:\sta-server\update-server.ps1 -SyncEnv` — `update-server.ps1` re-sincroniza
+el bloque de NSSM desde `.env` en cada actualización, así que una variable puesta
+con `nssm set` directo desaparece en la tarea de las 4 AM sin dejar rastro.
+
+**Media configuración es un error, no un fallback.** Si está una sola de las dos,
+la API responde **503 diciendo cuál falta**. Es a propósito: la alternativa era
+leer calladamente un archivo local viejo y que todos los números salieran
+desactualizados sin ningún síntoma.
+
+### Verificación
+
+```
+GET /admin/excel/origen     (con token de ADMIN)
+```
+
+Devuelve el origen que está usando, el `client_email` —para saber a quién
+compartirle si algo no aparece—, el id de carpeta y, archivo por archivo, si lo
+encuentra. Es la forma rápida de distinguir "falta la credencial" de "el archivo
+no está compartido" de "el nombre no coincide".
+
+### Notas
+
+- **`Proveedores 2026` es una hoja nativa de Google, no un `.xlsx`.** Se exporta
+  al vuelo al bajarla, así que para leer da igual. Para **escribir** no: una hoja
+  nativa no se puede pisar con bytes de xlsx, y el intento devuelve un error
+  claro en vez de romper el archivo. Si hiciera falta escribirla, hay que
+  convertirla a `.xlsx` en Drive (Archivo → Descargar → subir el resultado).
+- **El nombre en Drive tiene que ser exacto.** Se prueba con y sin `.xlsx`, pero
+  un "Copia de Proveedores 2026" no lo encuentra.
+- **El writeback del CASHFLOW se habilita solo cuando el origen es Drive.** En
+  disco sigue apagado por default (`EXCEL_CASHFLOW_ESCRITURA`), porque ahí sí
+  puede pisar una copia que nadie sincroniza.
+- **El sync/aprobación de precios NO migró.** `excel-sync.ts` shellea parsers
+  Python contra un path de disco; sigue necesitando `EXCEL_LOCAL_DIR` + python +
+  openpyxl, y por eso hoy sólo corre donde eso exista. Es el pendiente #2 del
+  CLAUDE.md.
+
+### Desmontar rclone (si S1 lo tiene)
+
+```powershell
+schtasks /delete /tn "STA-Excel-Sync" /f
+# y sacar la línea EXCEL_LOCAL_DIR de C:\sta-server\.env, después:
+C:\sta-server\update-server.ps1 -SyncEnv
+```
+
+Dejar `C:\sta\rclone` y `C:\sta\excel` no molesta, pero conviene borrar
+`rclone.conf`: tiene un refresh token de Drive con acceso de lectura a lo que
+haya compartido esa cuenta.
+
 ## 2. Cajas (`.exe`)  ── ~5 min por caja
 
 En cada PC de caja, una vez que el server está vivo:
@@ -291,7 +414,33 @@ En cada PC de caja, una vez que el server está vivo:
 notepad "$env:APPDATA\Santa Teresita\config.json"
 ```
 
-Contenido:
+Contenido **recomendado** (modo proxy, sin credenciales de base en la caja):
+
+```json
+{
+  "rol": "caja",
+  "lanApiUrl": "http://192.168.1.10:3001",
+  "cloudApiUrl": "https://<tu-api>.up.railway.app",
+  "webRemoteUrl": "https://sta-desktop.vercel.app"
+}
+```
+
+- `lanApiUrl` = IP del mini PC + **puerto 3001** (el API, no Postgres). **Si hay
+  2 redes (§1.11):** la IP del server **de la red a la que está conectada ESA
+  caja**.
+- `cloudApiUrl` = opcional. Solo para que las **lecturas** sigan vivas si S1 no
+  responde; las escrituras nunca van ahí, se encolan en el outbox local.
+- `webRemoteUrl` = Vercel (o `""` para usar el web bundleado del `.exe`).
+
+Con esto la caja levanta `proxy.mjs` en vez de la API completa: **no recibe
+`DATABASE_URL` ni ninguna password de Postgres**. Todo pasa por el API de S1,
+que es el único que habla con la base. Es el pendiente de seguridad **C4**.
+
+Para la caja el cambio es invisible: la web y el agente de impresión siguen
+hablando a `127.0.0.1:3001`, y el outbox sigue en el mismo lugar.
+
+<details>
+<summary>Modo viejo (con credenciales de base en la caja)</summary>
 
 ```json
 {
@@ -301,6 +450,13 @@ Contenido:
   "webRemoteUrl": "https://sta-desktop.vercel.app"
 }
 ```
+
+Sigue funcionando, pero pone la password del Postgres en cada PC del local:
+cualquiera con acceso a una caja puede leer y escribir la base entera saltándose
+las reglas de negocio. Si `lanApiUrl` está presente, **gana** sobre `lanDbUrl`
+— así se puede migrar caja por caja sin borrar la config vieja de golpe.
+
+</details>
 
 - `lanDbUrl` = IP del mini PC + password del rol `teresita` (la del `.env`
   del server). **Si hay 2 redes (§1.11):** usá la IP del server **de la red a la

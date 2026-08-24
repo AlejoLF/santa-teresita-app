@@ -1,3 +1,4 @@
+import { ReglaNegocioError } from './errores.js';
 import { prisma } from '@sta/db/client';
 import {
   CanalVenta,
@@ -13,6 +14,11 @@ import { subtotalItem } from '@sta/shared';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
 import { recordAudit } from './audit.js';
 import { encolarComandasParaVenta, ventaYaEnviadaACocina } from './impresion.js';
+import {
+  resolverDeltasDeLista,
+  deltaDeModificadores,
+  opcionIdsDeItems,
+} from './deltas-lista.js';
 
 /**
  * Desarma promos/combos en ItemVentas componentes, calculando el precio EN EL
@@ -60,9 +66,9 @@ async function expandirPromosAItems(args: {
 
   for (const promo of promos) {
     const combo = comboMap.get(promo.comboId);
-    if (!combo) throw new Error(`Combo ${promo.comboId} no existe o está inactivo`);
+    if (!combo) throw new ReglaNegocioError(`Combo ${promo.comboId} no existe o está inactivo`);
     const comps = combo.componentes.filter((c) => c.producto);
-    if (comps.length === 0) throw new Error(`Combo ${combo.nombre} no tiene productos`);
+    if (comps.length === 0) throw new ReglaNegocioError(`Combo ${combo.nombre} no tiene productos`);
 
     const Q = promo.cantidad;
     const totalCombo = Math.round(Number(combo.precioCombo) * Q * 100) / 100;
@@ -151,7 +157,7 @@ export async function crearVenta(args: {
     where: { canalDefault: canalLista, activa: true },
     orderBy: { nombre: 'asc' },
   });
-  if (!lista) throw new Error(`No hay lista de precios activa para el canal ${canalLista}`);
+  if (!lista) throw new ReglaNegocioError(`No hay lista de precios activa para el canal ${canalLista}`);
 
   const sesion = await getOrCreateSesionActual(usuarioId);
   const numeroOrden = await siguienteNumeroOrdenTurno(sesion.id);
@@ -164,6 +170,9 @@ export async function crearVenta(args: {
   });
   const productoMap = new Map(productos.map((p) => [p.id, p]));
 
+  // Deltas de los sabores RESUELTOS CONTRA ESTA LISTA (ver deltas-lista.ts).
+  const deltas = await resolverDeltasDeLista(lista.id, opcionIdsDeItems(data.items));
+
   // Calcular items con snapshot
   const itemsToCreate: Array<Prisma.ItemVentaCreateWithoutVentaInput> = [];
   let subtotalVenta = 0;
@@ -172,21 +181,14 @@ export async function crearVenta(args: {
 
   for (const [idx, item] of data.items.entries()) {
     const producto = productoMap.get(item.productoId);
-    if (!producto) throw new Error(`Producto ${item.productoId} no existe`);
+    if (!producto) throw new ReglaNegocioError(`Producto ${item.productoId} no existe`);
 
     const precioOverride = producto.preciosPorLista[0]?.precioEfectivo;
     const precioBaseNumber = Number(producto.precioBase);
     const precioListaSinDelta = precioOverride
       ? Number(precioOverride)
       : precioBaseNumber * (1 + ajustePct / 100);
-    // Seguridad: clamp del delta a >= 0 por modificador. El deltaPrecio viene
-    // del cliente y un valor negativo (ej. -999999) llevaba el total a cero o
-    // negativo. Un modificador SUMA (queso extra), nunca resta — las etiquetas
-    // libres van con delta 0. (A6 del audit de seguridad.)
-    const deltaMod = item.modificadores.reduce(
-      (acc, m) => acc + Math.max(0, Number(m.deltaPrecio || 0)),
-      0,
-    );
+    const deltaMod = deltaDeModificadores(item.modificadores, deltas);
     const precioUnitario = precioListaSinDelta + deltaMod;
 
     const subTotalItemStr = subtotalItem({
@@ -280,8 +282,9 @@ export async function crearVenta(args: {
         clienteIdResuelto = nuevo.id;
         // Si vino dirección, guardar como dirección del cliente. La marcamos
         // default — el primer pedido le da casa por defecto.
+        let direccionNueva: { id: string } | null = null;
         if (data.direccionEntrega) {
-          await tx.direccion.create({
+          direccionNueva = await tx.direccion.create({
             data: {
               clienteId: nuevo.id,
               etiqueta: 'Casa',
@@ -290,6 +293,7 @@ export async function crearVenta(args: {
               indicaciones: data.indicacionesEntrega ?? null,
               esDefault: true,
             },
+            select: { id: true },
           });
         }
         await recordAudit({
@@ -301,6 +305,19 @@ export async function crearVenta(args: {
           contexto: { autoCreadoDesdePedido: true, canal: data.canal },
           tx,
         });
+        // La dirección va DESPUÉS del cliente (mayor `secuencia`), que es el
+        // orden que respeta la FK direccion → cliente al replicar.
+        if (direccionNueva) {
+          await recordAudit({
+            tabla: 'direcciones',
+            registroId: direccionNueva.id,
+            accion: 'INSERT',
+            usuarioId,
+            pcOrigen: data.pcOrigen,
+            contexto: { autoCreadoDesdePedido: true, clienteId: nuevo.id },
+            tx,
+          });
+        }
       }
     }
 
@@ -322,10 +339,14 @@ export async function crearVenta(args: {
         estado: EstadoVenta.PROCESADA,
         items: { create: itemsToCreate },
       },
+      // Los ids de los items hacen falta para auditarlos uno por uno (ver abajo).
+      include: { items: { select: { id: true } } },
     });
 
+    let deliveryNuevo: { id: string } | null = null;
     if (tieneDatosDelivery && esDelivery) {
-      await tx.deliveryInfo.create({
+      deliveryNuevo = await tx.deliveryInfo.create({
+        select: { id: true },
         data: {
           ventaId: venta.id,
           direccionSnapshot: {
@@ -347,6 +368,39 @@ export async function crearVenta(args: {
       valorNuevo: { numero: venta.numero, total: venta.total, canal: venta.canal },
       tx,
     });
+
+    // Un audit POR RENGLÓN y por el delivery. `items_venta` y `delivery_info`
+    // son OTRAS tablas, y el replicador replica fila por fila a partir de los
+    // eventos de outbox: sin evento propio se quedan en la base local y la
+    // venta llega a la nube VACÍA. Hasta ahora no se notaba porque las cajas
+    // escribían directo a Supabase; en cuanto pasan a escribirle a S1, cada
+    // venta replicaría sin sus renglones. Mismo bug que el de las facturas por
+    // OCR (2026-08-14), en el camino central del sistema.
+    //
+    // Van DESPUÉS del audit de la venta (mayor `secuencia`), que es el orden
+    // que respeta las FK item → venta y delivery → venta al replicar.
+    for (const it of venta.items) {
+      await recordAudit({
+        tabla: 'items_venta',
+        registroId: it.id,
+        accion: 'INSERT',
+        usuarioId,
+        pcOrigen: data.pcOrigen,
+        contexto: { ventaId: venta.id },
+        tx,
+      });
+    }
+    if (deliveryNuevo) {
+      await recordAudit({
+        tabla: 'delivery_info',
+        registroId: deliveryNuevo.id,
+        accion: 'INSERT',
+        usuarioId,
+        pcOrigen: data.pcOrigen,
+        contexto: { ventaId: venta.id },
+        tx,
+      });
+    }
 
     // Comanda de COCINA: solo si el pedido se "envía" al crear (Enviar a cocina /
     // Cargar otro / apps externas → enviarACocina=true, el default). En el flujo
@@ -421,7 +475,7 @@ export async function agregarItemsAVenta(args: {
     where: { id: ventaId },
     include: { listaPrecios: true, items: true },
   });
-  if (!venta) throw new Error('Venta no encontrada');
+  if (!venta) throw new ReglaNegocioError('Venta no encontrada');
 
   const productoIds = [...new Set(items.map((i) => i.productoId))];
   const productos = await prisma.producto.findMany({
@@ -434,6 +488,7 @@ export async function agregarItemsAVenta(args: {
   const productoMap = new Map(productos.map((p) => [p.id, p]));
 
   const ajustePct = Number(venta.listaPrecios.ajustePctDefault);
+  const deltas = await resolverDeltasDeLista(venta.listaPreciosId, opcionIdsDeItems(items));
   const ordenInicial = (venta.items[venta.items.length - 1]?.orden ?? -1) + 1;
 
   const itemsToCreate: Array<Prisma.ItemVentaCreateWithoutVentaInput> = [];
@@ -442,21 +497,14 @@ export async function agregarItemsAVenta(args: {
 
   for (const [idx, item] of items.entries()) {
     const producto = productoMap.get(item.productoId);
-    if (!producto) throw new Error(`Producto ${item.productoId} no existe`);
+    if (!producto) throw new ReglaNegocioError(`Producto ${item.productoId} no existe`);
 
     const precioOverride = producto.preciosPorLista[0]?.precioEfectivo;
     const precioBaseNum = Number(producto.precioBase);
     const precioListaSinDelta = precioOverride
       ? Number(precioOverride)
       : precioBaseNum * (1 + ajustePct / 100);
-    // Seguridad: clamp del delta a >= 0 por modificador. El deltaPrecio viene
-    // del cliente y un valor negativo (ej. -999999) llevaba el total a cero o
-    // negativo. Un modificador SUMA (queso extra), nunca resta — las etiquetas
-    // libres van con delta 0. (A6 del audit de seguridad.)
-    const deltaMod = item.modificadores.reduce(
-      (acc, m) => acc + Math.max(0, Number(m.deltaPrecio || 0)),
-      0,
-    );
+    const deltaMod = deltaDeModificadores(item.modificadores, deltas);
     const precioUnitario = precioListaSinDelta + deltaMod;
 
     const subTotalItemStr = subtotalItem({
@@ -504,6 +552,8 @@ export async function agregarItemsAVenta(args: {
   const subtotalNuevo = Number(venta.subtotal) + subtotalAdicional;
   const totalNuevo = subtotalNuevo - Number(venta.descuentoTotal) + Number(venta.recargoCanal);
 
+  const idsPrevios = new Set(venta.items.map((i) => i.id));
+
   return prisma.$transaction(async (tx) => {
     const updated = await tx.venta.update({
       where: { id: ventaId },
@@ -513,7 +563,34 @@ export async function agregarItemsAVenta(args: {
         tieneCocina: tieneCocinaNuevo,
         items: { create: itemsToCreate },
       },
+      include: { items: { select: { id: true } } },
     });
+
+    // La venta cambió de totales y tiene renglones NUEVOS. Las dos cosas
+    // necesitan su evento de outbox o la nube se queda con la versión vieja y
+    // sin los items agregados. Antes acá no se auditaba nada.
+    await recordAudit({
+      tabla: 'ventas',
+      registroId: ventaId,
+      accion: 'UPDATE',
+      usuarioId: args.usuarioId,
+      valorNuevo: { subtotal: updated.subtotal, total: updated.total },
+      contexto: { motivo: 'items agregados' },
+      tx,
+    });
+    // Solo los que no estaban antes: re-auditar los viejos no rompe nada
+    // (el replicador upsertea) pero ensucia el log y la cola.
+    for (const it of updated.items) {
+      if (idsPrevios.has(it.id)) continue;
+      await recordAudit({
+        tabla: 'items_venta',
+        registroId: it.id,
+        accion: 'INSERT',
+        usuarioId: args.usuarioId,
+        contexto: { ventaId },
+        tx,
+      });
+    }
 
     // Re-encolar la comanda de COCINA con los items nuevos — SOLO si el pedido YA
     // fue enviado a cocina (se creó con "Enviar a cocina", o ya se cobró). Así la
@@ -548,9 +625,9 @@ export async function editarItemDeVenta(args: {
     where: { id: args.ventaId },
     include: { items: true },
   });
-  if (!venta) throw new Error('Venta no encontrada');
+  if (!venta) throw new ReglaNegocioError('Venta no encontrada');
   const item = venta.items.find((i) => i.id === args.itemId);
-  if (!item) throw new Error('Item no encontrado en esta venta');
+  if (!item) throw new ReglaNegocioError('Item no encontrado en esta venta');
 
   await prisma.itemVenta.update({
     where: { id: args.itemId },
@@ -569,9 +646,9 @@ export async function quitarItemDeVenta(args: { ventaId: string; itemId: string 
     where: { id: args.ventaId },
     include: { items: true },
   });
-  if (!venta) throw new Error('Venta no encontrada');
+  if (!venta) throw new ReglaNegocioError('Venta no encontrada');
   const item = venta.items.find((i) => i.id === args.itemId);
-  if (!item) throw new Error('Item no encontrado en esta venta');
+  if (!item) throw new ReglaNegocioError('Item no encontrado en esta venta');
 
   await prisma.itemVenta.delete({ where: { id: args.itemId } });
 

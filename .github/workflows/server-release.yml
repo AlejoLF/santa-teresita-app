@@ -1,0 +1,148 @@
+name: Release Server (S1)
+
+# Corta un release `server-v*` del servidor local, para que S1 se auto-actualice.
+#
+# Por qué existe: hasta ahora esto era `pnpm --filter @sta/server release`, o sea
+# una PC con el repo, Node y `gh` autenticado. Era la ÚNICA pieza del pipeline que
+# seguía atada a estar frente a la máquina — el `.exe` y las migraciones de
+# Supabase ya se disparaban desde acá. Esa asimetría es lo que dejó a S1 cinco
+# días atrás del resto (server-v1.1.9, 15-ago) sin que nadie se enterara.
+#
+# ⚠️ `windows-latest` NO es negociable. El build copia el engine nativo de Prisma
+# (`query_engine-windows.dll.node`) y el prebuilt de `better-sqlite3` DE LA
+# PLATAFORMA DONDE CORRE. Buildeado en Linux, el zip viaja con un `.so` y S1 —que
+# es Windows— no levanta el servicio. Como el updater hace rollback ante el
+# primer fallo, se vería como "la actualización no entró", no como "está mal
+# compilado".
+#
+# El release entra a S1 por la tarea de las 4 AM. Con `inmediato: true` se marca
+# con STA_DEPLOY_NOW y lo agarra la tarea de cada 5 min.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Qué publicar'
+        type: choice
+        default: patch
+        options:
+          - patch    # 1.1.9 → 1.1.10 (el caso normal)
+          - minor    # 1.1.9 → 1.2.0
+          - custom   # una versión exacta (campo de abajo)
+      custom_version:
+        description: 'Versión exacta SIN el prefijo server-v (solo si bump=custom). Ej: 1.2.0'
+        required: false
+        default: ''
+      inmediato:
+        description: 'Aplicarlo en ~5 min en vez de esperar a las 4 AM'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # pushear el bump a main + crear el release con su asset
+
+jobs:
+  release-server:
+    runs-on: windows-latest # ver la nota de arriba: obligatorio, no es preferencia
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0 # historial completo para commitear + pushear
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        # Sin `version:` — el action lo lee de `packageManager` en package.json.
+        uses: pnpm/action-setup@v4
+
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        # Va ANTES del chequeo de drift: el checker compara el schema contra las
+        # migraciones leyendo el DMMF del cliente GENERADO, no el .prisma. Sin
+        # esto, `pnpm install` deja un @prisma/client sin datamodel y el chequeo
+        # explota con "Cannot read properties of undefined". El build lo vuelve a
+        # generar más adelante, pero para entonces ya es tarde.
+        run: pnpm --filter @sta/db run generate
+
+      - name: Chequear drift de migraciones
+        # El invariante de CLAUDE.md: una columna empujada con `db push` que
+        # ninguna migración crea existe en Supabase y en las locales, pero NO en
+        # S1 — y revienta la primera migración que la use. Como el updater corta
+        # ante el primer error, TODAS las siguientes quedan sin aplicar. Así S1
+        # pasó seis semanas sin migrar. Se chequea acá para no publicar un
+        # release que rompa a S1 a las 4 AM sin nadie mirando.
+        shell: bash
+        run: node tools/check-migration-drift.mjs
+
+      - name: Bump versión en apps/server/package.json
+        id: bump
+        shell: bash
+        working-directory: apps/server
+        run: |
+          if [ "${{ inputs.bump }}" = "custom" ]; then
+            if [ -z "${{ inputs.custom_version }}" ]; then
+              echo "::error::bump=custom pero custom_version está vacío"; exit 1
+            fi
+            npm version "${{ inputs.custom_version }}" --no-git-tag-version --allow-same-version
+          else
+            npm version "${{ inputs.bump }}" --no-git-tag-version
+          fi
+          VER="$(node -p "require('./package.json').version")"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Nueva versión del server: $VER (tag server-v$VER)"
+
+      - name: Commit + push del bump
+        # El push va ANTES de crear el release: `gh release create` no recibe
+        # `--target`, así que taggea el HEAD de la rama default en ese momento.
+        # Si se publicara primero, el tag apuntaría al commit anterior al bump y
+        # el zip diría una versión distinta de la que quedó en el repo.
+        shell: bash
+        env:
+          VER: ${{ steps.bump.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/server/package.json
+          git commit -m "chore(server): v$VER (workflow_dispatch)"
+          git push origin HEAD:main
+
+      - name: Build + publicar el release
+        # release.mjs se reusa tal cual: buildea, zipea con Compress-Archive y
+        # crea el release con `gh`. En el runner de Windows las tres cosas están.
+        # `gh auth status` se satisface con GH_TOKEN.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ inputs.inmediato }}" = "true" ]; then
+            node scripts/release.mjs --now
+          else
+            node scripts/release.mjs
+          fi
+        working-directory: apps/server
+
+      - name: Resumen
+        shell: bash
+        env:
+          VER: ${{ steps.bump.outputs.version }}
+        run: |
+          {
+            echo "### Server v$VER publicado"
+            echo ""
+            if [ "${{ inputs.inmediato }}" = "true" ]; then
+              echo "Marcado **INMEDIATO**: S1 lo aplica en ~5 min."
+            else
+              echo "Canal normal: S1 lo aplica en la tarea de las **4 AM**."
+            fi
+            echo ""
+            echo "Para forzarlo a mano en S1: \`.\\update-server.ps1 -Force\`"
+          } >> "$GITHUB_STEP_SUMMARY"

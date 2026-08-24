@@ -118,6 +118,19 @@ export default async function catalogoRoutes(fastify: FastifyInstance) {
         }),
       );
 
+      // Deltas de sabor pisados para ESTA lista (mayoristas). Cacheado aparte
+      // del catálogo: la tabla es chica y así el mismo producto sirve para
+      // todas las listas. Ausencia de fila = vale el delta de catálogo.
+      const overrides = q.listaPreciosId
+        ? await getCached(`catalogo:deltas:${q.listaPreciosId}`, TTL_PRODUCTOS, () =>
+            prisma.deltaOpcionPorLista.findMany({
+              where: { listaId: q.listaPreciosId },
+              select: { opcionId: true, deltaPrecio: true },
+            }),
+          )
+        : [];
+      const deltaPorOpcion = new Map(overrides.map((o) => [o.opcionId, o.deltaPrecio.toString()]));
+
       // Sabores: el código viene del campo `OpcionModificador.codigo` (asignado en el seed).
       // Si está vacío, fallback a código derivado del producto (legacy).
       // incluyeSalsa: detectado por nombre del tipoProducto.
@@ -132,7 +145,7 @@ export default async function catalogoRoutes(fastify: FastifyInstance) {
               grupoId: grupoSabor.id,
               grupoNombre: grupoSabor.nombre,
               nombre: o.nombre,
-              deltaPrecio: o.deltaPrecio.toString(),
+              deltaPrecio: deltaPorOpcion.get(o.id) ?? o.deltaPrecio.toString(),
               codigo:
                 (o as { codigo?: string | null }).codigo ??
                 (p.codigo ? `${p.codigo}${String(idx + 1).padStart(2, '0')}` : null),

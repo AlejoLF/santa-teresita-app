@@ -319,18 +319,21 @@ model Usuario {
   creadoPor Usuario?  @relation("UsuarioCreador", fields: [creadoPorId], references: [id])
   creados   Usuario[] @relation("UsuarioCreador")
 
-  ventasAbiertas      Venta[] @relation("VentaApertura")
-  ventasCerradas      Venta[] @relation("VentaCierre")
-  ventasAnuladas      Venta[] @relation("VentaAnulacion")
-  ventasCobroEncargo  Venta[] @relation("VentaCobroEncargo")
+  ventasAbiertas     Venta[] @relation("VentaApertura")
+  ventasCerradas     Venta[] @relation("VentaCierre")
+  ventasAnuladas     Venta[] @relation("VentaAnulacion")
+  ventasCobroEncargo Venta[] @relation("VentaCobroEncargo")
 
   sesionesAbiertas  SesionCaja[] @relation("SesionApertura")
   sesionesCerradas  SesionCaja[] @relation("SesionCierre")
   sesionesAprobadas SesionCaja[] @relation("SesionAprobacion")
 
   movimientos      Movimiento[]
-  loginAudits      LoginAudit[] @relation("LoginAuditUsuario")
-  loginSolicitudes LoginAudit[] @relation("LoginAuditSolicitante")
+  bancoHoras       MovimientoBancoHoras[]
+  liquidaciones    LiquidacionEmpleado[]
+  valoresHora      ValorHoraCategoria[]
+  loginAudits      LoginAudit[]           @relation("LoginAuditUsuario")
+  loginSolicitudes LoginAudit[]           @relation("LoginAuditSolicitante")
 
   itemsEditados ItemVenta[] @relation("ItemEditadoPor")
 
@@ -340,8 +343,9 @@ model Usuario {
 
   cambiosExcelAplicados AprobacionExcel[] @relation("AprobacionAplicadaPor")
 
-  auditEntries AuditLog[]
-  sessions     AuthSession[]
+  auditEntries  AuditLog[]
+  sessions      AuthSession[]
+  alertasPrecio AlertaPrecioInsumo[]
 
   @@index([rol, activo])
   @@map("usuarios")
@@ -406,30 +410,30 @@ model TipoProducto {
 }
 
 model Producto {
-  id              String       @id @default(uuid()) @db.Uuid
-  tipoProductoId  String       @map("tipo_producto_id") @db.Uuid
-  nombre          String       @db.VarChar(160)
-  marca           String?      @db.VarChar(80)
-  presentacion    String?      @db.VarChar(80)
-  formaVenta      FormaVenta   @map("forma_venta")
+  id                       String       @id @default(uuid()) @db.Uuid
+  tipoProductoId           String       @map("tipo_producto_id") @db.Uuid
+  nombre                   String       @db.VarChar(160)
+  marca                    String?      @db.VarChar(80)
+  presentacion             String?      @db.VarChar(80)
+  formaVenta               FormaVenta   @map("forma_venta")
   /// Etiqueta libre que sobreescribe la nomenclatura por defecto de formaVenta
   /// (ej. "Bolsa de 5kg" en lugar de "Gramo"). El cálculo sigue usando formaVenta.
-  formaVentaLabel String?      @map("forma_venta_label") @db.VarChar(40)
-  precioBase      Decimal      @map("precio_base") @db.Decimal(18, 2)
-  unidadPrecio    UnidadPrecio @map("unidad_precio")
+  formaVentaLabel          String?      @map("forma_venta_label") @db.VarChar(40)
+  precioBase               Decimal      @map("precio_base") @db.Decimal(18, 2)
+  unidadPrecio             UnidadPrecio @map("unidad_precio")
   /// Etiqueta libre que sobreescribe la nomenclatura por defecto de unidadPrecio.
-  unidadPrecioLabel String?    @map("unidad_precio_label") @db.VarChar(40)
-  cantidadDefault Decimal?     @map("cantidad_default") @db.Decimal(12, 3)
-  descripcion     String?
-  imagenUrl       String?      @map("imagen_url")
-  codigo          String?      @unique @db.VarChar(40)
+  unidadPrecioLabel        String?      @map("unidad_precio_label") @db.VarChar(40)
+  cantidadDefault          Decimal?     @map("cantidad_default") @db.Decimal(12, 3)
+  descripcion              String?
+  imagenUrl                String?      @map("imagen_url")
+  codigo                   String?      @unique @db.VarChar(40)
   /// Override por-producto de si va a COCINA (comandera 3). null = HEREDA de
   /// `tipoProducto.cocinaInterviene` (comportamiento de siempre). true/false =
   /// fuerza este producto sin importar el tipo. Lo setea el casillero "Enviar a
   /// cocina" al crear/editar el producto. Resolución: override ?? tipo.
-  cocinaIntervieneOverride Boolean? @map("cocina_interviene_override")
-  activo          Boolean      @default(true)
-  creadoAt        DateTime     @default(now()) @map("creado_at")
+  cocinaIntervieneOverride Boolean?     @map("cocina_interviene_override")
+  activo                   Boolean      @default(true)
+  creadoAt                 DateTime     @default(now()) @map("creado_at")
 
   tipoProducto     TipoProducto            @relation(fields: [tipoProductoId], references: [id])
   modificadores    ModificadorAplicable[]
@@ -445,21 +449,21 @@ model Producto {
 }
 
 model GrupoModificador {
-  id            String        @id @default(uuid()) @db.Uuid
-  nombre        String        @db.VarChar(80)
-  tipoSeleccion TipoSeleccion @map("tipo_seleccion")
-  obligatorio   Boolean       @default(false)
-  minOpciones   Int           @default(0) @map("min_opciones")
-  maxOpciones   Int           @default(1) @map("max_opciones")
+  id               String        @id @default(uuid()) @db.Uuid
+  nombre           String        @db.VarChar(80)
+  tipoSeleccion    TipoSeleccion @map("tipo_seleccion")
+  obligatorio      Boolean       @default(false)
+  minOpciones      Int           @default(0) @map("min_opciones")
+  maxOpciones      Int           @default(1) @map("max_opciones")
   // Ícono (emoji) configurable desde admin. En la tarjeta de producto del
   // cajero NO se listan todas las opciones (recuadro gigante): se muestra este
   // ícono + la cantidad de opciones del grupo. Un ícono por grupo distinto.
-  icono         String?       @db.VarChar(16)
+  icono            String?       @db.VarChar(16)
   // ¿Cada opción lleva una unidad numérica al lado (peso/cantidad)? Los sabores
   // clásicos (Ravioles) sí. Los grupos "solo seleccionables" (ej. punto de
   // cocción, tipo de pan) NO: se marcan y listo. Default true = comportamiento
   // histórico. La selección única vs múltiple ya la da `tipoSeleccion`.
-  requiereCantidad Boolean    @default(true) @map("requiere_cantidad")
+  requiereCantidad Boolean       @default(true) @map("requiere_cantidad")
 
   opciones   OpcionModificador[]
   aplicables ModificadorAplicable[]
@@ -478,7 +482,8 @@ model OpcionModificador {
   activa      Boolean @default(true)
   orden       Int     @default(0)
 
-  grupo GrupoModificador @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+  grupo          GrupoModificador      @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+  deltasPorLista DeltaOpcionPorLista[]
 
   @@index([grupoId, activa])
   @@map("opciones_modificador")
@@ -571,9 +576,10 @@ model ListaPrecios {
   moneda           String            @default("ARS") @db.VarChar(8)
   activa           Boolean           @default(true)
 
-  precios   PrecioPorLista[]
-  ventas    Venta[]
-  historial HistorialPrecio[]
+  precios            PrecioPorLista[]
+  deltasOpcion       DeltaOpcionPorLista[]
+  ventas             Venta[]
+  historial          HistorialPrecio[]
   clientesMayoristas ClienteMayorista[]
 
   @@map("listas_precios")
@@ -593,6 +599,31 @@ model PrecioPorLista {
 
   @@index([productoId, listaId, vigenciaDesde])
   @@map("precios_por_lista")
+}
+
+/// Precio de UN SABOR/OPCIÓN en UNA lista de precios.
+///
+/// El delta "de catálogo" vive en `OpcionModificador.deltaPrecio` y vale para la
+/// lista pública. Una lista custom (mayorista) puede cobrar distinto un sabor
+/// que suma: la muzzarella de una pizza no cuesta lo mismo para el mostrador
+/// que para Casa Tomada. Sin esta tabla el delta era global y el precio de un
+/// producto con sabores quedaba mal en toda lista que no fuera la pública.
+///
+/// Ausencia de fila = "esta lista usa el delta de catálogo". Sólo se guardan
+/// las excepciones, así un cambio de precio en el catálogo sigue propagando a
+/// todas las listas que no lo pisaron explícitamente.
+model DeltaOpcionPorLista {
+  id          String  @id @default(uuid()) @db.Uuid
+  opcionId    String  @map("opcion_id") @db.Uuid
+  listaId     String  @map("lista_id") @db.Uuid
+  deltaPrecio Decimal @map("delta_precio") @db.Decimal(18, 2)
+
+  opcion OpcionModificador @relation(fields: [opcionId], references: [id], onDelete: Cascade)
+  lista  ListaPrecios      @relation(fields: [listaId], references: [id], onDelete: Cascade)
+
+  @@unique([opcionId, listaId])
+  @@index([listaId])
+  @@map("deltas_opcion_por_lista")
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -633,21 +664,21 @@ model ClienteMayorista {
 /// Remito = comprobante de cada entrega de mercadería al cliente mayorista.
 /// Suma a la cuenta corriente. A fin de mes se agrupan para facturar/cobrar.
 model Remito {
-  id                 String       @id @default(uuid()) @db.Uuid
-  numero             Int          @unique @default(autoincrement())
-  clienteMayoristaId String       @map("cliente_mayorista_id") @db.Uuid
-  fecha              DateTime     @default(now())
-  total              Decimal      @db.Decimal(18, 2)
-  estado             EstadoRemito @default(PENDIENTE)
-  observaciones      String?
-  usuarioId          String?      @map("usuario_id") @db.Uuid
-  motivoAnulacion    String?      @map("motivo_anulacion")
-  anuladoAt          DateTime?    @map("anulado_at")
-  pagadoAt           DateTime?    @map("pagado_at")
+  id                    String       @id @default(uuid()) @db.Uuid
+  numero                Int          @unique @default(autoincrement())
+  clienteMayoristaId    String       @map("cliente_mayorista_id") @db.Uuid
+  fecha                 DateTime     @default(now())
+  total                 Decimal      @db.Decimal(18, 2)
+  estado                EstadoRemito @default(PENDIENTE)
+  observaciones         String?
+  usuarioId             String?      @map("usuario_id") @db.Uuid
+  motivoAnulacion       String?      @map("motivo_anulacion")
+  anuladoAt             DateTime?    @map("anulado_at")
+  pagadoAt              DateTime?    @map("pagado_at")
   /// Movimiento del cobro que saldó este remito. Nullable: se puede marcar
   /// pagado a mano (cobro viejo, ajuste) sin un movimiento asociado.
-  pagadoConMovimientoId String?   @map("pagado_con_movimiento_id") @db.Uuid
-  creadoAt           DateTime     @default(now()) @map("creado_at")
+  pagadoConMovimientoId String?      @map("pagado_con_movimiento_id") @db.Uuid
+  creadoAt              DateTime     @default(now()) @map("creado_at")
 
   clienteMayorista    ClienteMayorista @relation(fields: [clienteMayoristaId], references: [id])
   items               RemitoItem[]
@@ -660,14 +691,21 @@ model Remito {
 }
 
 model RemitoItem {
-  id             String  @id @default(uuid()) @db.Uuid
-  remitoId       String  @map("remito_id") @db.Uuid
-  productoId     String? @map("producto_id") @db.Uuid
-  nombreSnapshot String  @map("nombre_snapshot") @db.VarChar(200)
-  cantidad       Decimal @db.Decimal(12, 3)
-  precioUnitario Decimal @map("precio_unitario") @db.Decimal(18, 2)
-  subtotal       Decimal @db.Decimal(18, 2)
-  orden          Int     @default(0)
+  id                     String  @id @default(uuid()) @db.Uuid
+  remitoId               String  @map("remito_id") @db.Uuid
+  productoId             String? @map("producto_id") @db.Uuid
+  nombreSnapshot         String  @map("nombre_snapshot") @db.VarChar(200)
+  cantidad               Decimal @db.Decimal(12, 3)
+  precioUnitario         Decimal @map("precio_unitario") @db.Decimal(18, 2)
+  subtotal               Decimal @db.Decimal(18, 2)
+  orden                  Int     @default(0)
+  /// Sabores/modificadores elegidos, con el mismo shape que `ItemVenta`
+  /// (`[{ grupoId, grupoNombre, opcionId, opcionNombre, deltaPrecio }]`).
+  /// Snapshot: si mañana cambia el nombre del sabor, el remito viejo no muta.
+  modificadoresAplicados Json?   @map("modificadores_aplicados")
+  /// Suma de los deltas ya incluida en `precioUnitario`. Se guarda aparte para
+  /// poder mostrar "precio de lista + extras" sin recalcular.
+  deltaModificadores     Decimal @default(0) @map("delta_modificadores") @db.Decimal(18, 2)
 
   remito Remito @relation(fields: [remitoId], references: [id], onDelete: Cascade)
 
@@ -697,23 +735,23 @@ model HistorialPrecio {
 // ════════════════════════════════════════════════════════════════════════
 
 model Cuenta {
-  id                  String                    @id @default(uuid()) @db.Uuid
-  nombre              String                    @unique @db.VarChar(80)
-  tipo                TipoCuenta
-  banco               String?                   @db.VarChar(80)
-  cbuCvu              String?                   @map("cbu_cvu") @db.VarChar(40)
-  alias               String?                   @db.VarChar(40)
-  moneda              String                    @default("ARS") @db.VarChar(8)
-  saldoActual         Decimal                   @default(0) @map("saldo_actual") @db.Decimal(18, 2)
-  metodoActualizacion MetodoActualizacionCuenta @default(MANUAL) @map("metodo_actualizacion")
-  ultimaConciliacion  DateTime?                 @map("ultima_conciliacion")
-  comisionMensual     Decimal?                  @map("comision_mensual") @db.Decimal(18, 2)
-  activa              Boolean                   @default(true)
+  id                   String                    @id @default(uuid()) @db.Uuid
+  nombre               String                    @unique @db.VarChar(80)
+  tipo                 TipoCuenta
+  banco                String?                   @db.VarChar(80)
+  cbuCvu               String?                   @map("cbu_cvu") @db.VarChar(40)
+  alias                String?                   @db.VarChar(40)
+  moneda               String                    @default("ARS") @db.VarChar(8)
+  saldoActual          Decimal                   @default(0) @map("saldo_actual") @db.Decimal(18, 2)
+  metodoActualizacion  MetodoActualizacionCuenta @default(MANUAL) @map("metodo_actualizacion")
+  ultimaConciliacion   DateTime?                 @map("ultima_conciliacion")
+  comisionMensual      Decimal?                  @map("comision_mensual") @db.Decimal(18, 2)
+  activa               Boolean                   @default(true)
   /// Si true, los movimientos contra esta cuenta NO afectan al esperado del
   /// cierre de caja. Caso típico: cuenta "Efectivo acumulado" del dueño —
   /// efectivo de cajas previas que él guarda aparte y a veces usa para
   /// pagar conceptos. Esos egresos no salen de la caja del turno actual.
-  excluidaDeCierreCaja Boolean                  @default(false) @map("excluida_de_cierre_caja")
+  excluidaDeCierreCaja Boolean                   @default(false) @map("excluida_de_cierre_caja")
 
   movimientosOrigen     Movimiento[]    @relation("MovOrigen")
   movimientosDestino    Movimiento[]    @relation("MovDestino")
@@ -832,7 +870,9 @@ model Movimiento {
   sesionCaja    SesionCaja?         @relation(fields: [sesionCajaId], references: [id])
 
   pagos             Pago[]
-  pagosFactura      PagoFactura[]       @relation("MovimientoPagoFactura")
+  bancoHoras        MovimientoBancoHoras[]
+  liquidaciones     LiquidacionEmpleado[]
+  pagosFactura      PagoFactura[]          @relation("MovimientoPagoFactura")
   facturasAsociadas MovimientoFactura[]
   remitosSaldados   Remito[]
 
@@ -914,33 +954,33 @@ model PagoFactura {
 // ════════════════════════════════════════════════════════════════════════
 
 model SesionCaja {
-  id                  String           @id @default(uuid()) @db.Uuid
-  fecha               DateTime         @db.Date
-  turno               TurnoCaja
-  horarioApertura     DateTime         @map("horario_apertura")
-  horarioCierre       DateTime?        @map("horario_cierre")
-  existenciaInicial   Decimal          @map("existencia_inicial") @db.Decimal(18, 2)
-  existenciaFinal     Decimal?         @map("existencia_final") @db.Decimal(18, 2)
-  recaudacionEsperada Decimal?         @map("recaudacion_esperada") @db.Decimal(18, 2)
-  diferencia          Decimal?         @db.Decimal(18, 2)
-  usuarioAperturaId   String           @map("usuario_apertura_id") @db.Uuid
-  usuarioCierreId     String?          @map("usuario_cierre_id") @db.Uuid
-  aprobadaPorAdmin    Boolean          @default(false) @map("aprobada_por_admin")
-  aprobadaAdminId     String?          @map("aprobada_admin_id") @db.Uuid
-  fechaAprobacion     DateTime?        @map("fecha_aprobacion")
-  estado              EstadoSesionCaja @default(ABIERTA)
+  id                     String           @id @default(uuid()) @db.Uuid
+  fecha                  DateTime         @db.Date
+  turno                  TurnoCaja
+  horarioApertura        DateTime         @map("horario_apertura")
+  horarioCierre          DateTime?        @map("horario_cierre")
+  existenciaInicial      Decimal          @map("existencia_inicial") @db.Decimal(18, 2)
+  existenciaFinal        Decimal?         @map("existencia_final") @db.Decimal(18, 2)
+  recaudacionEsperada    Decimal?         @map("recaudacion_esperada") @db.Decimal(18, 2)
+  diferencia             Decimal?         @db.Decimal(18, 2)
+  usuarioAperturaId      String           @map("usuario_apertura_id") @db.Uuid
+  usuarioCierreId        String?          @map("usuario_cierre_id") @db.Uuid
+  aprobadaPorAdmin       Boolean          @default(false) @map("aprobada_por_admin")
+  aprobadaAdminId        String?          @map("aprobada_admin_id") @db.Uuid
+  fechaAprobacion        DateTime?        @map("fecha_aprobacion")
+  estado                 EstadoSesionCaja @default(ABIERTA)
   // Cuando se cierra anticipadamente (antes de horaFin del slot configurado),
   // el resolverSlotActivo NO reabre este slot por el resto del día — la
   // próxima venta queda fuera de horario hasta el siguiente turno. Default
   // false para no afectar las sesiones cerradas en horario.
-  cerradaAnticipadamente Boolean       @default(false) @map("cerrada_anticipadamente")
-  observaciones       String?
-  emailEnviadoA       String?          @map("email_enviado_a")
-  emailEnviadoAt      DateTime?        @map("email_enviado_at")
+  cerradaAnticipadamente Boolean          @default(false) @map("cerrada_anticipadamente")
+  observaciones          String?
+  emailEnviadoA          String?          @map("email_enviado_a")
+  emailEnviadoAt         DateTime?        @map("email_enviado_at")
   // Contador atómico para asignar `numeroOrdenTurno` a ventas sin race condition.
   // Antes se calculaba con MAX(numeroOrdenTurno) + 1, lo cual no es atómico bajo
   // carga concurrente y produce ventas con el mismo número de orden.
-  ultimoNumeroOrden   Int              @default(0) @map("ultimo_numero_orden")
+  ultimoNumeroOrden      Int              @default(0) @map("ultimo_numero_orden")
 
   usuarioApertura Usuario  @relation("SesionApertura", fields: [usuarioAperturaId], references: [id])
   usuarioCierre   Usuario? @relation("SesionCierre", fields: [usuarioCierreId], references: [id])
@@ -1005,36 +1045,36 @@ model Venta {
   // ── Encargos (pedidos para días futuros — pestaña /encargos) ──────────
   /// true = es un encargo (pedido para un día futuro). El cobro puede ser
   /// diferido (se carga A_PAGAR y se cobra días después en la sesión actual).
-  esEncargo             Boolean               @default(false) @map("es_encargo")
+  esEncargo               Boolean               @default(false) @map("es_encargo")
   /// Día prometido de entrega/retiro (solo encargos). @db.Date, TZ AR.
-  fechaEntregaPromesa   DateTime?             @map("fecha_entrega_promesa") @db.Date
+  fechaEntregaPromesa     DateTime?             @map("fecha_entrega_promesa") @db.Date
   /// Hora exacta "HH:MM" de entrega (XOR con franjaEntrega).
-  horaEntregaExacta     String?               @map("hora_entrega_exacta") @db.VarChar(5)
+  horaEntregaExacta       String?               @map("hora_entrega_exacta") @db.VarChar(5)
   /// Franja MAÑANA/TARDE/NOCHE (XOR con horaEntregaExacta).
-  franjaEntrega         FranjaEntregaEncargo? @map("franja_entrega")
+  franjaEntrega           FranjaEntregaEncargo? @map("franja_entrega")
   /// RETIRO en local o ENVIO a domicilio.
-  tipoEntregaEncargo    TipoEntregaEncargo?   @map("tipo_entrega_encargo")
+  tipoEntregaEncargo      TipoEntregaEncargo?   @map("tipo_entrega_encargo")
   /// Estado de cobro del encargo: A_PAGAR o COBRADO.
-  estadoCobroEncargo    EstadoCobroEncargo    @default(A_PAGAR) @map("estado_cobro_encargo")
+  estadoCobroEncargo      EstadoCobroEncargo    @default(A_PAGAR) @map("estado_cobro_encargo")
   /// Momento del cobro (si se cobró días después de cargar el encargo).
-  fechaCobroEncargo     DateTime?             @map("fecha_cobro_encargo")
+  fechaCobroEncargo       DateTime?             @map("fecha_cobro_encargo")
   /// Usuario que efectuó el cobro diferido del encargo.
-  usuarioCobroEncargoId String?               @map("usuario_cobro_encargo_id") @db.Uuid
+  usuarioCobroEncargoId   String?               @map("usuario_cobro_encargo_id") @db.Uuid
   /// Adiciones de encargo: si esta venta es una "modificación adicional al
   /// pedido X" (items agregados a un encargo ya cargado/cobrado), apunta al
   /// encargo raíz. La comanda se imprime SIEMPRE fusionada desde la raíz
   /// (rótulo PAGO PARCIAL cuando hay mezcla de pagado/no pagado).
-  encargoPadreId        String?               @map("encargo_padre_id") @db.Uuid
+  encargoPadreId          String?               @map("encargo_padre_id") @db.Uuid
   /// Comandera elegida al cargar el encargo (MOSTRADOR/DELIVERY/COCINA). Los
   /// encargos también se toman desde PCs que no son la del mostrador. La usan
   /// la comanda del cobro diferido y el default de la re-impresión.
-  destinoImpresionEncargo String?             @map("destino_impresion_encargo") @db.VarChar(20)
+  destinoImpresionEncargo String?               @map("destino_impresion_encargo") @db.VarChar(20)
   /// Entrega del encargo: cuándo se lo llevó el cliente (o salió al reparto).
   /// ORTOGONAL al cobro — un encargo puede retirarse pagado o impago. null =
   /// todavía no retirado. Es el filtro operativo principal de /encargos.
-  retiradoAt            DateTime?             @map("retirado_at")
+  retiradoAt              DateTime?             @map("retirado_at")
   /// Quién marcó el retiro (sin relación, igual que usuarioCobroEncargoId).
-  usuarioRetiroEncargoId String?              @map("usuario_retiro_encargo_id") @db.Uuid
+  usuarioRetiroEncargoId  String?               @map("usuario_retiro_encargo_id") @db.Uuid
 
   cliente             Cliente?     @relation(fields: [clienteId], references: [id])
   listaPrecios        ListaPrecios @relation(fields: [listaPreciosId], references: [id])
@@ -1223,15 +1263,15 @@ model EmpresaDelivery {
 // ════════════════════════════════════════════════════════════════════════
 
 model ConfiguracionSistema {
-  id            String   @id @default(uuid()) @db.Uuid
-  clave         String   @unique @db.VarChar(80)
-  valor         String   // string serializado (puede ser un número, json, etc.)
-  tipo          String   @default("string") @db.VarChar(20) // string | number | boolean | json
-  descripcion   String?
-  categoria     String?  @db.VarChar(40) // ui | descuentos | seguridad | ticket | local
-  editable      Boolean  @default(true)
-  actualizadoAt DateTime @updatedAt @map("actualizado_at")
-  actualizadoPor String? @map("actualizado_por") @db.VarChar(120)
+  id             String   @id @default(uuid()) @db.Uuid
+  clave          String   @unique @db.VarChar(80)
+  valor          String // string serializado (puede ser un número, json, etc.)
+  tipo           String   @default("string") @db.VarChar(20) // string | number | boolean | json
+  descripcion    String?
+  categoria      String?  @db.VarChar(40) // ui | descuentos | seguridad | ticket | local
+  editable       Boolean  @default(true)
+  actualizadoAt  DateTime @updatedAt @map("actualizado_at")
+  actualizadoPor String?  @map("actualizado_por") @db.VarChar(120)
 
   @@index([categoria])
   @@map("configuracion_sistema")
@@ -1251,23 +1291,35 @@ enum PuestoEmpleado {
 }
 
 model Empleado {
-  id             String         @id @default(uuid()) @db.Uuid
-  nombre         String         @db.VarChar(120)
-  apellido       String?        @db.VarChar(120)
-  dni            String?        @db.VarChar(20)
-  cuil           String?        @db.VarChar(20)
-  puesto         PuestoEmpleado
-  sueldoBase     Decimal?       @map("sueldo_base") @db.Decimal(18, 2)
-  formaPago      String?        @map("forma_pago") @db.VarChar(40) // "mensual", "quincenal", "comisión", "jornal"
-  telefono       String?        @db.VarChar(40)
-  email          String?        @db.VarChar(120)
-  fechaIngreso   DateTime?      @map("fecha_ingreso") @db.Date
-  fechaEgreso    DateTime?      @map("fecha_egreso") @db.Date
-  observaciones  String?
-  activo         Boolean        @default(true)
-  creadoAt       DateTime       @default(now()) @map("creado_at")
+  id            String         @id @default(uuid()) @db.Uuid
+  nombre        String         @db.VarChar(120)
+  apellido      String?        @db.VarChar(120)
+  dni           String?        @db.VarChar(20)
+  cuil          String?        @db.VarChar(20)
+  puesto        PuestoEmpleado
+  sueldoBase    Decimal?       @map("sueldo_base") @db.Decimal(18, 2)
+  formaPago     String?        @map("forma_pago") @db.VarChar(40) // "mensual", "quincenal", "comisión", "jornal"
+  telefono      String?        @db.VarChar(40)
+  email         String?        @db.VarChar(120)
+  fechaIngreso  DateTime?      @map("fecha_ingreso") @db.Date
+  fechaEgreso   DateTime?      @map("fecha_egreso") @db.Date
+  observaciones String?
+  activo        Boolean        @default(true)
+  creadoAt      DateTime       @default(now()) @map("creado_at")
+
+  /// Categoría laboral: de dónde sale su valor hora.
+  categoriaLaboralId String?  @map("categoria_laboral_id") @db.Uuid
+  /// Excepción por persona: pisa el valor de la categoría. Siempre aparece el
+  /// arreglo especial, y sin esto la encargada termina creando una categoría de
+  /// una sola persona.
+  valorHoraPropio    Decimal? @map("valor_hora_propio") @db.Decimal(18, 2)
+
+  categoriaLaboral CategoriaLaboral?      @relation(fields: [categoriaLaboralId], references: [id])
+  bancoHoras       MovimientoBancoHoras[]
+  liquidaciones    LiquidacionEmpleado[]
 
   @@index([activo])
+  @@index([categoriaLaboralId])
   @@map("empleados")
 }
 
@@ -1294,16 +1346,56 @@ model Proveedor {
   ultimoMovimientoAt DateTime?     @map("ultimo_movimiento_at")
 
   insumosVinculo   InsumoProveedor[]
-  insumosPrincipal Insumo[]          @relation("InsumoProveedorPrincipal")
+  insumosPrincipal Insumo[]              @relation("InsumoProveedorPrincipal")
   facturas         FacturaRecibida[]
+  alias            ProveedorAlias[]
+  mapeosExcel      MapeoExcelProveedor[]
+  alertasPrecio    AlertaPrecioInsumo[]
 
   @@index([activo])
   @@map("proveedores")
 }
 
+/// Nombres alternativos con los que un proveedor aparece en las facturas.
+///
+/// El nombre impreso en el comprobante casi nunca es el que el local usa en el
+/// sistema: la razon social completa ("GRAFIPACK SAN MARTIN S.R.L.") contra el
+/// nombre corto de uso diario ("Grafipack"). Sin esto, cada factura por OCR
+/// creaba un proveedor NUEVO y duplicado, partiendo la cuenta corriente en dos.
+///
+/// `nombreNormalizado` guarda el nombre ya pasado por normalizarNombre()
+/// (minusculas, sin acentos ni puntuacion, sin S.R.L./S.A.), que es la forma
+/// con la que se busca. Es unico: un mismo nombre no puede apuntar a dos
+/// proveedores distintos.
+model ProveedorAlias {
+  id                String   @id @default(uuid()) @db.Uuid
+  proveedorId       String   @map("proveedor_id") @db.Uuid
+  /// Como vino escrito, tal cual. Solo informativo, para que se entienda de
+  /// donde salio el alias al mirarlo.
+  nombreOriginal    String   @map("nombre_original") @db.VarChar(160)
+  nombreNormalizado String   @unique @map("nombre_normalizado") @db.VarChar(160)
+  /// 'ocr' = lo confirmo un humano al reasignar una factura de OCR.
+  /// 'manual' = lo cargo alguien a mano.
+  origen            String   @default("ocr") @db.VarChar(20)
+  creadoAt          DateTime @default(now()) @map("creado_at")
+
+  proveedor Proveedor @relation(fields: [proveedorId], references: [id], onDelete: Cascade)
+
+  @@index([proveedorId])
+  @@map("proveedor_alias")
+}
+
 model Insumo {
   id                   String          @id @default(uuid()) @db.Uuid
   nombre               String          @db.VarChar(160)
+  /// Nombre EXACTO con el que figura en la columna A de la hoja `Compras` del
+  /// Excel de la encargada. Es lo que permite volver a encontrar su fila para
+  /// escribirle las cantidades compradas.
+  ///
+  /// Se guarda el nombre y no el numero de fila a proposito: la hoja tiene 338
+  /// productos agrupados por proveedor y ella inserta filas nuevas seguido. Un
+  /// numero de fila queda viejo al primer agregado; el nombre no.
+  nombreExcelCompras   String?         @map("nombre_excel_compras") @db.VarChar(160)
   categoria            CategoriaInsumo
   unidadCompra         UnidadCompra    @map("unidad_compra")
   presentacion         String?         @db.VarChar(160)
@@ -1316,9 +1408,55 @@ model Insumo {
   proveedorPrincipal Proveedor?            @relation("InsumoProveedorPrincipal", fields: [proveedorPrincipalId], references: [id])
   proveedoresVinculo InsumoProveedor[]
   facturasItem       FacturaItemRecibida[]
+  alertasPrecio      AlertaPrecioInsumo[]
 
   @@index([categoria, activo])
+  @@index([proveedorPrincipalId, nombreExcelCompras])
   @@map("insumos")
+}
+
+enum EstadoAlertaPrecio {
+  PENDIENTE
+  APROBADA
+  RECHAZADA
+}
+
+/// "Este producto aumento un X%": el aviso que se le da a la encargada cuando
+/// una factura trae un insumo mas caro que la ultima vez.
+///
+/// El precio NO se actualiza solo. Un aumento puede ser real, pero tambien
+/// puede ser que el OCR leyo mal, que vino otra presentacion, o que la factura
+/// trae un recargo puntual. Actualizar en silencio ensucia el costo de todos
+/// los productos y nadie se entera hasta que la rentabilidad no cierra. Por eso
+/// queda PENDIENTE hasta que alguien lo aprueba, y recien ahi se toca el precio
+/// del sistema y el del Excel.
+model AlertaPrecioInsumo {
+  id              String             @id @default(uuid()) @db.Uuid
+  insumoId        String             @map("insumo_id") @db.Uuid
+  proveedorId     String             @map("proveedor_id") @db.Uuid
+  /// El item de factura que disparo el aviso. Es la prueba: sin el, la alerta
+  /// dice "aumento" y no se puede ver de donde salio.
+  facturaItemId   String?            @map("factura_item_id") @db.Uuid
+  precioAnterior  Decimal            @map("precio_anterior") @db.Decimal(18, 4)
+  precioNuevo     Decimal            @map("precio_nuevo") @db.Decimal(18, 4)
+  /// Variacion porcentual. Negativa si bajo (tambien se avisa: una baja
+  /// inesperada suele ser un error de lectura o un cambio de presentacion).
+  variacionPct    Decimal            @map("variacion_pct") @db.Decimal(9, 4)
+  estado          EstadoAlertaPrecio @default(PENDIENTE)
+  detectadaAt     DateTime           @default(now()) @map("detectada_at")
+  resueltaAt      DateTime?          @map("resuelta_at")
+  usuarioId       String?            @map("usuario_id") @db.Uuid
+  /// Que se hizo al aprobar: si se escribio tambien en el Excel.
+  aplicadaEnExcel Boolean            @default(false) @map("aplicada_en_excel")
+  observaciones   String?
+
+  insumo    Insumo    @relation(fields: [insumoId], references: [id], onDelete: Cascade)
+  proveedor Proveedor @relation(fields: [proveedorId], references: [id], onDelete: Cascade)
+  usuario   Usuario?  @relation(fields: [usuarioId], references: [id])
+
+  @@index([estado, detectadaAt])
+  @@index([insumoId])
+  @@map("alertas_precio_insumo")
 }
 
 model InsumoProveedor {
@@ -1437,27 +1575,27 @@ model FacturaEmitida {
 // ════════════════════════════════════════════════════════════════════════
 
 model AuditLog {
-  id            String   @id @default(uuid()) @db.Uuid
-  secuencia     BigInt   @unique @default(autoincrement())
-  tabla         String   @db.VarChar(80)
-  registroId    String   @map("registro_id") @db.VarChar(80)
-  accion        String   @db.VarChar(40) // INSERT | UPDATE | DELETE | TRANSITION | APPROVAL
-  usuarioId     String?  @map("usuario_id") @db.Uuid
-  pcOrigen      String?  @map("pc_origen") @db.VarChar(40)
-  ipOrigen      String?  @map("ip_origen") @db.VarChar(64)
-  valorAnterior Json?    @map("valor_anterior") @db.JsonB
-  valorNuevo    Json?    @map("valor_nuevo") @db.JsonB
-  contexto      Json?    @db.JsonB
-  observaciones String?
-  timestamp     DateTime @default(now())
-  hashAnterior  String?  @map("hash_anterior") @db.VarChar(80)
-  hashActual    String   @map("hash_actual") @db.VarChar(80)
+  id              String   @id @default(uuid()) @db.Uuid
+  secuencia       BigInt   @unique @default(autoincrement())
+  tabla           String   @db.VarChar(80)
+  registroId      String   @map("registro_id") @db.VarChar(80)
+  accion          String   @db.VarChar(40) // INSERT | UPDATE | DELETE | TRANSITION | APPROVAL
+  usuarioId       String?  @map("usuario_id") @db.Uuid
+  pcOrigen        String?  @map("pc_origen") @db.VarChar(40)
+  ipOrigen        String?  @map("ip_origen") @db.VarChar(64)
+  valorAnterior   Json?    @map("valor_anterior") @db.JsonB
+  valorNuevo      Json?    @map("valor_nuevo") @db.JsonB
+  contexto        Json?    @db.JsonB
+  observaciones   String?
+  timestamp       DateTime @default(now())
+  hashAnterior    String?  @map("hash_anterior") @db.VarChar(80)
+  hashActual      String   @map("hash_actual") @db.VarChar(80)
   // Isla de origen para el catch-up post-corte (ver docs/SERVIDOR-LOCAL.md
   // §5.3). 'local' = server LAN (default). 'cloud' = PWA durante un corte.
   // secuenciaOrigen preserva el `secuencia` que tuvo en su DB de origen
   // (al importar al local se le asigna uno local nuevo = re-chain).
-  origen          String  @default("local") @db.VarChar(8)
-  secuenciaOrigen BigInt? @map("secuencia_origen")
+  origen          String   @default("local") @db.VarChar(8)
+  secuenciaOrigen BigInt?  @map("secuencia_origen")
 
   usuario Usuario? @relation(fields: [usuarioId], references: [id])
 
@@ -1577,4 +1715,221 @@ model OutboxEvent {
 
   @@index([publicadoAt, agregadoAt])
   @@map("outbox_events")
+}
+
+/// Qué proveedor del sistema alimenta cada FILA del Excel "Proveedores 2026".
+///
+/// Las filas de la hoja `Deudas` NO son proveedores uno a uno, y por eso el
+/// mapeo tiene que ser explícito en vez de adivinado por parecido de nombre:
+///
+///   - "Grafipack en Negro" y "Grafipack en Blanco" son EL MISMO proveedor
+///     partido en dos filas según si el comprobante es fiscal o no.
+///   - "Verduras", "Huevos", "Pollos", "Limpieza" son RUBROS: una fila que
+///     junta lo de varios proveedores.
+///   - "Carniceria Fca." y "Carniceria Julio Felipe" son dos proveedores con
+///     nombres que se parecen entre sí más de lo que se parecen a su nombre
+///     en el sistema.
+///
+/// Adivinar acá significa sumarle a un proveedor la deuda de otro, y eso se
+/// descubre tarde y se limpia a mano. Se identifica la fila por su ETIQUETA
+/// (el texto de la columna A), no por el número de fila: si mañana insertan
+/// una fila arriba, el mapeo sigue valiendo.
+model MapeoExcelProveedor {
+  id               String   @id @default(uuid()) @db.Uuid
+  /// Texto exacto de la columna A de la hoja `Deudas` (ej. "Grafipack en Negro").
+  etiquetaExcel    String   @map("etiqueta_excel") @db.VarChar(120)
+  proveedorId      String   @map("proveedor_id") @db.Uuid
+  /// Qué comprobantes de ese proveedor van a ESTA fila. Vacío = todos.
+  /// Es lo que permite partir un proveedor en "en Blanco" (FACTURA_A/B/C) y
+  /// "en Negro" (el resto).
+  tiposComprobante String[] @map("tipos_comprobante")
+  activo           Boolean  @default(true)
+
+  proveedor Proveedor @relation(fields: [proveedorId], references: [id], onDelete: Cascade)
+
+  @@unique([etiquetaExcel, proveedorId])
+  @@index([proveedorId])
+  @@map("mapeo_excel_proveedores")
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//   BANCO DE HORAS (sección 14)
+// ════════════════════════════════════════════════════════════════════════
+
+/// Qué clase de asiento es cada fila del libro del banco de horas.
+enum TipoMovimientoBancoHoras {
+  HORAS_TRABAJADAS
+  ADELANTO
+  LIQUIDACION
+  /// El empleado devolvió plata del préstamo. Es un INGRESO a la caja: la
+  /// deuda también se salda con dinero, no sólo trabajando.
+  DEVOLUCION
+  AJUSTE
+}
+
+/// Categoría laboral con su valor hora. Separada de `PuestoEmpleado`: el puesto
+/// es lo que la persona HACE, la categoría es lo que CUESTA. Un cocinero con
+/// antigüedad puede estar en otra categoría que uno nuevo.
+///
+/// Subir el valor acá impacta a todos los empleados de la categoría — que es
+/// justamente el pedido: no tener que editar persona por persona.
+model CategoriaLaboral {
+  id        String   @id @default(uuid()) @db.Uuid
+  nombre    String   @unique @db.VarChar(80)
+  /// Valor hora VIGENTE. El histórico vive en `ValorHoraCategoria`.
+  valorHora Decimal  @map("valor_hora") @db.Decimal(18, 2)
+  activo    Boolean  @default(true)
+  orden     Int      @default(0)
+  creadoAt  DateTime @default(now()) @map("creado_at")
+
+  empleados   Empleado[]
+  historial   ValorHoraCategoria[]
+  movimientos MovimientoBancoHoras[]
+
+  @@index([activo])
+  @@map("categorias_laborales")
+}
+
+/// Histórico del valor hora. **El valor nunca se pisa con UPDATE**: cada cambio
+/// inserta una fila. Sirve para responder "¿por qué en marzo se le pagó esto?",
+/// y es el mismo criterio que usan los precios por lista.
+model ValorHoraCategoria {
+  id            String   @id @default(uuid()) @db.Uuid
+  categoriaId   String   @map("categoria_id") @db.Uuid
+  valorHora     Decimal  @map("valor_hora") @db.Decimal(18, 2)
+  vigenciaDesde DateTime @map("vigencia_desde")
+  usuarioId     String   @map("usuario_id") @db.Uuid
+  creadoAt      DateTime @default(now()) @map("creado_at")
+
+  categoria CategoriaLaboral @relation(fields: [categoriaId], references: [id], onDelete: Cascade)
+  usuario   Usuario          @relation(fields: [usuarioId], references: [id])
+
+  @@index([categoriaId, vigenciaDesde])
+  @@map("valores_hora_categoria")
+}
+
+/// Tipo de hora: normales, extra, feriado, nocturna…
+///
+/// Define **o** un `multiplicador` sobre el valor de la categoría **o** un
+/// `valorHoraFijo`, nunca los dos (XOR, chequeado por constraint en la base).
+///
+/// La diferencia importa: el multiplicador SIGUE a la categoría —si sube el
+/// valor hora, la hora extra sube sola—, mientras que el valor fijo queda
+/// quieto hasta que alguien lo edita a mano.
+model TipoHora {
+  id            String   @id @default(uuid()) @db.Uuid
+  nombre        String   @unique @db.VarChar(60)
+  multiplicador Decimal? @db.Decimal(6, 3)
+  valorHoraFijo Decimal? @map("valor_hora_fijo") @db.Decimal(18, 2)
+  activo        Boolean  @default(true)
+  orden         Int      @default(0)
+  creadoAt      DateTime @default(now()) @map("creado_at")
+
+  movimientos MovimientoBancoHoras[]
+
+  @@index([activo])
+  @@map("tipos_hora")
+}
+
+/// El libro del banco de horas. **Append-only**: un error no se edita, se
+/// corrige con un `AJUSTE`. Va en la línea del resto del sistema (las ventas se
+/// anulan en vez de borrarse) y evita que alguien "arregle" el pasado sin dejar
+/// rastro.
+///
+/// Guarda DOS cantidades porque la deuda tiene dos unidades: las horas a favor
+/// del empleado se revalúan con la categoría, y los adelantos quedan en pesos.
+/// Por eso el saldo NO se persiste: se calcula al leer como
+/// `(horas pendientes × valor vigente) − adelantos pendientes`.
+model MovimientoBancoHoras {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  empleadoId         String                   @map("empleado_id") @db.Uuid
+  tipo               TipoMovimientoBancoHoras
+  /// Horas (+ trabajadas / − liquidadas). Null en los asientos de plata.
+  horas              Decimal?                 @db.Decimal(8, 2)
+  /// Pesos (− adelanto / − pago). Null en los asientos de horas.
+  montoPesos         Decimal?                 @map("monto_pesos") @db.Decimal(18, 2)
+  /// Cuántas de esas horas YA se cobraron. El banco de horas es una cuenta
+  /// corriente: se puede pagar una parte hoy y dejar el resto pendiente, así
+  /// que una fila no es "pagada o no pagada" sino "pagada hasta acá".
+  ///
+  /// Lo que queda pendiente son HORAS, no pesos: si sube el valor, sube lo que
+  /// falta cobrar. Ése es el punto del banco de horas, y guardar el resto en
+  /// pesos lo rompería.
+  ///
+  /// SEIS decimales, no dos como `horas`: acá se guarda el resultado de dividir
+  /// un monto en pesos por el valor hora. Con 2 decimales, el grano mínimo a
+  /// $3.000/h es $30 — cada pago parcial dejaría hasta esa diferencia colgada.
+  horasAplicadas     Decimal                  @default(0) @map("horas_aplicadas") @db.Decimal(12, 6)
+  /// Cuánto de este préstamo ya se devolvió. Mismo motivo: el adelanto de
+  /// $100.000 se descuenta de a poco, en los días que la encargada decide —
+  /// no de una, y no necesariamente el día que se le pagan las horas.
+  montoAplicado      Decimal                  @default(0) @map("monto_aplicado") @db.Decimal(18, 2)
+  tipoHoraId         String?                  @map("tipo_hora_id") @db.Uuid
+  /// Excepción del día: la persona trabajó en OTRA categoría que la suya.
+  ///
+  /// null = "la de siempre", y la fila se valúa con la tarifa vigente del
+  /// empleado (su valor propio, o su categoría). Sólo se completa cuando la
+  /// encargada elige explícitamente otra en el momento de cargar las horas —
+  /// si se estampara siempre, un empleado con `valorHoraPropio` pasaría a
+  /// cobrar por categoría sin que nadie lo hubiera pedido.
+  categoriaLaboralId String?                  @map("categoria_laboral_id") @db.Uuid
+  /// Día trabajado (o fecha del adelanto). No es `creadoAt`: se puede cargar
+  /// el lunes lo que se trabajó el sábado.
+  fecha              DateTime                 @db.Date
+  observacion        String?
+  /// El movimiento de caja de un adelanto o una liquidación. Sin esto, la plata
+  /// del banco de horas y la de la caja se separan y no vuelven a juntarse.
+  movimientoId       String?                  @map("movimiento_id") @db.Uuid
+  /// La liquidación que TERMINÓ de consumir esta fila. Mientras se aplica de a
+  /// partes queda en null: lo que dice si algo sigue pendiente es
+  /// `horasAplicadas`/`montoAplicado`, no este campo.
+  liquidacionId      String?                  @map("liquidacion_id") @db.Uuid
+  usuarioId          String                   @map("usuario_id") @db.Uuid
+  creadoAt           DateTime                 @default(now()) @map("creado_at")
+
+  empleado         Empleado             @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
+  tipoHora         TipoHora?            @relation(fields: [tipoHoraId], references: [id])
+  /// `Restrict` explícito: sin esto, `db push` genera SET NULL y la migración
+  /// dice RESTRICT — las bases armadas desde el schema (Supabase, las locales)
+  /// quedarían con una regla distinta de la de S1. Y la regla importa: con SET
+  /// NULL, borrar una categoría revaluaría en silencio las horas que la usaban
+  /// al valor del empleado, cambiando plata sin que nadie se entere.
+  categoriaLaboral CategoriaLaboral?    @relation(fields: [categoriaLaboralId], references: [id], onDelete: Restrict)
+  movimiento       Movimiento?          @relation(fields: [movimientoId], references: [id])
+  liquidacion      LiquidacionEmpleado? @relation(fields: [liquidacionId], references: [id])
+  usuario          Usuario              @relation(fields: [usuarioId], references: [id])
+
+  @@index([empleadoId, fecha])
+  @@index([empleadoId, liquidacionId])
+  @@index([liquidacionId])
+  @@map("movimientos_banco_horas")
+}
+
+/// Una liquidación: lo que se le pagó a alguien de una vez.
+///
+/// Estampa el `valorHoraAplicado`. **Es el único punto donde la revaluación se
+/// detiene**: hasta acá las horas valían lo que valiera la categoría hoy;
+/// desde acá, este número ya no se mueve nunca más.
+model LiquidacionEmpleado {
+  id                 String   @id @default(uuid()) @db.Uuid
+  empleadoId         String   @map("empleado_id") @db.Uuid
+  fecha              DateTime @db.Date
+  horasLiquidadas    Decimal  @map("horas_liquidadas") @db.Decimal(8, 2)
+  valorHoraAplicado  Decimal  @map("valor_hora_aplicado") @db.Decimal(18, 2)
+  /// Bruto de las horas, lo descontado por adelantos y lo que se pagó en mano.
+  montoHoras         Decimal  @map("monto_horas") @db.Decimal(18, 2)
+  adelantosAplicados Decimal  @map("adelantos_aplicados") @db.Decimal(18, 2)
+  montoPagado        Decimal  @map("monto_pagado") @db.Decimal(18, 2)
+  movimientoId       String?  @map("movimiento_id") @db.Uuid
+  observacion        String?
+  usuarioId          String   @map("usuario_id") @db.Uuid
+  creadoAt           DateTime @default(now()) @map("creado_at")
+
+  empleado    Empleado               @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
+  movimiento  Movimiento?            @relation(fields: [movimientoId], references: [id])
+  usuario     Usuario                @relation(fields: [usuarioId], references: [id])
+  movimientos MovimientoBancoHoras[]
+
+  @@index([empleadoId, fecha])
+  @@map("liquidaciones_empleado")
 }

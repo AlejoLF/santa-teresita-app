@@ -2,6 +2,13 @@
 
 import { use, useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import {
+  LineasDePago,
+  useCuentas,
+  sugerirCuenta,
+  validarPagos,
+  type LineaPago,
+} from '@/components/admin/LineasDePago';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
@@ -44,11 +51,6 @@ interface Detalle {
   totales: { remitado: string; cobrado: string };
   remitos: Remito[];
   cobros: Cobro[];
-}
-interface Cuenta {
-  id: string;
-  nombre: string;
-  tipo: string;
 }
 
 function inicioMesISO(): string {
@@ -635,38 +637,46 @@ function ModalCobro({
   // Remitos que este cobro salda. Vacío = cobro "a cuenta", sin imputar (que es
   // como funcionaba antes de existir esta opción).
   const [imputados, setImputados] = useState<Set<string>>(new Set());
-  const [cuentaId, setCuentaId] = useState('');
-  const [metodo, setMetodo] = useState<
-    'EFECTIVO' | 'TRANSFERENCIA' | 'DEPOSITO' | 'CHEQUE' | 'MERCADOPAGO_QR' | 'OTRO'
-  >('TRANSFERENCIA');
-  const [numeroReferencia, setNumeroReferencia] = useState('');
   const [observacion, setObservacion] = useState('');
-  const [cuentas, setCuentas] = useState<Cuenta[]>([]);
+  const cuentas = useCuentas();
+  const [pagos, setPagos] = useState<LineaPago[]>([
+    { metodo: 'TRANSFERENCIA', cuentaId: '', monto: '' },
+  ]);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Cuando llegan las cuentas, la primera línea toma la sugerida y el monto
+  // arranca en el saldo — el caso normal queda listo para confirmar.
   useEffect(() => {
-    (async () => {
-      try {
-        const c = await api.get<{ cuentas: Cuenta[] }>('/admin/cuentas');
-        setCuentas(c.cuentas);
-      } catch {
-        /* silencioso */
-      }
-    })();
-  }, []);
+    if (cuentas.length === 0) return;
+    setPagos((prev) =>
+      prev.map((l, i) =>
+        i === 0 && !l.cuentaId
+          ? {
+              ...l,
+              cuentaId: sugerirCuenta(l.metodo, cuentas)?.id ?? '',
+              monto: l.monto || (Number(saldoSugerido) > 0 ? Number(saldoSugerido).toFixed(2) : ''),
+            }
+          : l,
+      ),
+    );
+  }, [cuentas, saldoSugerido]);
 
   async function submit() {
     setError(null);
     if (!monto || Number(monto) <= 0) return setError('Falta el monto');
-    if (!cuentaId) return setError('Elegí la cuenta donde entra la plata');
+    const problema = validarPagos(pagos, Number(monto));
+    if (problema) return setError(problema);
     setGuardando(true);
     try {
       await api.post(`/admin/mayoristas/${clienteId}/cobros`, {
         monto: Number(monto).toFixed(2),
-        cuentaId,
-        metodo,
-        numeroReferencia: numeroReferencia || undefined,
+        pagos: pagos.map((l) => ({
+          metodo: l.metodo,
+          cuentaId: l.cuentaId,
+          monto: Number(l.monto).toFixed(2),
+          numeroReferencia: l.numeroReferencia || undefined,
+        })),
         observacion: observacion || undefined,
         remitoIds: imputados.size ? [...imputados] : undefined,
       });
@@ -678,7 +688,6 @@ function ModalCobro({
     }
   }
 
-  const necesitaRef = ['TRANSFERENCIA', 'CHEQUE', 'DEPOSITO'].includes(metodo);
   const totalImputado = remitosPendientes
     .filter((r) => imputados.has(r.id))
     .reduce((acc, r) => acc + Number(r.total), 0);
@@ -695,7 +704,11 @@ function ModalCobro({
     // remitos elegidos, y tipearlo aparte es una fuente de errores. Sigue
     // siendo editable a mano para pagos parciales o con descuento.
     const delta = estaba ? -Number(total) : Number(total);
-    setMonto(Math.max(0, Number(monto || 0) + delta).toFixed(2));
+    const nuevoMonto = Math.max(0, Number(monto || 0) + delta).toFixed(2);
+    setMonto(nuevoMonto);
+    // Con un solo método, el monto de la línea sigue al total: obligar a
+    // re-tipearlo sería pedir dos veces el mismo número.
+    setPagos((prev) => (prev.length === 1 ? [{ ...prev[0]!, monto: nuevoMonto }] : prev));
   }
 
   return (
@@ -723,51 +736,12 @@ function ModalCobro({
               </p>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-ink-700 mb-1">Entra a</label>
-              <select
-                value={cuentaId}
-                onChange={(e) => setCuentaId(e.target.value)}
-                className="input"
-              >
-                <option value="">Elegí cuenta...</option>
-                {cuentas.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.nombre}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-ink-700 mb-1">Método</label>
-              <select
-                value={metodo}
-                onChange={(e) => setMetodo(e.target.value as typeof metodo)}
-                className="input"
-              >
-                <option value="TRANSFERENCIA">Transferencia</option>
-                <option value="EFECTIVO">Efectivo</option>
-                <option value="DEPOSITO">Depósito</option>
-                <option value="MERCADOPAGO_QR">MercadoPago</option>
-                <option value="CHEQUE">Cheque</option>
-                <option value="OTRO">Otro</option>
-              </select>
-            </div>
-          </div>
-          {necesitaRef && (
-            <div>
-              <label className="block text-xs font-medium text-ink-700 mb-1">
-                Nº de operación / referencia
-              </label>
-              <input
-                type="text"
-                value={numeroReferencia}
-                onChange={(e) => setNumeroReferencia(e.target.value)}
-                className="input font-mono"
-              />
-            </div>
-          )}
+          <LineasDePago
+            lineas={pagos}
+            onChange={setPagos}
+            cuentas={cuentas}
+            total={Number(monto || 0)}
+          />
           {remitosPendientes.length > 0 && (
             <div>
               <label className="block text-xs font-medium text-ink-700 mb-1">

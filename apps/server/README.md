@@ -27,11 +27,33 @@ cd C:\sta-server                       # donde copiaste el dist/
 copy .env.example .env && notepad .env # completar passwords + secrets
 powershell -ExecutionPolicy Bypass -File .\setup-mini-pc.ps1   # como Admin
 
-# Verificación:
-Get-Service postgresql-x64-16, sta-server     # Running + Automatic
-curl http://localhost:3001/health             # dbState=PRIMARY
-curl http://localhost:3001/api/v1/sync/status # rol=server + replicacion lag
+# Verificación (127.0.0.1, NO localhost: el API escucha solo IPv4 y Node 17+
+# resuelve localhost a ::1 primero — ver gotchas en CLAUDE.md):
+Get-Service postgresql-x64-16, sta-server        # Running + Automatic
+curl http://127.0.0.1:3001/health                # dbState=PRIMARY
+curl http://127.0.0.1:3001/api/v1/sync/status    # rol=server + replicacion lag
 ```
+
+## Cuando la replicación a la nube se atrasa
+
+`/api/v1/sync/status` devuelve `replicacion: { pendientes, estancados, masViejoMs }`.
+Con `estancados > 0` hay eventos que agotaron sus 25 reintentos: esas filas
+existen **solo en S1**, se ven en el programa pero no en la nube. No frenan a
+los eventos nuevos (el drenado los saltea), así que es una fuga silenciosa, no
+una parada.
+
+La causa típica es una fila creada sin `recordAudit`: nunca viaja, y el hijo que
+la referencia rebota por FK. Para verlo y arreglarlo:
+
+```powershell
+cd C:\sta-server
+node api\reparar-replicacion.mjs             # diagnóstico, no escribe nada
+node api\reparar-replicacion.mjs --aplicar   # copia los padres faltantes y reactiva
+```
+
+Resetear los reintentos a mano **no alcanza**: el padre sigue sin existir en la
+nube y la FK vuelve a fallar. El script copia primero los ancestros faltantes
+(recursivo) y recién ahí reactiva los eventos.
 
 ## Pendientes / gotchas
 

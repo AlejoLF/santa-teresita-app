@@ -724,6 +724,7 @@ export default function VentasPage() {
           setRepartidor('');
         }}
         hayFiltro={tabla.hayFiltro || !!repartidor}
+        exportar={{ path: tabla.pathExport, nombre: 'ventas.xlsx' }}
       >
         <select
           value={repartidor}

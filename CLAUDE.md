@@ -47,7 +47,7 @@ orquestación confiable.
 | Auth | PIN 4 dígitos (bcryptjs) + Bearer token | token en localStorage → funciona cross-origin |
 | Agente local | Node daemon + node-thermal-printer | EPSON TM-T20II |
 | Cola de impresión | tabla `TrabajoImpresion` + polling del agente (3s) | **no** hay BullMQ (ver nota abajo) |
-| Excel | exceljs (en la API) | export/import; **sin** Google Drive API todavía |
+| Excel | exceljs (en la API) + Google Drive API | los `.xlsx` de la encargada se leen/escriben en su Drive, no en disco |
 | OCR facturas | LLM con visión en N8N | bot Telegram |
 | Deploy | Vercel (web) + Railway (API) + GitHub Actions | Docker Compose + Caddy para local/LAN |
 
@@ -188,6 +188,17 @@ Ver SPEC §1.5. Punteo:
   quedan con la fecha del día anterior. El resolver de `horarios.ts` usa
   `getFullYear/Month/Date` (TZ-local) — correcto solo si la TZ está bien.
 
+- **Para llegar al API desde la MISMA máquina, usar `127.0.0.1`, nunca
+  `localhost`.** El API hace `listen({ host: '0.0.0.0' })`, que es **solo
+  IPv4**; desde Node 17 `localhost` resuelve **primero a IPv6** (`::1`).
+  Cualquier cliente Node/axios local (n8n, un script, un healthcheck) se come
+  un `connect ECONNREFUSED ::1:3001` con el server andando perfecto. Síntoma
+  traicionero: PowerShell/.NET y `curl` **sí** caen a IPv4, así que un chequeo
+  hecho desde ahí dice "OK, el API responde" mientras el que importa falla —
+  un falso verde. Incidente real: la ingesta de facturas por OCR, 2026-08-14.
+  (Si algún día hace falta atender los dos stacks, es `API_HOST=::`, pero eso
+  cambia el binding de producción: preferir arreglar la URL del cliente.)
+
 - **Pooler de Supabase: `aws-1-sa-east-1`, NO `aws-0`.** Supabase migró la
   infra de Supavisor. La URL legacy `aws-0-*` devuelve "tenant not found".
   El default está en `scripts/cloud/_url.mjs`. Si `cloud:migrate`/`status`
@@ -198,6 +209,22 @@ Ver SPEC §1.5. Punteo:
   `Santa Teresita.exe` mantiene `query_engine-windows.dll.node` lockeado.
   Cerrar la app antes de regenerar. Verificar con:
   `Get-Process | ? { $_.Modules.FileName -like '*query_engine-windows*' }`.
+
+- **Si tocás `schema.prisma`, escribí la migración — `db push` NO alcanza.**
+  Conviven dos formas de armar una base: desde el schema (`db push` → Supabase
+  y las locales) y aplicando migraciones en orden (**S1**, vía
+  `update-server.ps1` / `setup-mini-pc.ps1`). Una columna empujada con `db push`
+  sin migración existe en las primeras y **no** en S1. Peor: si una migración
+  posterior la USA, revienta ahí y —como el updater corta ante el primer
+  error— **todas** las migraciones que siguen quedan sin aplicar. Incidente
+  real: `tipos_producto.es_subcategoria` (más `opciones_modificador.codigo` y
+  `sesiones_caja.ultimo_numero_orden`) nunca tuvieron migración;
+  `20260702120000_porciones_reorg` la usa, y S1 pasó **seis semanas** sin poder
+  aplicar una sola migración, fallando y rolleando sola a las 4 AM sin que
+  nadie se enterara. Se detecta con **`node tools/check-migration-drift.mjs`**
+  — corrélo antes de publicar un release del server. Si la columna la usa una
+  migración que ya existe, el nombre de la nueva tiene que ordenar **antes**
+  que aquella (se aplican alfabéticamente), aunque quede con fecha "vieja".
 
 - **NO correr `prisma migrate dev` contra ninguna DB de este repo — y `pnpm
   db:migrate` MAPEA A ESO.** (Verificado: `packages/db/package.json` →
@@ -211,6 +238,20 @@ Ver SPEC §1.5. Punteo:
   `*_alpha20` con DROP INDEX), borrar el dir + el registro en
   `_prisma_migrations` + recrear los índices. Para sincronizar una DB local
   nueva: aplicar los `migration.sql` en orden con un script, no `migrate dev`.
+
+- **Los Excels de la encargada NO están en disco: salen de Google Drive.**
+  `services/fuente-excel.ts` es la única capa que sabe de dónde vienen los bytes
+  (`GOOGLE_SERVICE_ACCOUNT_JSON` + `GOOGLE_DRIVE_FOLDER_ID`); `excel-proveedores`,
+  `excel-compras` y `excel-writeback` piden un archivo por nombre y reciben un
+  `RefExcel`. Si agregás un servicio que toque un `.xlsx` del cliente, usá
+  `exigir()`/`abrirLibro()`/`editarCeldas()` — no `readFile(join(EXCEL_DIR,…))`.
+  Dos cosas a no romper: **media configuración es 503, no fallback a disco**
+  (leer un archivo local viejo en silencio desactualiza todos los números sin
+  ningún síntoma), y **`Proveedores 2026` es una hoja NATIVA de Google**: se
+  exporta para leer, pero no se puede sobreescribir con bytes de xlsx.
+  `EXCEL_LOCAL_DIR` sobrevive sólo como fallback de desarrollo. Excepción
+  conocida: `excel-sync.ts` (aprobación de precios) todavía shellea Python
+  contra un path de disco.
 
 - **Cliente API: nunca mandar `Content-Type: application/json` sin body.**
   Fastify rechaza body vacío con ese header (FST_ERR_CTP_EMPTY_JSON_BODY,
@@ -258,6 +299,12 @@ Detalle en [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md). Resumen:
   El workflow bumpea, commitea a `main`, taggea y buildea. No toques versiones a mano:
   el drift versión/tag es lo que hizo fallar alpha.54.
 - **Migrar Supabase** → Actions → *Cloud Migrate* → Run workflow. Idempotente.
+- **Actualizar el servidor S1** → Actions → *Release Server (S1)* → Run workflow
+  (`bump=patch`). S1 lo aplica solo a las 4 AM; `inmediato=true` lo baja en ~5 min.
+  **Ciclo separado del `.exe`**: publicar un alpha NO actualiza S1. Si tocás la
+  API y la usás desde S1, corré los dos. El job va en `windows-latest` a la
+  fuerza — el build empaqueta binarios nativos (engine de Prisma,
+  `better-sqlite3`) de la plataforma donde corre.
 - **Orden cuando el release trae cambio de schema**: primero Cloud Migrate, después
   Release Desktop (así las cajas encuentran las columnas nuevas al actualizarse).
 - Web y API deployan solos en cada push a `main` (Vercel + Railway).
@@ -280,12 +327,13 @@ Detalle en [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md). Resumen:
 | # | Item | Bloqueante para |
 |-|-|-|
 | 1 | Resolver pendientes del cliente (PREGUNTAS.md) | Producción |
-| 2 | Sync Excel ↔ programa (falta Google Drive API; hoy solo exceljs) | Aprobación de cambios masivos |
+| 2 | Sync/aprobación de precios: `excel-sync.ts` sigue atado a disco + parsers Python (el resto del Excel ya va por Drive API) | Aprobación de cambios masivos |
 | 3 | Webhooks reales de RAPPI/PYA/MELI (la ingesta existe, falta el push de las plataformas) | Integración delivery automática |
 | 4 | Hash-chain audit triggers en Postgres (no solo app-level) | Forensic strength |
 | 5 | Cola real para impresión (hoy DB + polling cada 3s) | Throughput alto |
 | 6 | Tests E2E con Playwright | Calidad |
 | 7 | Completar Camino A de PLAN-PARIDAD (una sola app en la nube) | Que el admin opere 100% desde el celu |
+| 8 | Banco de horas — cerrar lo que quedó afuera (SPEC §14.11: ajustes manuales, baja con deuda, export) | Reemplazar del todo el control en papel |
 
 ### 🔒 Pendientes de seguridad — HACER CUANDO ESTÉ EL SERVER LISTO
 

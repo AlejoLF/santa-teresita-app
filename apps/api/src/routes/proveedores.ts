@@ -10,6 +10,24 @@ import {
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { calcSaldoFactura } from '../services/facturas.js';
+import { normalizarNombre, buscarProveedorParecido } from '../services/proveedor-match.js';
+import {
+  volcarSemanaProveedores,
+  leerEtiquetasDelExcel,
+} from '../services/excel-proveedores.js';
+import { origenExcel, ubicar } from '../services/fuente-excel.js';
+import { configuracionIncompleta, driveCuenta } from '../services/drive.js';
+import {
+  importarCompras,
+  volcarCantidadesCompras,
+  actualizarPrecioEnExcel,
+} from '../services/excel-compras.js';
+import { detectarAumentos, textoAlerta } from '../services/alertas-precio.js';
+import {
+  construirExcelBusqueda,
+  descripcionFiltros,
+  nombreArchivoExport,
+} from '../services/export-busqueda.js';
 import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
 import {
   periodoBusquedaSchema,
@@ -372,7 +390,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
 
       const fechaEm = new Date(body.fechaEmision);
 
-      const created = await prisma.$transaction(async (tx) => {
+      const createdTx = await prisma.$transaction(async (tx) => {
         const factura = await tx.facturaRecibida.create({
           data: {
             proveedorId: body.proveedorId,
@@ -406,34 +424,19 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           },
         });
 
-        // Actualizar precio último por insumo+proveedor (si la factura es la más reciente vista)
-        for (const it of body.items) {
-          if (!it.insumoId) continue;
-          const existing = await tx.insumoProveedor.findUnique({
-            where: { insumoId_proveedorId: { insumoId: it.insumoId, proveedorId: body.proveedorId } },
-          });
-          if (!existing || !existing.fechaUltimoPrecio || existing.fechaUltimoPrecio < fechaEm) {
-            await tx.insumoProveedor.upsert({
-              where: {
-                insumoId_proveedorId: { insumoId: it.insumoId, proveedorId: body.proveedorId },
-              },
-              create: {
-                insumoId: it.insumoId,
-                proveedorId: body.proveedorId,
-                precioUltimo: it.precioUnitario,
-                fechaUltimoPrecio: fechaEm,
-                esPrincipal: false,
-              },
-              update: {
-                precioUltimo: it.precioUnitario,
-                fechaUltimoPrecio: fechaEm,
-              },
-            });
-          }
-        }
+        // El precio de cada insumo YA NO se pisa en silencio. Acá había un
+        // upsert que actualizaba `precioUltimo` sin avisarle a nadie: si el
+        // OCR leía mal, o venía otra presentación, el costo quedaba mal y no
+        // se descubría hasta que la rentabilidad no cerraba, meses después.
+        //
+        // Ahora `detectarAumentos` fija el precio sólo cuando NO había uno
+        // anterior (primera compra, no hay nada que avisar) y en cualquier
+        // otro caso deja un aviso PENDIENTE para que lo apruebe una persona.
+        const avisos = await detectarAumentos({ facturaId: factura.id, tx });
 
-        return factura;
+        return { factura, avisos };
       });
+      const { factura: created, avisos } = createdTx;
 
       await recordAudit({
         tabla: 'facturas_recibidas',
@@ -446,7 +449,11 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           itemsCount: body.items.length,
         },
       });
-      return reply.code(201).send(created);
+      return reply.code(201).send({
+        ...created,
+        // Lo que la pantalla tiene que mostrarle a la encargada apenas guarda.
+        avisosPrecio: avisos.map((a) => ({ ...a, mensaje: textoAlerta(a) })),
+      });
     },
   );
 
@@ -477,6 +484,134 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // PATCH /admin/facturas/:id/proveedor — reasignar el proveedor de una
+  // factura y, opcionalmente, RECORDAR el vínculo.
+  //
+  // El nombre impreso en el comprobante casi nunca es el que el local usa
+  // ("GRAFIPACK SAN MARTIN S.R.L." contra "Grafipack"). Cuando el OCR no
+  // acierta, la encargada elige el proveedor de verdad acá; si además guarda
+  // el alias, la próxima factura con ese mismo nombre impreso entra derecho al
+  // proveedor correcto, sin intervención.
+  fastify.patch(
+    '/admin/facturas/:id/proveedor',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          proveedorId: z.string().uuid(),
+          /// Guardar el nombre que traía la factura como alias del proveedor
+          /// elegido. Default true: es el punto de la pantalla.
+          guardarAlias: z.boolean().default(true),
+          /// Qué nombre guardar. Si no viene, se usa el del proveedor que la
+          /// factura tenía asignado — que es el que leyó el OCR.
+          aliasNombre: z.string().min(1).max(160).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as {
+        proveedorId: string;
+        guardarAlias: boolean;
+        aliasNombre?: string;
+      };
+
+      const factura = await prisma.facturaRecibida.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          estado: true,
+          proveedorId: true,
+          razonSocialEmisor: true,
+          proveedor: { select: { nombre: true } },
+        },
+      });
+      if (!factura) return reply.code(404).send({ error: 'Factura no encontrada' });
+
+      const destino = await prisma.proveedor.findUnique({
+        where: { id: body.proveedorId },
+        select: { id: true, nombre: true },
+      });
+      if (!destino) return reply.code(404).send({ error: 'Proveedor no encontrado' });
+      if (destino.id === factura.proveedorId) {
+        return reply.code(400).send({ error: 'La factura ya es de ese proveedor' });
+      }
+
+      // El nombre a recordar: el que vino en la factura. Casi siempre es el
+      // del proveedor que el OCR creó de más y que estamos abandonando.
+      const nombreAlias =
+        body.aliasNombre ?? factura.proveedor?.nombre ?? factura.razonSocialEmisor ?? null;
+      const normalizado = nombreAlias ? normalizarNombre(nombreAlias) : '';
+
+      let aliasGuardado: string | null = null;
+      let aliasConflicto: string | null = null;
+
+      await prisma.$transaction(async (tx) => {
+        await tx.facturaRecibida.update({
+          where: { id },
+          data: { proveedorId: destino.id },
+        });
+        await recordAudit({
+          tabla: 'facturas_recibidas',
+          registroId: id,
+          accion: 'UPDATE',
+          usuarioId: req.usuario!.id,
+          valorAnterior: { proveedorId: factura.proveedorId, proveedor: factura.proveedor?.nombre },
+          valorNuevo: { proveedorId: destino.id, proveedor: destino.nombre },
+          contexto: { motivo: 'reasignacion manual de proveedor' },
+          tx,
+        });
+
+        if (!body.guardarAlias || !normalizado) return;
+
+        // Un mismo nombre no puede apuntar a dos proveedores. Si ya existe
+        // apuntando a OTRO, no se pisa en silencio: se avisa. Pisarlo
+        // redirigiría facturas futuras sin que nadie se entere.
+        const existente = await tx.proveedorAlias.findUnique({
+          where: { nombreNormalizado: normalizado },
+          select: { id: true, proveedorId: true },
+        });
+        if (existente && existente.proveedorId !== destino.id) {
+          aliasConflicto = nombreAlias;
+          return;
+        }
+        if (existente) {
+          aliasGuardado = nombreAlias;
+          return;
+        }
+
+        const alias = await tx.proveedorAlias.create({
+          data: {
+            proveedorId: destino.id,
+            nombreOriginal: (nombreAlias ?? '').slice(0, 160),
+            nombreNormalizado: normalizado,
+            origen: 'ocr',
+          },
+          select: { id: true },
+        });
+        // Sin audit no se replica a la nube (ver replicator.ts). El alias
+        // tiene que viajar, o el mirror resolvería distinto que S1.
+        await recordAudit({
+          tabla: 'proveedor_alias',
+          registroId: alias.id,
+          accion: 'INSERT',
+          usuarioId: req.usuario!.id,
+          valorNuevo: { proveedorId: destino.id, nombre: nombreAlias },
+          tx,
+        });
+        aliasGuardado = nombreAlias;
+      });
+
+      return reply.send({
+        ok: true,
+        proveedor: destino,
+        aliasGuardado,
+        aliasConflicto,
+      });
+    },
+  );
+
   // GET /admin/facturas — listado (inbox). Filtra por estado (ej. la bandeja
   // de "sin validar" del flujo OCR). Liviano: para la lista, no el detalle.
   fastify.get(
@@ -497,10 +632,12 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           ...paginacionSchema,
           // LEGACY: algunos llamadores viejos mandan `limit` sin paginar.
           limit: z.coerce.number().int().min(1).max(200).optional(),
+          // Mismo resultado en Excel, sin paginar. Ver la nota en /admin/movimientos.
+          formato: z.enum(['json', 'xlsx']).optional(),
         }),
       },
     },
-    async (req) => {
+    async (req, reply) => {
       const q = req.query as {
         estado?: string;
         q?: string;
@@ -510,6 +647,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         page: number;
         pageSize: number;
         limit?: number;
+        formato?: 'json' | 'xlsx';
       };
 
       const ft = await resolverFiltroTemporal({
@@ -534,6 +672,108 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           ],
         }),
       };
+
+      if (q.formato === 'xlsx') {
+        const TOPE = 5000;
+        const [filas, totalFilas] = await Promise.all([
+          prisma.facturaRecibida.findMany({
+            where,
+            select: {
+              numero: true,
+              puntoVenta: true,
+              tipoComprobante: true,
+              fechaEmision: true,
+              creadoAt: true,
+              estado: true,
+              origen: true,
+              ocrConfianza: true,
+              netoGravado: true,
+              netoNoGravado: true,
+              iva21: true,
+              iva10_5: true,
+              iva27: true,
+              otrosImpuestos: true,
+              total: true,
+              totalPagado: true,
+              observaciones: true,
+              proveedor: { select: { nombre: true, cuit: true } },
+              _count: { select: { items: true } },
+            },
+            orderBy: { creadoAt: 'desc' },
+            take: TOPE,
+          }),
+          prisma.facturaRecibida.count({ where }),
+        ]);
+        const buf = await construirExcelBusqueda({
+          titulo: 'Facturas recibidas',
+          filtros: descripcionFiltros({
+            periodo: q.periodo,
+            desde: ft.desde,
+            hasta: ft.hasta,
+            texto,
+            extra: q.estado ? `Estado: ${q.estado}` : undefined,
+          }),
+          columnas: [
+            { header: 'Proveedor', key: 'proveedor', width: 32 },
+            { header: 'CUIT', key: 'cuit', width: 16 },
+            { header: 'Tipo', key: 'tipo', width: 10 },
+            { header: 'Punto de venta', key: 'pv', width: 14 },
+            { header: 'Número', key: 'numero', width: 18 },
+            { header: 'Fecha emisión', key: 'fechaEmision', tipo: 'fecha' },
+            { header: 'Cargada el', key: 'creado', tipo: 'fecha' },
+            { header: 'Estado', key: 'estado', width: 22 },
+            { header: 'Origen', key: 'origen', width: 16 },
+            { header: 'Confianza OCR', key: 'confianza', tipo: 'numero', width: 14 },
+            { header: 'Ítems', key: 'items', tipo: 'numero', width: 8 },
+            { header: 'Observaciones', key: 'observaciones', width: 34 },
+            { header: 'Neto gravado', key: 'netoGravado', tipo: 'dinero' },
+            { header: 'Neto no gravado', key: 'netoNoGravado', tipo: 'dinero' },
+            { header: 'IVA', key: 'iva', tipo: 'dinero' },
+            { header: 'Otros impuestos', key: 'otros', tipo: 'dinero' },
+            { header: 'Total', key: 'total', tipo: 'dinero' },
+            { header: 'Pagado', key: 'pagado', tipo: 'dinero' },
+            { header: 'Saldo', key: 'saldo', tipo: 'dinero' },
+          ],
+          filas: filas.map((f) => ({
+            proveedor: f.proveedor?.nombre ?? '',
+            cuit: f.proveedor?.cuit ?? '',
+            tipo: f.tipoComprobante,
+            pv: f.puntoVenta ?? '',
+            numero: f.numero,
+            fechaEmision: f.fechaEmision,
+            creado: f.creadoAt,
+            estado: f.estado,
+            origen: f.origen,
+            confianza: f.ocrConfianza != null ? Number(f.ocrConfianza) : null,
+            items: f._count.items,
+            observaciones: f.observaciones ?? '',
+            netoGravado: Number(f.netoGravado),
+            netoNoGravado: Number(f.netoNoGravado),
+            // Las tres alícuotas se suman en una sola columna: separarlas es
+            // ruido para lo que la encargada mira, y el detalle sigue en la
+            // ficha de la factura.
+            iva: Number(f.iva21) + Number(f.iva10_5) + Number(f.iva27),
+            otros: Number(f.otrosImpuestos),
+            total: Number(f.total),
+            pagado: Number(f.totalPagado),
+            saldo: Number(f.total) - Number(f.totalPagado),
+          })),
+          totales: [
+            { etiqueta: 'TOTAL FACTURADO', columna: 'total' },
+            { etiqueta: 'SALDO A PAGAR', columna: 'saldo' },
+            { etiqueta: 'Total IVA', columna: 'iva' },
+            { etiqueta: 'Cantidad de facturas', valor: filas.length },
+          ],
+          hayMas:
+            totalFilas > filas.length
+              ? { exportadas: filas.length, totales: totalFilas }
+              : undefined,
+        });
+        return reply
+          .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('facturas')}"`)
+          .send(buf);
+      }
 
       // `limit` legacy manda: si vino, no paginamos (compat con la bandeja OCR).
       const pageSize = q.limit ?? q.pageSize;
@@ -690,8 +930,9 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
 
   // POST /admin/facturas/:id/validar — el humano ACEPTA la factura leída por
   // OCR. PENDIENTE_VALIDACION → PENDIENTE_PAGO. Marca validadaAt + quién.
-  // Actualiza precio último por insumo (si hay items linkeados). NO genera
-  // ningún pago ni movimiento de cuenta — eso es el flujo de pago aparte.
+  // Si algún insumo vino más caro que la última vez, deja un AVISO pendiente
+  // (no actualiza el precio solo). NO genera ningún pago ni movimiento de
+  // cuenta — eso es el flujo de pago aparte.
   fastify.post(
     '/admin/facturas/:id/validar',
     {
@@ -712,6 +953,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         return reply.code(409).send({ error: 'La factura no está pendiente de validación', estado: factura.estado });
       }
 
+      let avisos: Awaited<ReturnType<typeof detectarAumentos>> = [];
       await prisma.$transaction(async (tx) => {
         await tx.facturaRecibida.update({
           where: { id },
@@ -721,23 +963,10 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
             usuarioValidacionId: req.usuario!.id,
           },
         });
-        // Precio último por insumo+proveedor (solo items linkeados a un insumo).
-        for (const it of factura.items) {
-          if (!it.insumoId) continue;
-          const existing = await tx.insumoProveedor.findUnique({
-            where: { insumoId_proveedorId: { insumoId: it.insumoId, proveedorId: factura.proveedorId } },
-          });
-          if (!existing || !existing.fechaUltimoPrecio || existing.fechaUltimoPrecio < factura.fechaEmision) {
-            await tx.insumoProveedor.upsert({
-              where: { insumoId_proveedorId: { insumoId: it.insumoId, proveedorId: factura.proveedorId } },
-              create: {
-                insumoId: it.insumoId, proveedorId: factura.proveedorId,
-                precioUltimo: it.precioUnitario, fechaUltimoPrecio: factura.fechaEmision, esPrincipal: false,
-              },
-              update: { precioUltimo: it.precioUnitario, fechaUltimoPrecio: factura.fechaEmision },
-            });
-          }
-        }
+        // El precio ya no se pisa en silencio: si el insumo tenía uno
+        // anterior, esto deja un aviso PENDIENTE en vez de actualizarlo.
+        // Es el mismo criterio que en el alta manual — ver alertas-precio.ts.
+        avisos = await detectarAumentos({ facturaId: id, tx });
         await recordAudit({
           tabla: 'facturas_recibidas',
           registroId: id,
@@ -748,7 +977,12 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           tx,
         });
       });
-      return reply.send({ ok: true, id, estado: 'PENDIENTE_PAGO' });
+      return reply.send({
+        ok: true,
+        id,
+        estado: 'PENDIENTE_PAGO',
+        avisosPrecio: avisos.map((a) => ({ ...a, mensaje: textoAlerta(a) })),
+      });
     },
   );
 
@@ -818,6 +1052,9 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           q: z.string().optional(),
           proveedorId: z.string().uuid().optional(),
           categoria: z.string().optional(),
+          // Sin esto, desactivar un insumo desde la ficha del proveedor lo
+          // hacía desaparecer de la lista y no había forma de reactivarlo.
+          incluirInactivos: queryBool(),
           limit: z.coerce.number().int().min(1).max(500).default(200),
         }),
       },
@@ -827,11 +1064,12 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         q?: string;
         proveedorId?: string;
         categoria?: string;
+        incluirInactivos?: boolean;
         limit: number;
       };
       const insumos = await prisma.insumo.findMany({
         where: {
-          activo: true,
+          ...(q.incluirInactivos ? {} : { activo: true }),
           // Multi-campo: nombre, presentación, observaciones y el nombre del
           // proveedor que lo vende (así "buscar por proveedor" trae sus insumos).
           ...(q.q && {
@@ -909,9 +1147,14 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           return {
             id: i.id,
             nombre: i.nombre,
+            activo: i.activo,
             categoria: i.categoria,
             unidadCompra: i.unidadCompra,
             presentacion: i.presentacion,
+            // El nombre con el que figura en la hoja `Compras`: es lo que ata
+            // el insumo a su fila del Excel. Si está vacío, las cantidades
+            // compradas no se le van a poder escribir.
+            nombreExcelCompras: i.nombreExcelCompras,
             stockActual: i.stockActual.toString(),
             stockMinimo: i.stockMinimo?.toString() ?? null,
             proveedorPrincipal: i.proveedorPrincipal,
@@ -1852,6 +2095,619 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         excedente: excedente.toFixed(2),
         observacion: observacionFinal,
       });
+    },
+  );
+
+  // ══════════════════════════════════════════════════════════════════════
+  //   EXCEL "Proveedores 2026.xlsx" — hoja Deudas
+  // ══════════════════════════════════════════════════════════════════════
+
+  // Diagnóstico de dónde salen los Excels.
+  //
+  // Existe por un motivo concreto: los archivos hay que COMPARTIRLOS con la
+  // cuenta de servicio, y esa cuenta es un mail largo que nadie tiene a mano.
+  // Sin este endpoint, "Drive dice que no encuentra el archivo" se debuggea a
+  // ciegas; con él se ve el mail para pegar en "Compartir" y qué archivos
+  // están efectivamente al alcance.
+  fastify.get(
+    '/admin/excel/origen',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const origen = origenExcel();
+      const problema = configuracionIncompleta();
+      const nombres = ['Proveedores 2026.xlsx', 'CASHFLOW 2026.xlsx', 'Lista de Precios.xlsx'];
+      const archivos: Array<{ nombre: string; encontrado: boolean; detalle: string | null }> = [];
+      for (const nombre of nombres) {
+        try {
+          const ref = await ubicar(nombre);
+          archivos.push({
+            nombre,
+            encontrado: ref !== null,
+            detalle:
+              ref === null
+                ? null
+                : ref.origen === 'drive'
+                  ? ref.archivo.esHojaGoogle
+                    ? 'hoja nativa de Google (sólo lectura)'
+                    : 'xlsx en Drive'
+                  : ref.ruta,
+          });
+        } catch (e) {
+          archivos.push({
+            nombre,
+            encontrado: false,
+            detalle: e instanceof Error ? e.message : 'error',
+          });
+        }
+      }
+      return {
+        origen,
+        problema,
+        cuentaDeServicio: driveCuenta(),
+        carpetaId: process.env.GOOGLE_DRIVE_FOLDER_ID ?? null,
+        archivos,
+      };
+    },
+  );
+
+  // Las filas del Excel + las semanas que tiene el archivo. Es lo que la
+  // pantalla de mapeo necesita para ofrecer las etiquetas reales en vez de
+  // hacer que alguien las tipee (y las tipee mal).
+  fastify.get(
+    '/admin/excel-proveedores/estructura',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async (_req, reply) => {
+      try {
+        const est = await leerEtiquetasDelExcel();
+        const mapeos = await prisma.mapeoExcelProveedor.findMany({
+          include: { proveedor: { select: { id: true, nombre: true } } },
+        });
+        // Sugerencia de mapeo para las filas que todavía no tienen ninguno.
+        // Sugerencia, no decisión: la confirma un humano. Mezclar la cuenta
+        // corriente de dos proveedores se descubre tarde y se limpia a mano.
+        const proveedores = await prisma.proveedor.findMany({
+          where: { activo: true },
+          select: { id: true, nombre: true, razonSocial: true },
+        });
+        const conMapeo = new Set(mapeos.map((m) => m.etiquetaExcel));
+        const sugerencias = est.etiquetas
+          .filter((e) => !conMapeo.has(e))
+          .map((e) => ({ etiqueta: e, sugerido: buscarProveedorParecido(e, proveedores) }))
+          .filter((s) => s.sugerido);
+
+        return {
+          ...est,
+          mapeos: mapeos.map((m) => ({
+            id: m.id,
+            etiquetaExcel: m.etiquetaExcel,
+            proveedorId: m.proveedorId,
+            proveedorNombre: m.proveedor.nombre,
+            tiposComprobante: m.tiposComprobante,
+            activo: m.activo,
+          })),
+          sugerencias,
+        };
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : 'Error leyendo el Excel' });
+      }
+    },
+  );
+
+  // Crear/actualizar el mapeo de una fila.
+  fastify.post(
+    '/admin/excel-proveedores/mapeo',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z.object({
+          etiquetaExcel: z.string().min(1).max(120),
+          proveedorId: z.string().uuid(),
+          // Vacío = todos los comprobantes de ese proveedor van a esta fila.
+          // Con valores, se parte el proveedor entre filas ("en Blanco" /
+          // "en Negro").
+          tiposComprobante: z.array(z.string().max(30)).max(12).default([]),
+          activo: z.boolean().default(true),
+        }),
+      },
+    },
+    async (req) => {
+      const b = req.body as {
+        etiquetaExcel: string;
+        proveedorId: string;
+        tiposComprobante: string[];
+        activo: boolean;
+      };
+      const m = await prisma.mapeoExcelProveedor.upsert({
+        where: {
+          etiquetaExcel_proveedorId: {
+            etiquetaExcel: b.etiquetaExcel,
+            proveedorId: b.proveedorId,
+          },
+        },
+        create: b,
+        update: { tiposComprobante: b.tiposComprobante, activo: b.activo },
+      });
+      await recordAudit({
+        tabla: 'mapeo_excel_proveedores',
+        registroId: m.id,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: b as unknown as Record<string, unknown>,
+      });
+      return m;
+    },
+  );
+
+  fastify.delete(
+    '/admin/excel-proveedores/mapeo/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const existe = await prisma.mapeoExcelProveedor.findUnique({ where: { id } });
+      if (!existe) return reply.code(404).send({ error: 'Mapeo no encontrado' });
+      await prisma.mapeoExcelProveedor.delete({ where: { id } });
+      await recordAudit({
+        tabla: 'mapeo_excel_proveedores',
+        registroId: id,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { etiquetaExcel: existe.etiquetaExcel },
+      });
+      return { ok: true };
+    },
+  );
+
+  // Volcar la semana al Excel.
+  //
+  // `simular=true` (el default) NO escribe: devuelve exactamente lo que haría.
+  // Es a propósito — el archivo es el cuaderno de trabajo de la encargada, y
+  // se mira antes de tocarlo.
+  fastify.post(
+    '/admin/excel-proveedores/volcar',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z
+          .object({
+            fecha: z.string().datetime().optional(),
+            simular: z.boolean().default(true),
+            // Pisar lo que ella ya escribió. Requiere pedirlo explícitamente.
+            pisarDiferencias: z.boolean().default(false),
+          })
+          .optional(),
+      },
+    },
+    async (req, reply) => {
+      const b = (req.body ?? {}) as {
+        fecha?: string;
+        simular?: boolean;
+        pisarDiferencias?: boolean;
+      };
+      try {
+        const r = await volcarSemanaProveedores({
+          fecha: b.fecha ? new Date(b.fecha) : undefined,
+          simular: b.simular !== false,
+          pisarDiferencias: b.pisarDiferencias === true,
+        });
+        if (!r.simulado && r.escritas > 0) {
+          await recordAudit({
+            tabla: 'mapeo_excel_proveedores',
+            registroId: '00000000-0000-0000-0000-000000000000',
+            accion: 'UPDATE',
+            usuarioId: req.usuario!.id,
+            valorNuevo: {
+              accion: 'volcado al Excel de proveedores',
+              semana: r.semana,
+              celdas: r.escritas,
+              diferencias: r.diferencias,
+            },
+          });
+        }
+        return r;
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : 'No se pudo volcar' });
+      }
+    },
+  );
+
+  // ══════════════════════════════════════════════════════════════════════
+  //   Hoja `Compras` — catálogo de compra y cantidades por semana
+  // ══════════════════════════════════════════════════════════════════════
+
+  // Traer proveedores y productos de la hoja al sistema. Idempotente: se
+  // identifica cada insumo por (proveedor, nombre en el Excel), así que
+  // correrlo de nuevo actualiza en vez de duplicar.
+  fastify.post(
+    '/admin/excel-compras/importar',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { body: z.object({ simular: z.boolean().default(true) }).optional() },
+    },
+    async (req, reply) => {
+      const simular = (req.body as { simular?: boolean } | undefined)?.simular !== false;
+      try {
+        const r = await importarCompras({ simular });
+        if (!simular) {
+          await recordAudit({
+            tabla: 'insumos',
+            registroId: '00000000-0000-0000-0000-000000000000',
+            accion: 'INSERT',
+            usuarioId: req.usuario!.id,
+            valorNuevo: {
+              accion: 'import de la hoja Compras',
+              creados: r.insumosCreados,
+              actualizados: r.insumosActualizados,
+              proveedoresNuevos: r.proveedoresNuevos.length,
+            },
+          });
+        }
+        return r;
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : 'No se pudo importar' });
+      }
+    },
+  );
+
+  // Volcar a la hoja las cantidades compradas de la semana.
+  fastify.post(
+    '/admin/excel-compras/volcar',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z
+          .object({
+            fecha: z.string().datetime().optional(),
+            simular: z.boolean().default(true),
+            pisarDiferencias: z.boolean().default(false),
+          })
+          .optional(),
+      },
+    },
+    async (req, reply) => {
+      const b = (req.body ?? {}) as {
+        fecha?: string;
+        simular?: boolean;
+        pisarDiferencias?: boolean;
+      };
+      try {
+        return await volcarCantidadesCompras({
+          fecha: b.fecha ? new Date(b.fecha) : undefined,
+          simular: b.simular !== false,
+          pisarDiferencias: b.pisarDiferencias === true,
+        });
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : 'No se pudo volcar' });
+      }
+    },
+  );
+
+  // ══════════════════════════════════════════════════════════════════════
+  //   Avisos de aumento de precio
+  // ══════════════════════════════════════════════════════════════════════
+
+  fastify.get(
+    '/admin/alertas-precio',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        querystring: z.object({
+          estado: z.enum(['PENDIENTE', 'APROBADA', 'RECHAZADA']).optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const { estado } = req.query as { estado?: 'PENDIENTE' | 'APROBADA' | 'RECHAZADA' };
+      const alertas = await prisma.alertaPrecioInsumo.findMany({
+        where: { estado: estado ?? 'PENDIENTE' },
+        orderBy: [{ detectadaAt: 'desc' }],
+        take: 200,
+        include: {
+          insumo: { select: { id: true, nombre: true, presentacion: true } },
+          proveedor: { select: { id: true, nombre: true } },
+        },
+      });
+      return {
+        alertas: alertas.map((a) => {
+          const datos = {
+            insumoNombre: a.insumo.nombre,
+            variacionPct: Number(a.variacionPct),
+            precioAnterior: Number(a.precioAnterior),
+            precioNuevo: Number(a.precioNuevo),
+          };
+          return {
+            id: a.id,
+            ...datos,
+            presentacion: a.insumo.presentacion,
+            // Los ids, para que la pantalla pueda linkear a la ficha del
+            // proveedor sin tener que adivinarla por el nombre.
+            insumoId: a.insumoId,
+            proveedorId: a.proveedorId,
+            proveedor: a.proveedor.nombre,
+            estado: a.estado,
+            detectadaAt: a.detectadaAt,
+            aplicadaEnExcel: a.aplicadaEnExcel,
+            // El texto ya armado: que la pantalla no lo re-invente distinto.
+            mensaje: textoAlerta(datos),
+          };
+        }),
+      };
+    },
+  );
+
+  // Aprobar o rechazar. Aprobar es lo ÚNICO que mueve el precio del sistema.
+  fastify.post(
+    '/admin/alertas-precio/:id/resolver',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          aprobar: z.boolean(),
+          // Actualizar también la columna Precio de la hoja `Compras`. Default
+          // true: si el Excel queda con el precio viejo, la encargada sigue
+          // pidiendo con ese numero y el aviso no sirvió de nada.
+          actualizarExcel: z.boolean().default(true),
+          observaciones: z.string().max(500).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const b = req.body as { aprobar: boolean; actualizarExcel: boolean; observaciones?: string };
+      const alerta = await prisma.alertaPrecioInsumo.findUnique({
+        where: { id },
+        include: {
+          insumo: { select: { id: true, nombre: true, nombreExcelCompras: true } },
+          proveedor: { select: { id: true, nombre: true } },
+        },
+      });
+      if (!alerta) return reply.code(404).send({ error: 'Aviso no encontrado' });
+      if (alerta.estado !== 'PENDIENTE') {
+        return reply.code(400).send({ error: 'Ese aviso ya estaba resuelto' });
+      }
+
+      let refExcel: string | null = null;
+      if (b.aprobar) {
+        await prisma.insumoProveedor.upsert({
+          where: {
+            insumoId_proveedorId: { insumoId: alerta.insumoId, proveedorId: alerta.proveedorId },
+          },
+          create: {
+            insumoId: alerta.insumoId,
+            proveedorId: alerta.proveedorId,
+            precioUltimo: alerta.precioNuevo.toFixed(2),
+            fechaUltimoPrecio: new Date(),
+          },
+          update: { precioUltimo: alerta.precioNuevo.toFixed(2), fechaUltimoPrecio: new Date() },
+        });
+
+        // El Excel va DESPUÉS y en su propio try: si el archivo no está a mano
+        // (la carpeta de Drive no montada, el archivo abierto), el precio del
+        // sistema ya quedó bien y no se pierde la decisión de la encargada.
+        if (b.actualizarExcel && alerta.insumo.nombreExcelCompras) {
+          try {
+            const r = await actualizarPrecioEnExcel({
+              proveedorNombre: alerta.proveedor.nombre,
+              nombreExcel: alerta.insumo.nombreExcelCompras,
+              precioNuevo: Number(alerta.precioNuevo),
+            });
+            refExcel = r?.ref ?? null;
+          } catch {
+            refExcel = null;
+          }
+        }
+      }
+
+      const actualizada = await prisma.alertaPrecioInsumo.update({
+        where: { id },
+        data: {
+          estado: b.aprobar ? 'APROBADA' : 'RECHAZADA',
+          resueltaAt: new Date(),
+          usuarioId: req.usuario!.id,
+          aplicadaEnExcel: Boolean(refExcel),
+          observaciones: b.observaciones ?? null,
+        },
+      });
+      await recordAudit({
+        tabla: 'alertas_precio_insumo',
+        registroId: id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { estado: 'PENDIENTE', precio: alerta.precioAnterior.toFixed(2) },
+        valorNuevo: {
+          estado: actualizada.estado,
+          precio: alerta.precioNuevo.toFixed(2),
+          insumo: alerta.insumo.nombre,
+          celdaExcel: refExcel,
+        },
+      });
+      return {
+        ...actualizada,
+        celdaExcel: refExcel,
+        avisoExcel: b.aprobar && b.actualizarExcel && !refExcel
+          ? 'El precio se actualizó en el sistema, pero no se pudo escribir en el Excel. Revisá que el archivo esté accesible.'
+          : null,
+      };
+    },
+  );
+
+  // PATCH /admin/insumos-catalogo/:id — editar un insumo desde la pestaña
+  // "Insumos" de la ficha del proveedor.
+  //
+  // El PRECIO no es del insumo sino del vínculo insumo-proveedor: el mismo
+  // producto puede costar distinto según a quién se le compre. Por eso se pasa
+  // `proveedorId` junto con `precio` — sin eso no se sabría qué precio se está
+  // editando.
+  fastify.patch(
+    '/admin/insumos-catalogo/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          nombre: z.string().min(1).max(160).optional(),
+          categoria: z.enum(['VERDULERIA','LACTEOS','CARNES','POLLO','HUEVOS','HARINAS','CONDIMENTOS','ENVASES','LIMPIEZA','BEBIDAS','SIN_TACC','POSTRES','OTROS']).optional(),
+          unidadCompra: z.enum(['KG','GRAMOS','UNIDAD','LITRO','CAJA','BOLSA','PAQUETE','DOCENA','OTRO']).optional(),
+          presentacion: z.string().max(160).nullable().optional(),
+          observaciones: z.string().max(1000).nullable().optional(),
+          activo: z.boolean().optional(),
+          stockMinimo: z.string().regex(/^\d+(\.\d{1,3})?$/).nullable().optional(),
+          // Precio para un proveedor puntual.
+          proveedorId: z.string().uuid().optional(),
+          precio: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const b = req.body as Record<string, unknown> & {
+        proveedorId?: string;
+        precio?: string;
+      };
+      const previo = await prisma.insumo.findUnique({
+        where: { id },
+        select: { id: true, nombre: true, presentacion: true, unidadCompra: true, categoria: true },
+      });
+      if (!previo) return reply.code(404).send({ error: 'Insumo no encontrado' });
+
+      if (b.precio !== undefined && !b.proveedorId) {
+        return reply.code(400).send({
+          error: 'Para cambiar el precio hace falta decir de qué proveedor es.',
+        });
+      }
+
+      const datos: Record<string, unknown> = {};
+      for (const campo of [
+        'nombre',
+        'categoria',
+        'unidadCompra',
+        'presentacion',
+        'observaciones',
+        'activo',
+        'stockMinimo',
+      ]) {
+        if (b[campo] !== undefined) datos[campo] = b[campo];
+      }
+
+      const actualizado = await prisma.$transaction(async (tx) => {
+        const ins = Object.keys(datos).length
+          ? await tx.insumo.update({ where: { id }, data: datos })
+          : await tx.insumo.findUniqueOrThrow({ where: { id } });
+
+        if (b.precio !== undefined && b.proveedorId) {
+          await tx.insumoProveedor.upsert({
+            where: { insumoId_proveedorId: { insumoId: id, proveedorId: b.proveedorId } },
+            create: {
+              insumoId: id,
+              proveedorId: b.proveedorId,
+              precioUltimo: b.precio,
+              fechaUltimoPrecio: new Date(),
+            },
+            update: { precioUltimo: b.precio, fechaUltimoPrecio: new Date() },
+          });
+          // Un precio corregido a mano cierra el aviso pendiente de ese insumo:
+          // si no, la encargada arregla el precio y el aviso le queda ahí
+          // reclamando algo que ya resolvió.
+          await tx.alertaPrecioInsumo.updateMany({
+            where: { insumoId: id, proveedorId: b.proveedorId, estado: 'PENDIENTE' },
+            data: {
+              estado: 'APROBADA',
+              resueltaAt: new Date(),
+              usuarioId: req.usuario!.id,
+              observaciones: 'Resuelto al editar el precio a mano desde la ficha del proveedor',
+            },
+          });
+        }
+        return ins;
+      });
+
+      await recordAudit({
+        tabla: 'insumos',
+        registroId: id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: { nombre: previo.nombre, presentacion: previo.presentacion },
+        valorNuevo: { ...datos, ...(b.precio ? { precio: b.precio } : {}) },
+      });
+      return actualizado;
+    },
+  );
+
+  // Vincular un insumo YA EXISTENTE a este proveedor (con su precio).
+  // Sirve cuando el mismo producto se le empieza a comprar a otro.
+  fastify.post(
+    '/admin/proveedores/:id/insumos',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          insumoId: z.string().uuid(),
+          precio: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+          esPrincipal: z.boolean().default(false),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const b = req.body as { insumoId: string; precio?: string; esPrincipal: boolean };
+      const insumo = await prisma.insumo.findUnique({ where: { id: b.insumoId } });
+      if (!insumo) return reply.code(404).send({ error: 'Insumo no encontrado' });
+
+      const v = await prisma.insumoProveedor.upsert({
+        where: { insumoId_proveedorId: { insumoId: b.insumoId, proveedorId: id } },
+        create: {
+          insumoId: b.insumoId,
+          proveedorId: id,
+          precioUltimo: b.precio ?? null,
+          fechaUltimoPrecio: b.precio ? new Date() : null,
+          esPrincipal: b.esPrincipal,
+        },
+        update: {
+          ...(b.precio ? { precioUltimo: b.precio, fechaUltimoPrecio: new Date() } : {}),
+          esPrincipal: b.esPrincipal,
+        },
+      });
+      await recordAudit({
+        tabla: 'insumo_proveedores',
+        registroId: `${b.insumoId}:${id}`,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { insumo: insumo.nombre, precio: b.precio ?? null },
+      });
+      return v;
+    },
+  );
+
+  // Desvincular un insumo de este proveedor. No borra el insumo: puede seguir
+  // comprandose a otro.
+  fastify.delete(
+    '/admin/proveedores/:id/insumos/:insumoId',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid(), insumoId: z.string().uuid() }),
+      },
+    },
+    async (req, reply) => {
+      const { id, insumoId } = req.params as { id: string; insumoId: string };
+      const existe = await prisma.insumoProveedor.findUnique({
+        where: { insumoId_proveedorId: { insumoId, proveedorId: id } },
+      });
+      if (!existe) return reply.code(404).send({ error: 'Ese insumo no está vinculado a este proveedor' });
+      await prisma.insumoProveedor.delete({
+        where: { insumoId_proveedorId: { insumoId, proveedorId: id } },
+      });
+      await recordAudit({
+        tabla: 'insumo_proveedores',
+        registroId: `${insumoId}:${id}`,
+        accion: 'DELETE',
+        usuarioId: req.usuario!.id,
+      });
+      return { ok: true };
     },
   );
 }

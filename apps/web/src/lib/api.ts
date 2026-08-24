@@ -76,11 +76,37 @@ function getDemoModule() {
   return demoModulePromise;
 }
 
+/**
+ * Alfabeto sin 0/O/1/I/L: el código se dicta por teléfono y esos se confunden.
+ * Igual que el del servidor (apps/api/src/services/errores.ts).
+ */
+const ALFABETO_CODIGO = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+
+/**
+ * Código para los errores que NUNCA llegaron al servidor (internet caída, el
+ * server del local apagado). El servidor no los vio, así que no puede darles
+ * código él: se genera acá con prefijo RED para que se distinga de un error
+ * del sistema con sólo mirarlo.
+ */
+function codigoDeRed(): string {
+  let s = '';
+  for (let i = 0; i < 6; i++) {
+    s += ALFABETO_CODIGO[Math.floor(Math.random() * ALFABETO_CODIGO.length)];
+  }
+  return `STA-RED-${s}`;
+}
+
 class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
     public readonly body?: unknown,
+    /**
+     * El código que identifica ESTA falla. Viene del servidor cuando llegó a
+     * responder; si ni llegó, es un `STA-RED-…` generado acá. Se puede leer por
+     * teléfono y buscar en Admin → Errores.
+     */
+    public readonly codigo?: string,
   ) {
     super(message);
   }
@@ -190,7 +216,13 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
       await queueWrite(method, path, body, baseHeaders);
       // queueWrite siempre tira (ApiError 202 si encoló, o el error de red).
     }
-    throw new ApiError(0, e instanceof Error ? e.message : 'Error de red', undefined);
+    const codigo = codigoDeRed();
+    throw new ApiError(
+      0,
+      `No se pudo conectar con el servidor. (código ${codigo})`,
+      { motivo: e instanceof Error ? e.message : String(e) },
+      codigo,
+    );
   }
   if (!res.ok) {
     // Failover Fase 1B: el server local cayó (LAN_DOWN). La API responde
@@ -218,7 +250,11 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
       clearAuthToken();
     }
     const errBody = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, (errBody as { error?: string })?.error ?? `HTTP ${res.status}`, errBody);
+    const b = errBody as { error?: string; codigo?: string };
+    // El servidor ya mete el código dentro de `error`, así que todas las
+    // pantallas que hoy muestran el mensaje lo muestran sin tocar nada. El
+    // campo aparte queda para quien quiera mostrarlo destacado.
+    throw new ApiError(res.status, b?.error ?? `HTTP ${res.status}`, errBody, b?.codigo);
   }
   // Logout exitoso → limpiamos el token (la cookie ya la limpia el server)
   if (path === '/auth/logout' && method === 'POST') {
@@ -300,6 +336,51 @@ export function prefetch(path: string, ttlMs = 5 * 60_000): void {
   void getCached(path, ttlMs).catch(() => {
     /* swallow — el caller real reintentará */
   });
+}
+
+/**
+ * Baja un archivo del API (Excel, PDF) y dispara el "Guardar como" del browser.
+ *
+ * No se puede resolver con un `<a href>`: el API pide `Authorization: Bearer`,
+ * y una navegación normal no manda ese header — el link daría 401. Así que se
+ * baja por fetch, se arma un blob y se hace click sobre un anchor temporal.
+ *
+ * El nombre sale del `Content-Disposition` que manda el server; `nombrePorDefecto`
+ * es el plan B por si el header viene raro o falta.
+ */
+export async function descargarArchivo(path: string, nombrePorDefecto: string): Promise<void> {
+  const token = getAuthToken();
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'GET',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: token ? 'same-origin' : 'include',
+  });
+  if (!res.ok) {
+    let msg = `No se pudo generar el archivo (${res.status})`;
+    try {
+      const j = (await res.json()) as { error?: string };
+      if (j?.error) msg = j.error;
+    } catch {
+      /* el server no mandó JSON: queda el mensaje genérico */
+    }
+    throw new ApiError(res.status, msg);
+  }
+
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  const m = /filename="?([^";]+)"?/i.exec(cd);
+  const nombre = m?.[1]?.trim() || nombrePorDefecto;
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Liberar el object URL: sin esto el blob queda en memoria hasta recargar la
+  // página, y son archivos de varios MB.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export const api = {

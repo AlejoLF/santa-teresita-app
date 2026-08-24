@@ -1,6 +1,17 @@
 {
-  "_comment": "Copiá este archivo a cloud-config.json (sin .example) y completá las connection strings. main.js lo lee en el primer arranque. NO commitear la versión sin .example — está en .gitignore.",
-  "cloudDbUrl": "postgresql://postgres.<PROJECT_REF>:<PASSWORD>@aws-X-<REGION>.pooler.supabase.com:6543/postgres",
-  "_lanDbUrl_comment": "OPCIONAL. Si se setea, TODAS las cajas que reciban este build operan local-first contra el server LAN (con failover a cloudDbUrl si el LAN no responde). Vacío/ausente = cloud-first. Permite el cutover por update, sin tocar cada máquina.",
-  "lanDbUrl": "postgresql://teresita:<PASSWORD>@<IP_DEL_SERVER_LAN>:5432/teresita?schema=public"
+  "_comment": "Copiá este archivo a cloud-config.json (sin .example) y completá las URLs. main.js lo lee en el primer arranque. NO commitear la versión sin .example — está en .gitignore.",
+
+  "_modo_recomendado": "PROXY (C4): la caja NO recibe credenciales de base. Setear lanApiUrl (+ cloudApiUrl opcional) y DEJAR VACÍOS lanDbUrl y cloudDbUrl. Si lanApiUrl está presente GANA sobre lanDbUrl, así que se puede migrar sin borrar la config vieja de todas las cajas a la vez.",
+
+  "_lanApiUrl_comment": "API del servidor local (S1). La caja levanta un proxy que reenvía todo acá; S1 es el único que habla con Postgres. Si hay 2 redes, usar la IP del server de la red a la que está conectada ESA caja.",
+  "lanApiUrl": "http://<IP_DEL_SERVER_LAN>:3001",
+
+  "_cloudApiUrl_comment": "OPCIONAL. API de la nube (Railway). Solo se usa para LECTURAS cuando S1 no responde, para que la pantalla no se muera. Las escrituras nunca van acá: se encolan en el outbox local y se reproducen cuando S1 vuelve.",
+  "cloudApiUrl": "https://<tu-api>.up.railway.app",
+
+  "_legacy_comment": "══ MODO VIEJO, con credenciales de base en la caja. Solo para cajas que todavía no migraron al proxy. Poner la password de Postgres en el bundle es el pendiente de seguridad C4 — si podés usar lanApiUrl, usalo. ══",
+  "_cloudDbUrl_comment": "LEGACY. Supabase directo desde la caja.",
+  "cloudDbUrl": "",
+  "_lanDbUrl_comment": "LEGACY. Postgres del server LAN directo desde la caja. Ignorado si lanApiUrl está seteado.",
+  "lanDbUrl": ""
 }

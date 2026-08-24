@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
+import { BotonExportarExcel } from '@/components/admin/BotonExportarExcel';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { MovimientoDetailModal } from '@/components/admin/MovimientoDetailModal';
@@ -139,30 +140,40 @@ export default function AdminMovimientosPage() {
     setPage(1);
   }, [cuentaIdParam]);
 
+  // Los filtros de la búsqueda, SIN paginación. Vive afuera del fetch para que
+  // el botón de exportar use exactamente los mismos: si armara los suyos, el
+  // Excel terminaría mostrando algo distinto de lo que hay en pantalla.
+  const paramsDeFiltros = useCallback((): URLSearchParams => {
+    const params = new URLSearchParams();
+    if (tipoFiltro) params.set('tipo', tipoFiltro);
+    if (cuentaFiltro) params.set('cuentaId', cuentaFiltro);
+    if (busquedaDebounced) params.set('q', busquedaDebounced);
+    if (periodo === 'todo') {
+      // Sin ventana temporal: el server barre toda la base y pagina.
+      params.set('periodo', 'todo');
+    } else if (periodo === 'sesion') {
+      params.set('sesion', 'actual');
+    } else if (periodo === 'sesion_anterior') {
+      params.set('sesion', 'anterior');
+    } else if (periodo === 'custom') {
+      const desde = fechaInputAIso(customDesde, false);
+      const hasta = fechaInputAIso(customHasta, true);
+      if (desde) params.set('desde', desde);
+      if (hasta) params.set('hasta', hasta);
+    } else {
+      const { desde, hasta } = rangoDeFecha(periodo);
+      if (desde) params.set('desde', desde);
+      if (hasta) params.set('hasta', hasta);
+    }
+    return params;
+  }, [tipoFiltro, cuentaFiltro, busquedaDebounced, periodo, customDesde, customHasta]);
+
   const fetchMovimientos = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
-      if (tipoFiltro) params.set('tipo', tipoFiltro);
-      if (cuentaFiltro) params.set('cuentaId', cuentaFiltro);
-      if (busquedaDebounced) params.set('q', busquedaDebounced);
-      if (periodo === 'todo') {
-        // Sin ventana temporal: el server barre toda la base y pagina.
-        params.set('periodo', 'todo');
-      } else if (periodo === 'sesion') {
-        params.set('sesion', 'actual');
-      } else if (periodo === 'sesion_anterior') {
-        params.set('sesion', 'anterior');
-      } else if (periodo === 'custom') {
-        const desde = fechaInputAIso(customDesde, false);
-        const hasta = fechaInputAIso(customHasta, true);
-        if (desde) params.set('desde', desde);
-        if (hasta) params.set('hasta', hasta);
-      } else {
-        const { desde, hasta } = rangoDeFecha(periodo);
-        if (desde) params.set('desde', desde);
-        if (hasta) params.set('hasta', hasta);
-      }
+      const params = paramsDeFiltros();
+      params.set('page', String(page));
+      params.set('pageSize', String(PAGE_SIZE));
       const res = await api.get<Listado>(`/admin/movimientos?${params.toString()}`);
       setData(res);
       setError(null);
@@ -279,6 +290,11 @@ export default function AdminMovimientosPage() {
               {periodo === 'todo' && !loading && data.total > 0 && ' · base completa'}
             </span>
           )}
+          <BotonExportarExcel
+            path={`/admin/movimientos?${paramsDeFiltros().toString()}`}
+            nombre="movimientos.xlsx"
+            deshabilitado={!data || data.total === 0}
+          />
         </div>
 
         {/* Período */}

@@ -2,6 +2,12 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@sta/db/client';
 import {
+  erroresRecientes,
+  ReglaNegocioError,
+  type CategoriaError,
+} from '../services/errores.js';
+import { aplicarDevolucion, asentarDevolucion } from '../services/banco-horas.js';
+import {
   EstadoVenta,
   EstadoLiquidacion,
   EstadoMovimiento,
@@ -20,6 +26,11 @@ import {
   posponerAprobacion,
 } from '../services/excel-sync.js';
 import { cargarCierre, generarExcelCierre, generarHtmlCierre } from '../services/cierre-export.js';
+import {
+  construirExcelBusqueda,
+  descripcionFiltros,
+  nombreArchivoExport,
+} from '../services/export-busqueda.js';
 import { sendMail, sendTestEmail } from '../services/mailer.js';
 import { actualizarCashflow } from '../services/excel-writeback.js';
 import {
@@ -163,6 +174,34 @@ async function syncListasCustomDeProducto(
  * Todas las queries usan agregaciones de Postgres (no fetch + sum en app) para que escale.
  */
 export default async function adminRoutes(fastify: FastifyInstance) {
+  // GET /admin/errores — buscar un código que reportó alguien del mostrador.
+  //
+  // Vive en memoria (ver services/errores.ts): si la base es justo lo que
+  // está fallando, un registro que necesita escribir en la base no sirve.
+  fastify.get(
+    '/admin/errores',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        querystring: z.object({
+          codigo: z.string().max(40).optional(),
+          categoria: z
+            .enum(['VAL', 'AUTH', 'HORARIO', 'DB', 'CONN', 'IMPR', 'EXCEL', 'REGLA', 'SRV'])
+            .optional(),
+          limite: z.coerce.number().int().min(1).max(300).default(100),
+        }),
+      },
+    },
+    async (req) => {
+      const q = req.query as {
+        codigo?: string;
+        categoria?: CategoriaError;
+        limite: number;
+      };
+      return { errores: erroresRecientes({ codigo: q.codigo, categoria: q.categoria, limite: q.limite }) };
+    },
+  );
+
   // GET /admin/pendientes — endpoint liviano para el badge de notificaciones
   // del layout admin. El polling del layout llamaba /admin/dashboard (5-10KB,
   // 15 queries) solo para leer 3 contadores; ahora ese poll usa este endpoint
@@ -171,17 +210,21 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     '/admin/pendientes',
     { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
     async () => {
-      const [facturasSinValidar, cambiosExcelPendientes, sesionesSinAprobar] =
+      const [facturasSinValidar, cambiosExcelPendientes, sesionesSinAprobar, avisosPrecio] =
         await Promise.all([
           prisma.facturaRecibida.count({ where: { estado: 'PENDIENTE_VALIDACION' } }),
           prisma.aprobacionExcel.count({ where: { estado: 'PENDIENTE' } }),
           prisma.sesionCaja.count({ where: { estado: 'CERRADA' } }),
+          // Un aumento sin revisar sigue costeando con el precio viejo. Va en
+          // el badge para que se note sin entrar a buscarlo.
+          prisma.alertaPrecioInsumo.count({ where: { estado: 'PENDIENTE' } }),
         ]);
       return {
         pendientes: {
           facturasSinValidar,
           cambiosExcelPendientes,
           sesionesSinAprobar,
+          avisosPrecio,
         },
       };
     },
@@ -278,6 +321,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         facturasVencenPronto,
         cambiosExcelPendientes,
         sesionesSinAprobar,
+        avisosPrecio,
         saldosCuentas,
       ] = await Promise.all([
         prisma.venta.aggregate({
@@ -374,6 +418,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         }),
         prisma.aprobacionExcel.count({ where: { estado: 'PENDIENTE' } }),
         prisma.sesionCaja.count({ where: { estado: 'CERRADA' } }),
+        prisma.alertaPrecioInsumo.count({ where: { estado: 'PENDIENTE' } }),
         prisma.cuenta.findMany({
           where: { activa: true },
           select: { id: true, nombre: true, tipo: true, saldoActual: true },
@@ -627,6 +672,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           cambiosExcelPendientes,
           sesionesSinAprobar,
           sesionesAbiertasViejas,
+          avisosPrecio,
         },
         saldosCuentas: saldosCuentas.map((c) => ({
           id: c.id,
@@ -993,10 +1039,15 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           hasta: z.string().datetime().optional(),
           page: z.coerce.number().int().min(1).default(1),
           pageSize: z.coerce.number().int().min(1).max(200).default(50),
+          // `xlsx` devuelve el MISMO resultado como Excel, sin paginar. Va en
+          // este handler y no en una ruta aparte a propósito: los filtros de
+          // abajo son largos y enredados, y duplicarlos es exactamente cómo el
+          // export termina mostrando algo distinto de lo que ve la pantalla.
+          formato: z.enum(['json', 'xlsx']).optional(),
         }),
       },
     },
-    async (req) => {
+    async (req, reply) => {
       const q = req.query as {
         tipo?: 'INGRESO' | 'EGRESO' | 'TRANSFERENCIA_INTERNA' | 'AJUSTE';
         categoriaId?: string;
@@ -1008,6 +1059,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         hasta?: string;
         page: number;
         pageSize: number;
+        formato?: 'json' | 'xlsx';
       };
 
       // Filtro temporal unificado. El `sesion` legacy se mapea a periodo; si no
@@ -1062,6 +1114,82 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           ],
         }),
       };
+      // ── Export a Excel ───────────────────────────────────────────────────
+      // Mismos filtros, sin paginar. El tope existe porque la base tiene cientos
+      // de miles de filas y un export sin límite se come la memoria del proceso;
+      // cuando corta, el archivo lo dice en la primera línea (un export truncado
+      // en silencio se lee como "esto es todo").
+      if (q.formato === 'xlsx') {
+        const TOPE = 5000;
+        const [filas, totalFilas] = await Promise.all([
+          prisma.movimiento.findMany({
+            where,
+            include: {
+              cuentaOrigen: { select: { nombre: true } },
+              cuentaDestino: { select: { nombre: true } },
+              categoria: { select: { nombre: true, tipo: true } },
+              usuario: { select: { nombre: true } },
+            },
+            orderBy: { fechaComputo: 'desc' },
+            take: TOPE,
+          }),
+          prisma.movimiento.count({ where }),
+        ]);
+        const buf = await construirExcelBusqueda({
+          titulo: 'Movimientos',
+          filtros: descripcionFiltros({
+            periodo: periodoEfectivo,
+            desde: ft.desde,
+            hasta: ft.hasta,
+            texto,
+            extra: q.tipo ? `Tipo: ${q.tipo}` : undefined,
+          }),
+          columnas: [
+            { header: 'Fecha', key: 'fecha', tipo: 'fecha' },
+            { header: 'Tipo', key: 'tipo', width: 20 },
+            { header: 'Categoría', key: 'categoria', width: 26 },
+            { header: 'Observación', key: 'observacion', width: 40 },
+            { header: 'Cuenta origen', key: 'origen' },
+            { header: 'Cuenta destino', key: 'destino' },
+            { header: 'Usuario', key: 'usuario' },
+            { header: 'Estado', key: 'estado', width: 14 },
+            { header: 'Ingreso', key: 'ingreso', tipo: 'dinero' },
+            { header: 'Egreso', key: 'egreso', tipo: 'dinero' },
+          ],
+          filas: filas.map((m) => {
+            const monto = Number(m.monto);
+            const confirmado = m.estado === EstadoMovimiento.CONFIRMADO;
+            return {
+              fecha: m.fechaComputo,
+              tipo: m.tipo,
+              categoria: m.categoria?.nombre ?? '—',
+              observacion: m.observacion ?? '',
+              origen: m.cuentaOrigen?.nombre ?? '',
+              destino: m.cuentaDestino?.nombre ?? '',
+              usuario: m.usuario?.nombre ?? '',
+              estado: m.estado,
+              // Ingresos y egresos en columnas separadas: sumar una sola de
+              // montos con signo mezclado no da nada útil.
+              ingreso: confirmado && m.tipo === 'INGRESO' ? monto : null,
+              egreso: confirmado && m.tipo === 'EGRESO' ? monto : null,
+            };
+          }),
+          totales: [
+            { etiqueta: 'TOTAL INGRESOS', columna: 'ingreso' },
+            { etiqueta: 'TOTAL EGRESOS', columna: 'egreso' },
+            { etiqueta: 'Cantidad de movimientos', valor: filas.length },
+          ],
+          hayMas:
+            totalFilas > filas.length
+              ? { exportadas: filas.length, totales: totalFilas }
+              : undefined,
+        });
+        return reply
+          .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('movimientos')}"`)
+          .send(buf);
+      }
+
       const [movimientos, total, sumas] = await Promise.all([
         prisma.movimiento.findMany({
           where,
@@ -1304,6 +1432,38 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             data: { saldoActual: { increment: monto } },
           });
         }
+
+        // Devolución de préstamo cargada desde Aportes y egresos: además de
+        // entrar a la caja, tiene que BAJAR LA DEUDA del empleado. Sin esto la
+        // plata entra y el banco de horas sigue diciendo que debe todo —
+        // exactamente el descalce que la pantalla de préstamos vino a evitar.
+        //
+        // Va contra el mismo servicio que usa el botón de la ficha: dos
+        // caminos que descuentan por su cuenta terminan descontando distinto.
+        if (cat.nombre === 'Devolución de préstamo') {
+          if (!body.entidadId) {
+            throw new ReglaNegocioError(
+              'Elegí de qué empleado es la devolución: si no, la plata entra a la caja pero la deuda queda viva.',
+            );
+          }
+          const r = await aplicarDevolucion(tx, body.entidadId, monto);
+          if (r.sobrante > 0.004) {
+            throw new ReglaNegocioError(
+              r.aplicado > 0
+                ? `Ese empleado debe $${r.aplicado.toFixed(2)} y estás cargando $${monto.toFixed(2)}. Cargá como mucho lo que debe.`
+                : 'Ese empleado no tiene préstamos pendientes.',
+            );
+          }
+          await asentarDevolucion(tx, {
+            empleadoId: body.entidadId,
+            monto,
+            fecha: new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate()),
+            movimientoId: mov.id,
+            observacion: body.observacion ?? null,
+            usuarioId: req.usuario!.id,
+          });
+        }
+
         return mov;
       });
 
@@ -2425,6 +2585,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           warnings: r.warnings,
         };
       } catch (e) {
+        // Un error con status propio (el candado de escritura del cashflow tira
+        // 423) es una decisión deliberada, no una falla: va al manejador global,
+        // que le pone la categoría y el código que corresponden. Envolverlo en un
+        // 500 lo haría leer como "error inesperado del sistema" — justo lo que
+        // los códigos de error vinieron a evitar.
+        if (typeof (e as { statusCode?: number })?.statusCode === 'number') throw e;
         return reply
           .code(500)
           .send({ error: e instanceof Error ? e.message : 'Error sincronizando' });
@@ -2760,11 +2926,13 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             .optional(),
           // Por defecto solo FINALIZADA (lo que la tabla muestra hoy).
           estado: z.enum(['FINALIZADA', 'ANULADA', 'PROCESADA', 'TODAS']).default('FINALIZADA'),
+          // Mismo resultado en Excel, sin paginar. Ver la nota en /admin/movimientos.
+          formato: z.enum(['json', 'xlsx']).optional(),
           ...paginacionSchema,
         }),
       },
     },
-    async (req) => {
+    async (req, reply) => {
       const q = req.query as {
         q?: string;
         periodo?: PeriodoBusqueda;
@@ -2777,6 +2945,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         estado: 'FINALIZADA' | 'ANULADA' | 'PROCESADA' | 'TODAS';
         page: number;
         pageSize: number;
+        formato?: 'json' | 'xlsx';
       };
 
       // Traducción del bucket a condiciones sobre (canal, modalidad). Espeja
@@ -2885,6 +3054,95 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           ],
         }),
       };
+
+      if (q.formato === 'xlsx') {
+        const TOPE = 5000;
+        const [filas, totalFilas] = await Promise.all([
+          prisma.venta.findMany({
+            where,
+            select: {
+              numero: true,
+              numeroOrdenTurno: true,
+              canal: true,
+              modalidad: true,
+              estado: true,
+              fechaFinalizacion: true,
+              fechaApertura: true,
+              subtotal: true,
+              total: true,
+              descuentoTotal: true,
+              recargoCanal: true,
+              observaciones: true,
+              cliente: { select: { nombre: true, apellido: true } },
+              deliveryInfo: { select: { direccionSnapshot: true } },
+              pagos: { where: { estado: 'CONFIRMADO' }, select: { metodo: true, monto: true } },
+            },
+            orderBy: { fechaApertura: 'desc' },
+            take: TOPE,
+          }),
+          prisma.venta.count({ where }),
+        ]);
+        const buf = await construirExcelBusqueda({
+          titulo: 'Ventas',
+          filtros: descripcionFiltros({
+            periodo: q.periodo,
+            desde: ft.desde,
+            hasta: ft.hasta,
+            texto,
+            extra: [q.estado !== 'TODAS' ? `Estado: ${q.estado}` : null, q.canal ? `Canal: ${q.canal}` : null]
+              .filter(Boolean)
+              .join(' · ') || undefined,
+          }),
+          columnas: [
+            { header: 'N° venta', key: 'numero', tipo: 'numero', width: 12 },
+            { header: 'N° orden', key: 'orden', tipo: 'numero', width: 11 },
+            { header: 'Fecha', key: 'fecha', tipo: 'fecha' },
+            { header: 'Estado', key: 'estado', width: 14 },
+            { header: 'Canal', key: 'canal', width: 16 },
+            { header: 'Modalidad', key: 'modalidad', width: 16 },
+            { header: 'Cliente', key: 'cliente', width: 26 },
+            { header: 'Dirección', key: 'direccion', width: 34 },
+            { header: 'Métodos de pago', key: 'metodos', width: 26 },
+            { header: 'Observaciones', key: 'observaciones', width: 30 },
+            { header: 'Subtotal', key: 'subtotal', tipo: 'dinero' },
+            { header: 'Descuento', key: 'descuento', tipo: 'dinero' },
+            { header: 'Recargo canal', key: 'recargo', tipo: 'dinero' },
+            { header: 'Total', key: 'total', tipo: 'dinero' },
+          ],
+          filas: filas.map((v) => {
+            const dir = v.deliveryInfo?.direccionSnapshot as { direccion?: string } | null;
+            return {
+              numero: v.numero,
+              orden: v.numeroOrdenTurno,
+              fecha: v.fechaFinalizacion ?? v.fechaApertura,
+              estado: v.estado,
+              canal: v.canal,
+              modalidad: v.modalidad,
+              cliente: v.cliente ? [v.cliente.nombre, v.cliente.apellido].filter(Boolean).join(' ') : '',
+              direccion: dir?.direccion ?? '',
+              metodos: [...new Set(v.pagos.map((p) => p.metodo))].join(', '),
+              observaciones: v.observaciones ?? '',
+              subtotal: Number(v.subtotal),
+              descuento: Number(v.descuentoTotal),
+              recargo: Number(v.recargoCanal),
+              total: Number(v.total),
+            };
+          }),
+          totales: [
+            { etiqueta: 'TOTAL VENDIDO', columna: 'total' },
+            { etiqueta: 'Total descuentos', columna: 'descuento' },
+            { etiqueta: 'Cantidad de ventas', valor: filas.length },
+          ],
+          hayMas:
+            totalFilas > filas.length
+              ? { exportadas: filas.length, totales: totalFilas }
+              : undefined,
+        });
+        return reply
+          .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('ventas')}"`)
+          .send(buf);
+      }
 
       const [ventas, total] = await Promise.all([
         prisma.venta.findMany({

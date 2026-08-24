@@ -107,3 +107,4 @@ data/pgdata/
 # Trabajo temporal (auditoría / planificación) — se borra al terminar
 ROADMAP-AUDIT-FIXES.md
 NOTES-*.md
+.env.test

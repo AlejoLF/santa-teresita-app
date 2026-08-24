@@ -1,3 +1,4 @@
+import { ReglaNegocioError } from './errores.js';
 import { prisma } from '@sta/db/client';
 import {
   CanalVenta,
@@ -15,6 +16,11 @@ import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caj
 import { recordAudit } from './audit.js';
 import { encolarComandaEncargo, esDestinoImpresion } from './impresion.js';
 import { agregarItemsAVenta } from './venta.js';
+import {
+  resolverDeltasDeLista,
+  deltaDeModificadores,
+  opcionIdsDeItems,
+} from './deltas-lista.js';
 
 /**
  * Crea un ENCARGO (pedido para un día futuro) reutilizando la tabla `ventas`.
@@ -50,7 +56,7 @@ export async function crearEncargo(args: {
     where: { canalDefault: CanalListaPrecios.LOCAL_MOSTRADOR, activa: true },
     orderBy: { nombre: 'asc' },
   });
-  if (!lista) throw new Error('No hay lista de precios activa para el local');
+  if (!lista) throw new ReglaNegocioError('No hay lista de precios activa para el local');
 
   const sesion = await getOrCreateSesionActual(usuarioId);
   const numeroOrden = await siguienteNumeroOrdenTurno(sesion.id);
@@ -63,6 +69,7 @@ export async function crearEncargo(args: {
   });
   const productoMap = new Map(productos.map((p) => [p.id, p]));
   const ajustePct = Number(lista.ajustePctDefault);
+  const deltas = await resolverDeltasDeLista(lista.id, opcionIdsDeItems(data.items));
 
   const itemsToCreate: Array<Prisma.ItemVentaCreateWithoutVentaInput> = [];
   let subtotalVenta = 0;
@@ -70,18 +77,14 @@ export async function crearEncargo(args: {
 
   for (const [idx, item] of data.items.entries()) {
     const producto = productoMap.get(item.productoId);
-    if (!producto) throw new Error(`Producto ${item.productoId} no existe`);
+    if (!producto) throw new ReglaNegocioError(`Producto ${item.productoId} no existe`);
 
     const precioOverride = producto.preciosPorLista[0]?.precioEfectivo;
     const precioBaseNumber = Number(producto.precioBase);
     const precioListaSinDelta = precioOverride
       ? Number(precioOverride)
       : precioBaseNumber * (1 + ajustePct / 100);
-    // Seguridad: el delta de cada modificador SUMA, nunca resta (clamp a >= 0).
-    const deltaMod = item.modificadores.reduce(
-      (acc, m) => acc + Math.max(0, Number(m.deltaPrecio || 0)),
-      0,
-    );
+    const deltaMod = deltaDeModificadores(item.modificadores, deltas);
     const precioUnitario = precioListaSinDelta + deltaMod;
 
     const subTotalItemStr = subtotalItem({
@@ -239,14 +242,14 @@ export async function crearAdicionEncargo(args: {
   const { padreId, items, pcOrigen, usuarioId, accion } = args;
 
   const padre = await prisma.venta.findUnique({ where: { id: padreId } });
-  if (!padre || !padre.esEncargo) throw new Error('Encargo no encontrado');
-  if (padre.estado === EstadoVenta.ANULADA) throw new Error('El encargo está anulado');
+  if (!padre || !padre.esEncargo) throw new ReglaNegocioError('Encargo no encontrado');
+  if (padre.estado === EstadoVenta.ANULADA) throw new ReglaNegocioError('El encargo está anulado');
   // Las adiciones cuelgan SIEMPRE de la raíz (sin anidar).
   const rootId = padre.encargoPadreId ?? padre.id;
   const root = padre.encargoPadreId
     ? await prisma.venta.findUnique({ where: { id: rootId } })
     : padre;
-  if (!root) throw new Error('Encargo no encontrado');
+  if (!root) throw new ReglaNegocioError('Encargo no encontrado');
   // La comanda fusionada sale por la comandera que se eligió al cargar el
   // encargo raíz (encargos viejos, sin el campo, siguen saliendo a Mostrador).
   const destinoRaiz = esDestinoImpresion(root.destinoImpresionEncargo)
@@ -287,21 +290,19 @@ export async function crearAdicionEncargo(args: {
   const lista = await prisma.listaPrecios.findUnique({ where: { id: root.listaPreciosId } });
   const ajustePct = Number(lista?.ajustePctDefault ?? 0);
   const productoMap = new Map(productos.map((p) => [p.id, p]));
+  const deltas = await resolverDeltasDeLista(root.listaPreciosId, opcionIdsDeItems(items));
 
   const itemsToCreate: Array<Prisma.ItemVentaCreateWithoutVentaInput> = [];
   let subtotalVenta = 0;
   let tieneCocina = false;
   for (const [idx, item] of items.entries()) {
     const producto = productoMap.get(item.productoId);
-    if (!producto) throw new Error(`Producto ${item.productoId} no existe`);
+    if (!producto) throw new ReglaNegocioError(`Producto ${item.productoId} no existe`);
     const precioOverride = producto.preciosPorLista[0]?.precioEfectivo;
     const precioListaSinDelta = precioOverride
       ? Number(precioOverride)
       : Number(producto.precioBase) * (1 + ajustePct / 100);
-    const deltaMod = item.modificadores.reduce(
-      (acc, m) => acc + Math.max(0, Number(m.deltaPrecio || 0)),
-      0,
-    );
+    const deltaMod = deltaDeModificadores(item.modificadores, deltas);
     const precioUnitario = precioListaSinDelta + deltaMod;
     const subTotalItemStr = subtotalItem({
       cantidad: item.cantidad,

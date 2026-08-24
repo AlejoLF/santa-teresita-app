@@ -116,6 +116,218 @@ En ambos casos devuelve `200 duplicate` (no error) → n8n responde "ya estaba c
 
 ---
 
+## 1.bis Instalación — un solo comando
+
+Todo lo de las secciones 2 y 4 está automatizado en `tools/n8n/setup-n8n.ps1`.
+Desde S1, en PowerShell **como Administrador**:
+
+```powershell
+cd C:\sta\santa-teresita-app\tools\n8n
+.\setup-n8n.ps1 `
+  -TelegramBotToken   '<token de @BotFather>' `
+  -TelegramAllowedIds '<id o @usuario de la encargada>,<id o @usuario de Julio>' `
+  -LlamaCloudApiKey   'llx-...' `
+  -IngestToken        '<el INGEST_API_TOKEN del server>'
+```
+
+Instala n8n, instala el **nodo oficial de LlamaCloud**, genera la clave de
+cifrado, escribe el entorno con permisos restringidos, registra el servicio NSSM
+(arranque automático + reinicio ante caída), importa credenciales y workflow, lo
+activa y verifica que todo responda — incluido un chequeo de que la API key de
+LlamaCloud y el token del bot son válidos. Es **idempotente**: se puede volver a
+correr.
+
+> ⚠️ **La clave de cifrado**. Se guarda en `C:\sta\n8n\encryption-key.txt`.
+> Perderla inutiliza las credenciales guardadas en n8n. Hacé una copia fuera de
+> S1. El script la reusa si ya existe, nunca la pisa.
+
+> ⚠️ **`-TelegramAllowedIds` no es opcional en la práctica.** Un bot de Telegram
+> es público: cualquiera que sepa su nombre puede escribirle. Sin lista blanca el
+> workflow **no le contesta a nadie** (falla cerrado, a propósito).
+>
+> Se acepta **el ID numérico o el `@usuario`**, mezclados y separados por coma:
+> `'8123456789,@julio'`. El `@usuario` es el que tenés a mano; el numérico lo da
+> @userinfobot y es el que conviene, porque un `@usuario` se puede soltar y otro
+> tomarlo después. Si alguien queda afuera de la lista, su mensaje se descarta en
+> silencio **pero el log de la ejecución imprime el `from.id` y el `@usuario` que
+> llegaron** — de ahí se copia el valor que falta.
+
+### Probar en tu PC — `setup-n8n-dev.ps1`
+
+Para armar o retocar el workflow con el editor visual sin tocar S1:
+
+```powershell
+cd C:\sta\santa-teresita-app\tools\n8n
+.\setup-n8n-dev.ps1 -TelegramBotToken '<bot DE PRUEBA>' `
+                    -LlamaCloudApiKey 'llx-...' -ImportarWorkflow
+```
+
+Instala n8n en primer plano (Ctrl+C lo corta), con datos en `C:\sta\n8n-dev`
+— carpeta aparte, para no pisar la de S1 — y el editor en
+`http://localhost:5678`. Cuando termines:
+
+```powershell
+n8n export:workflow --id=<id> --output=workflow-facturas-ocr.json
+```
+
+**Para volver a arrancarlo** (después de cerrar la terminal) usá
+`.\n8n-dev.ps1`, no `n8n start` pelado: el setup carga el entorno en *esa*
+sesión de PowerShell y se va con ella. Sin las variables, los Code nodes
+vuelven a fallar con `access to env vars denied`. `n8n-dev.ps1` relee el
+archivo de entorno, avisa si el bot quedó con un webhook puesto, y arranca.
+
+### `ECONNREFUSED ::1:3001` al postear la factura
+
+El `::1` es IPv6. El API hace `listen({ host: '0.0.0.0' })` — **solo IPv4** — y
+desde Node 17 `localhost` resuelve **primero a IPv6**. O sea que n8n busca el
+server en una dirección donde nadie atiende, con `sta-server` corriendo
+perfecto.
+
+**Usar siempre `http://127.0.0.1:3001/...` en `INGEST_URL`, nunca
+`localhost`.** Los dos instaladores ya lo hacen por default.
+
+Lo traicionero es que **no se nota probando a mano**: PowerShell/.NET y `curl`
+sí caen a IPv4, así que un `Invoke-RestMethod http://localhost:3001/health`
+devuelve OK mientras el workflow falla. El chequeo del propio instalador tenía
+ese bug y decía "API del server respondiendo" cuando n8n no llegaba.
+
+### El nodo "Telegram Trigger" NO se puede probar en tu PC
+
+Si lo ponés en el canvas y ejecutás, da:
+
+```
+Bad Request: bad webhook: An HTTPS URL must be provided for webhook
+```
+
+No es un error de configuración: ese nodo **registra un webhook**, o sea que
+Telegram tiene que poder *entrar* a tu n8n desde internet por HTTPS. En
+`localhost:5678` no hay ninguna URL pública que darle.
+
+**El `--tunnel` de n8n ya no existe**: fue eliminado en n8n 2.0 (regla de
+breaking changes `tunnel-option-v2` — "the --tunnel flag will be ignored"). Si
+lo pasás, n8n lo ignora en silencio y el problema queda igual.
+
+Opciones reales:
+
+1. **Usar el workflow de polling** (el de este repo). No necesita webhook, es
+   lo que va a correr en producción, y en el editor se prueba con *Execute
+   workflow* igual que cualquier otro. Es lo recomendado.
+2. Si querés sí o sí el trigger por webhook: levantar un túnel propio
+   (Cloudflare Tunnel, ngrok) y arrancar n8n con `WEBHOOK_URL=https://<tu-url>`.
+   Es una pieza más para mantener y no aporta nada a lo que se va a desplegar.
+
+> 🚨 **Un webhook apaga el polling del bot.** Telegram no permite las dos cosas
+> a la vez: con un webhook registrado, `getUpdates` devuelve **409** y el
+> workflow de S1 deja de recibir facturas hasta que lo borres. Si llegaste a
+> registrar uno (aunque haya sido probando), revisá y limpiá:
+>
+> ```powershell
+> $t = '<token del bot>'
+> Invoke-RestMethod "https://api.telegram.org/bot$t/getWebhookInfo"   # ver si hay
+> Invoke-RestMethod "https://api.telegram.org/bot$t/deleteWebhook"    # sacarlo
+> ```
+>
+> `n8n-dev.ps1` hace ese chequeo solo al arrancar y te avisa.
+
+> 🚨 **Dos n8n contra el mismo bot se pisan.** Telegram admite **un solo**
+> `getUpdates` en vuelo por token. Si el de S1 y el de tu PC poletean el mismo
+> bot: a uno lo corta con **409** (error instantáneo) y al otro lo deja colgado
+> hasta que el gateway lo mata con **504 a los 120s**. Como el trigger dispara
+> cada minuto, para entonces ya hay dos ejecuciones encimadas y **no se
+> recupera solo** — se ve como `Error in 2m 0.6s` repetido, una y otra vez.
+>
+> Usá un bot de prueba aparte de @BotFather, o pará el de S1 (`nssm stop n8n`)
+> mientras probás. El script te avisa si detecta el servicio corriendo.
+>
+> El workflow ahora corta la consulta a los 20s, así que una ejecución nunca
+> llega viva al disparo siguiente y el encavalgamiento no se sostiene solo;
+> pero si hay **dos pollers de verdad**, el choque sigue hasta que apagues uno.
+
+### El trigger es POLLING, no webhook
+
+El §2 de abajo describe el nodo **Telegram Trigger**, que registra un webhook:
+Telegram tiene que poder **entrar** a n8n desde internet. S1 está detrás del
+router del local, sin IP pública — eso obligaría a un túnel, que es una pieza más
+que se cae.
+
+El workflow implementado usa **long-polling**: S1 **sale** a internet (que ya
+puede) y consulta `getUpdates` cada minuto. El offset se guarda en la static data
+del workflow, así que sobrevive reinicios y cortes de luz sin reprocesar
+mensajes. El costo es hasta 60s de latencia, irrelevante para facturas.
+
+> **Ojo**: el nodo **Telegram Trigger** tampoco tiene salida fácil por acá.
+> `--tunnel` (el túnel que traía n8n para exponer el webhook sin IP pública)
+> **se eliminó en n8n 2.0** — breaking change `tunnel-option-v2`. Para este
+> caso el polling no es el plan B, es el plan.
+
+### El offset se le confirma a Telegram EN EL ACTO, no solo en la static data
+
+Guardar el offset en la static data **no alcanza**, y el motivo es de timing:
+n8n persiste la static data del workflow **al terminar** la ejecución, no cuando
+el Code node se la escribe.
+
+Mandar un álbum de ~20 fotos junto rompe eso: la corrida se estira varios
+minutos encadenando un OCR por foto, el trigger vuelve a disparar al minuto, y
+la ejecución nueva lee de la base el offset **viejo** — así que Telegram le
+entrega los mismos 20 mensajes otra vez. Y otra. Cada foto termina procesándose
+una vez por cada ejecución encimada.
+
+El síntoma es un diluvio de *"Esa factura ya estaba cargada"* en el chat. No
+llega a hacer daño real (la idempotencia del API frena los duplicados antes de
+crear nada), pero desde afuera parece que explotó algo, y se pagan N pasadas de
+OCR por la misma foto.
+
+La solución es usar el offset de Telegram como lo que es: un **ACK**. Apenas se
+lee el lote, se llama `getUpdates` de nuevo con `offset = maxId + 1`, lo que
+confirma esos updates **del lado del servidor de Telegram** — no se los vuelve a
+entregar a nadie, tampoco a una ejecución paralela que todavía tenga el offset
+viejo. La static data queda como red de contención por si el ACK falla.
+
+Complemento: el lote está acotado a **10 mensajes por corrida** (`LOTE` en el
+nodo "Traer mensajes"), para que una sola ejecución no encadene 20 OCR y se
+estire varios minutos. El resto entra en los disparos siguientes.
+
+Incidente real: 2026-08-14, tanda de prueba con ~20 facturas juntas. Es el primo
+hermano del 504 de más abajo: las dos son fallas de **re-entrada** del poller, y
+ninguna de las dos se arregla sola.
+
+### El OCR usa el nodo oficial de LlamaCloud, no un HTTP Request a mano
+
+`@llamaindex/n8n-nodes-llamacloud` ("LlamaParse Platform") es un community node
+**verificado**, publicado por LlamaIndex. El instalador lo pone en
+`C:\sta\n8n\.n8n\nodes` (que es de donde n8n carga los community nodes) y crea
+la credencial del tipo `llamaParseApi` con la API key.
+
+Se usa la acción **Extract structured data** en modo **Schema**: el schema de la
+factura va *inline* en el workflow, así que **no hay que crear nada en el panel
+de LlamaCloud** — ni extraction agent ni saved configuration. Esto resuelve el
+lío de la v2 (LlamaExtract reemplazó los "extraction agents" por "saved
+configurations"): en modo Schema no aplica ninguna de las dos.
+
+Qué hace el nodo por dentro, verificado leyendo el paquete (v6.7.2):
+
+1. Sube el binario a LlamaCloud y obtiene un `file_id`.
+2. `POST /api/v2/extract` con `{ file_input, configuration: { data_schema } }`.
+3. Poletea `GET /api/v2/extract/<job>` hasta `COMPLETED`.
+4. Devuelve **`{ result: "<JSON stringificado>" }`** — un string, no un objeto.
+
+Ese último detalle importa: el nodo *Armar factura* hace `JSON.parse` y recupera
+el `chatId`/`hash` del nodo anterior por `pairedItem`, porque el nodo de
+LlamaCloud **no arrastra los campos de entrada**.
+
+El schema pedido está en el parámetro `dataSchema` del nodo, en el JSON del
+workflow: `proveedor{nombre,cuit}`, `comprobante{tipo,puntoVenta,numero,
+fechaEmision,fechaVencimiento}`, `montos{neto,iva21,iva10_5,ivaTotal,total}` e
+`items[]`. Si querés cambiar qué se extrae, se toca ahí y punto — el mapeo al
+contrato del §1 tolera campos faltantes.
+
+**Lo que queda sin verificar**: nadie corrió todavía una factura real de punta a
+punta. Los contratos están confirmados (API de Telegram, el nodo de LlamaCloud
+leído del paquete, `POST /ingest/facturas` de este repo), pero la precisión del
+OCR sobre facturas argentinas hay que medirla con 5-10 reales.
+
+---
+
 ## 2. El flujo de n8n — nodo por nodo
 
 ### Trigger
@@ -137,30 +349,118 @@ En ambos casos devuelve `200 duplicate` (no error) → n8n responde "ya estaba c
   const buf = Buffer.from(items[0].binary.data.data, 'base64');
   return [{ json: { hash: crypto.createHash('sha256').update(buf).digest('hex') } }];
   ```
+  Requiere `NODE_FUNCTION_ALLOW_BUILTIN=crypto` — ver abajo. El campo es
+  opcional: si no va, el programa deriva un hash del contenido OCR
+  (`ingest.ts`), que igual frena el duplicado pero recién después de pagar
+  una pasada de OCR.
 
-### OCR — LlamaCloud (recomendado: **LlamaExtract**)
-LlamaCloud tiene dos servicios; para facturas conviene **LlamaExtract** (extrae directo
-a un schema). API key en `https://cloud.llamaindex.ai` (formato `llx-...`). Base:
-`https://api.cloud.llamaindex.ai`. Auth: `Authorization: Bearer llx-...`.
+### Cómo se reconoce al proveedor
 
-**Opción A — LlamaExtract (estructurado directo, ideal facturas):**
-1. Una vez, definí un *extraction agent* con el schema de la factura (en la UI de
-   LlamaCloud o por API): proveedor{nombre,cuit}, comprobante{tipo,puntoVenta,numero,
-   fechaEmision}, montos{neto,iva21,total}, items[{descripcion,cantidad,unidad,
-   precioUnitario,subtotal}].
-2. En n8n, **HTTP Request** subiendo el archivo al agente → devuelve el JSON del schema.
-3. Ese JSON ya es casi el contrato del §1 → mapealo en un Code node.
+El nombre impreso en el comprobante casi nunca es el que el local usa en el
+sistema: `GRAFIPACK SAN MARTIN S.R.L.` contra `Grafipack`. Sin resolverlo, cada
+factura por OCR creaba un proveedor **nuevo y duplicado**, partiendo la cuenta
+corriente en dos.
 
-**Opción B — LlamaParse + un LLM (si preferís markdown):**
-1. **HTTP Request** (multipart) `POST https://api.cloud.llamaindex.ai/api/v1/parsing/upload`
-   con el binario y el header de auth → devuelve `{ id }` (job).
-2. **Poll**: `GET /api/v1/parsing/job/{id}` hasta `status=SUCCESS` (Wait + IF loop, o el
-   nodo con retry). Luego `GET /api/v1/parsing/job/{id}/result/markdown` → markdown.
-3. Pasá el markdown a un LLM (OpenAI/Anthropic/lo que uses) con un prompt que devuelva
-   SOLO el JSON del contrato. (LlamaParse lee bien las tablas → el LLM extrae fácil.)
+Se resuelve en cuatro pasos, del más confiable al menos (`resolverProveedor`
+en `ingest.ts`):
 
-> Verificá los paths exactos en la doc vigente de LlamaCloud — la API evoluciona.
-> El patrón (upload → job → result, o extract-con-schema) es estable.
+1. **CUIT exacto** — sin ambigüedad posible.
+2. **Nombre exacto.**
+3. **Alias guardado** — alguien ya confirmó a mano que ese nombre impreso es ese
+   proveedor. Le gana al paso 4: es una decisión explícita, no una heurística.
+4. **Parecido de nombres** (`services/proveedor-match.ts`).
+
+Recién si nada da, crea un proveedor nuevo.
+
+**El parecido usa contención, no Jaccard.** Con Jaccard, `grafipack san martin`
+contra `grafipack` da 0,33 y no matchea nunca — justo el caso a resolver, porque
+el nombre del sistema suele ser un *subconjunto* del de la factura. Con
+contención (compartido ÷ el más chico de los dos) da 1,00.
+
+Dos guardas para no equivocarse, que importan porque un match errado mezcla la
+cuenta corriente de dos proveedores y se descubre tarde:
+
+- **Alguna palabra compartida tiene que tener ≥5 letras.** Si no,
+  `Panadería Norte` y `Panadería Sur` matchearían por "panaderia".
+- **Ante empate, no elige.** Si dos proveedores puntúan igual, devuelve nada y
+  la factura queda para que la resuelva un humano.
+
+Se compara contra el nombre **y** la razón social: el sistema puede tener el
+nombre corto y la razón social larga, y la factura traer cualquiera de los dos.
+
+**La memoria** la pone la encargada: en el detalle de la factura, al lado del
+proveedor hay un *"no es este"* que abre el selector. Al elegir el correcto con
+"Recordar para la próxima" tildado, se guarda un alias y la siguiente factura
+con ese mismo nombre impreso entra derecho, sin intervención. Si el nombre ya
+estaba asociado a otro proveedor **no se pisa en silencio**: avisa, porque
+redirigir facturas futuras sin que nadie se entere es peor que no recordar nada.
+
+### El sandbox del Code node bloquea dos cosas por defecto
+
+Los Code nodes de n8n 2.x corren en el **task runner**, no en el proceso
+principal, y arrancan cerrados. Dos restricciones nos pegaron, las dos con el
+mismo síntoma engañoso — la ejecución muere sin que el error mencione al
+sandbox:
+
+| Variable | Sin ella | Por qué la necesitamos |
+|-|-|-|
+| `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` | `access to env vars denied`, a los 11ms | Los 4 Code nodes leen `$env` (token del bot, whitelist, URL de ingesta) |
+| `NODE_FUNCTION_ALLOW_BUILTIN=crypto` | `Module 'crypto' is disallowed` | El sha256 del archivo en "Bajar archivo" |
+
+Las dos las escribe `setup-n8n.ps1` en `n8n.env`, y NSSM las toma al re-correr
+el script (re-setea `AppEnvironmentExtra` siempre).
+
+**No son equivalentes en riesgo.** La primera abre TODO el entorno del proceso
+—incluida `N8N_ENCRYPTION_KEY`— a cualquier Code node de cualquier workflow, y
+n8n no permite filtrar por variable; se acepta porque el panel escucha solo en
+127.0.0.1 y hay que tener S1 para escribir un Code node. La segunda habilita
+una librería de hashing y no expone nada.
+
+Lo que el sandbox **sí** deja pasar sin configurar: `Buffer`, `TextEncoder`,
+`FormData`, `$getWorkflowStaticData`, y de los helpers `httpRequest`,
+`prepareBinaryData`, `getBinaryDataBuffer`, `binaryToString`. Los `Buffer`
+sobreviven el ida y vuelta por RPC (n8n los re-arma con `toBuffer`), así que
+bajar un binario en un Code node y pasarlo como binary funciona. No hay
+`crypto` global ni WebCrypto: sin el `require`, no hay forma de hashear.
+
+### OCR — nodo **LlamaParse Platform**
+- Acción: **Extract structured data**. Configuration mode: **Schema** (inline).
+- Input type: **Binary File**, campo `data` (el que deja *Bajar archivo*).
+- Credencial: `LlamaParse API` (API key `llx-...` + base `https://api.cloud.llamaindex.ai`).
+- **No hace falta convertir PDF a imagen** — LlamaCloud come PDF e imagen directo.
+- Retry On Fail: 3 intentos, 5s. `onError: continueRegularOutput` para que un
+  fallo del OCR no mate la ejecución y la encargada reciba el aviso.
+
+Alternativa si algún día conviene: acción **Parse a document** (devuelve markdown)
+y pasarle el markdown a un LLM. Más piezas, más costo, misma salida — no vale la
+pena mientras Extract funcione.
+
+### Qué se exige para cargar una factura
+
+Solo dos cosas: **de quién es** (proveedor) y **cuánto es** (total). Nada más
+bloquea.
+
+Buena parte de lo que entra al local no es comprobante fiscal en regla —
+remitos, tickets, papeles sin numerar—. Exigir el número de comprobante
+rebotaba justamente esas, que son la mitad del trabajo que se quería ahorrar.
+
+Todo lo demás (número, fecha, tipo, CUIT, detalle de productos) entra como
+**faltante**: la factura se carga igual **sin validar**, la observación dice
+exactamente qué falta, la confianza baja según cuánto falte, y el bot se lo
+avisa a quien la mandó. La encargada completa lo que haga falta al revisarla.
+
+> El programa exige un número de comprobante (`numero` es NOT NULL y forma
+> parte de `@@unique(proveedor, puntoVenta, numero, tipo)`). Cuando la factura
+> no lo trae, n8n arma uno derivado del contenido: `S/N-<fecha>-<total>`. Se
+> ve claro que es provisorio, y como sale del contenido, la misma factura
+> fotografiada dos veces genera el mismo número y el duplicado se sigue
+> frenando. Un `S/N` fijo no serviría: dos facturas distintas del mismo
+> proveedor chocarían y la segunda se perdería como "duplicada".
+
+**El descuadre de items** se mide contra el neto **o** contra el total. Los
+renglones suelen venir netos y el total con IVA: compararlos solo contra el
+total marcaba descuadre en casi toda factura A bien discriminada, y un aviso
+que salta siempre no lo lee nadie.
 
 ### Parse + validación
 - **Code node**: asegurate de tener el JSON del contrato. Sanity checks:
@@ -240,16 +540,54 @@ Editor de n8n en `http://localhost:5678` (desde S1) para armar el workflow.
 
 ### 4.2 Credenciales en n8n
 - **Telegram API**: el token de @BotFather (§5).
-- **LlamaCloud**: la API key `llx-...` (en un header `Authorization: Bearer` de los
-  HTTP Request, o como credencial genérica). Sacala de `https://cloud.llamaindex.ai`.
+- **LlamaParse API** (tipo `llamaParseApi`, lo aporta el community node): la API key
+  `llx-...` de `https://cloud.llamaindex.ai` + base `https://api.cloud.llamaindex.ai`.
 
 ### 4.3 El token de ingesta (en el server)
-Agregar al `.env` del `sta-server` en S1 y reiniciar el servicio:
+
+**No existe todavía: hay que generarlo.** No viene de ningún lado — es un token
+de máquina que inventás vos. Mínimo 24 chars (lo valida zod en `config.ts`), y
+**distinto del `AUTH_SECRET`**: su único permiso es crear facturas sin validar,
+que no mueven plata hasta que un humano las acepte.
+
+```powershell
+# 1. Generarlo
+$b = New-Object byte[] 32
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+[Convert]::ToBase64String($b)
+
+# 2. Pegarlo en C:\sta-server\.env
+#    INGEST_API_TOKEN=<lo de arriba>
+
+# 3. NSSM congela el env al registrar el servicio: reiniciar NO alcanza.
+cd C:\sta-server
+.\update-server.ps1 -SyncEnv
+
+# 4. Verificar (con body VALIDO y un token a proposito invalido)
+$body = '{"proveedor":{"nombre":"PRUEBA"},"comprobante":{"numero":"1","fechaEmision":"2026-08-12"},"montos":{"total":1}}'
+try {
+  Invoke-RestMethod -Uri 'http://localhost:3001/api/v1/ingest/facturas' -Method POST `
+    -ContentType 'application/json' -Body $body `
+    -Headers @{ Authorization = 'Bearer token-a-proposito-invalido' }
+} catch { "HTTP " + [int]$_.Exception.Response.StatusCode }
 ```
-INGEST_API_TOKEN=<generá uno: 32+ chars aleatorios, distinto del AUTH_SECRET>
-```
-Verificar: `curl -s -o NUL -w "%{http_code}" http://localhost:3001/api/v1/ingest/facturas`
-→ debe dar `401` (vivo, pero sin token en el request). Con el body+token correcto → `201`.
+
+`401` = el token está configurado, todo bien. `503` = falta `INGEST_API_TOKEN`
+en el `.env` → volvé al paso 3.
+
+> **El body tiene que ser válido, y esto no es un detalle.** La ruta declara
+> `schema: { body: BodySchema }`, y Fastify valida el body **antes** de entrar
+> al handler — que es donde viven los chequeos de 503 y 401. Un `POST` vacío
+> devuelve **400** y nunca llega a mirar el token: no distingue "token puesto"
+> de "token faltante". Lo único que prueba es que la ruta existe.
+>
+> El token inválido es a propósito: si mandaras el correcto, crearías una
+> factura de prueba de verdad en la bandeja.
+
+> ⚠️ El paso 3 es el que se olvida. `update-server.ps1:93-95` lo explica: NSSM
+> guarda un snapshot del `.env` en `AppEnvironmentExtra` cuando se registra el
+> servicio, y dotenv **no pisa** lo que NSSM ya inyectó en `process.env`. Editar
+> el `.env` y reiniciar deja el valor viejo (o ninguno) sin avisar.
 
 ### 4.4 Orden de arranque tras corte de luz
 Servicios `SERVICE_AUTO_START`: PostgreSQL → sta-server → n8n. Si n8n arranca antes que
@@ -269,13 +607,21 @@ el API, el primer POST reintenta (Retry On Fail) → se autocorrige. LlamaCloud 
 ## 6. Checklist de puesta en marcha
 - [ ] `INGEST_API_TOKEN` en el `.env` del server (S1) + reiniciar `sta-server`.
 - [ ] Deploy del server con el endpoint de ingesta (release del server).
-- [ ] Cuenta de LlamaCloud + API key `llx-...` + (si LlamaExtract) el extraction agent con schema.
-- [ ] n8n instalado + servicio NSSM corriendo + credenciales Telegram y LlamaCloud + INGEST_API_TOKEN.
+- [ ] Cuenta de LlamaCloud + API key `llx-...`. (El schema va inline en el workflow:
+      **no** hay que crear extraction agent ni saved configuration en el panel.)
+- [ ] n8n instalado + community node `@llamaindex/n8n-nodes-llamacloud` + servicio NSSM
+      corriendo + credenciales `LlamaParse API` e `Ingesta STA` + INGEST_API_TOKEN.
 - [ ] Bot de @BotFather + whitelist de usuarios.
 - [ ] Workflow armado y probado con 5-10 facturas reales (medir costo LlamaCloud y precisión).
 - [ ] UI de validación visible para la encargada (Admin → Facturas de compra → Sin validar).
 
 ---
 
-*Creado 2026-06-10. El endpoint de ingesta, el flujo de validación y la UI de bandeja
-están implementados y verificados. Falta: armar el workflow en n8n (este doc).*
+*Creado 2026-06-10. Actualizado 2026-08-11: el workflow y el instalador están
+escritos (`tools/n8n/`). El tramo de OCR pasó de un HTTP Request armado a mano
+(endpoint sin confirmar) al **nodo oficial `@llamaindex/n8n-nodes-llamacloud`**
+en modo schema inline — los nombres de nodo, parámetros y credencial se
+verificaron leyendo el paquete v6.7.2, y el instalador lo instala solo. El
+endpoint de ingesta, el flujo de validación y la UI de bandeja ya estaban
+implementados y verificados. Falta: correr el instalador en S1 y medir precisión
+y costo con 5-10 facturas reales.*

@@ -73,3 +73,7 @@ Todos los wireframes asumen el aesthetic direction definido en SPEC sección 7.1
 - **Mono** (JetBrains Mono) para números en tablas
 - Densidad alta en Vendedor, respiración generosa en Admin
 - Animaciones mínimas, solo cuando comunican estado
+
+### Banco de horas (Admin)
+
+- [11 — Admin · Banco de horas](11-admin-banco-horas.md) — saldo por empleado en horas y en pesos, carga diaria, adelantos, liquidación y configuración de categorías. Ver [SPEC §14](../SPEC.md).

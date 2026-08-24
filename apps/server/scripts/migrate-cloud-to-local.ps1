@@ -1,4 +1,4 @@
-# ====================================================================
+﻿# ====================================================================
 #  Santa Teresita - CARGA de datos de Supabase (nube) al Postgres LOCAL
 #
 #  Snapshot one-way: lee de la nube (NO la modifica) y reemplaza los datos

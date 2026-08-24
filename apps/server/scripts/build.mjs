@@ -67,13 +67,28 @@ const esbuildBin = path.join(
   '.bin',
   process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild',
 );
+// La versión del release queda ESTAMPADA en el bundle. Va por el banner y no
+// por `--define` a propósito: `--define` necesita comillas dobles anidadas y
+// eso se rompe en cmd.exe, mientras que el banner usa sólo comillas simples
+// (es el mismo mecanismo que ya inyecta el createRequire, acá abajo).
+//
+// Estampada y no leída de un archivo al lado: así la versión que reporta
+// `/health` es, por construcción, la del código que está corriendo. Un número
+// que vive en un archivo aparte puede quedar desfasado del binario justo
+// cuando más importa — un update a medias, un rollback — que es exactamente el
+// caso en el que uno va a mirarlo.
+const serverPkg = JSON.parse(fs.readFileSync(path.join(SERVER_DIR, 'package.json'), 'utf8'));
+const banner =
+  `import { createRequire } from 'module'; const require = createRequire(import.meta.url); ` +
+  `process.env.STA_SERVER_VERSION = process.env.STA_SERVER_VERSION || '${serverPkg.version}';`;
 run(
   `"${esbuildBin}" "${path.join(apiDir, 'src', 'server.ts')}" --bundle --platform=node ` +
     `--target=node20 --format=esm --outfile="${path.join(apiDest, 'server.mjs')}" ` +
-    `--banner:js="import { createRequire } from 'module'; const require = createRequire(import.meta.url);" ` +
+    `--banner:js="${banner}" ` +
     externalArgs,
   REPO_ROOT,
 );
+console.log(`  versión estampada: ${serverPkg.version}`);
 
 // ── Externals via npm (better-sqlite3 = prebuilt Node, sin rebuild Electron) ──
 step('npm install externals en dist/api/');
@@ -135,6 +150,19 @@ if (!realClient) throw new Error('No encontré .prisma/client con engine en node
 const prismaDest = path.join(apiDest, 'node_modules', '.prisma', 'client');
 fs.mkdirSync(prismaDest, { recursive: true });
 copyDir(realClient, prismaDest);
+
+// ── Herramientas del operador que corren con el Prisma client ──
+// Van DENTRO de api/ a propósito: Node resuelve node_modules desde la ubicación
+// del .mjs, y el @prisma/client con engine vive en api/node_modules. Puestas en
+// la raíz del dist tirarían ERR_MODULE_NOT_FOUND (mismo motivo por el que el
+// seed se lleva su propia copia más abajo). Como update-server.ps1 reemplaza
+// api/ entera en cada update, las herramientas viajan solas.
+step('Copiando herramientas del operador → dist/api/');
+for (const f of fs.readdirSync(path.join(SERVER_DIR, 'scripts'))) {
+  if (f.endsWith('.mjs') && f !== 'build.mjs' && f !== 'release.mjs') {
+    fs.copyFileSync(path.join(SERVER_DIR, 'scripts', f), path.join(apiDest, f));
+  }
+}
 
 // ── Migraciones SQL (orden cronológico por nombre) ──
 step('Copiando migraciones SQL');

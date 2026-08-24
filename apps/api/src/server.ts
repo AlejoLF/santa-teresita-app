@@ -1,5 +1,5 @@
 import './env-loader.js';
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import sensible from '@fastify/sensible';
@@ -13,6 +13,14 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
+import {
+  categoriaDeStatus,
+  clasificar,
+  nuevoCodigo,
+  mensajeParaPantalla,
+  registrarError,
+  type ErrorRegistrado,
+} from './services/errores.js';
 import { config } from './config.js';
 import authPlugin from './plugins/auth.js';
 import authRoutes from './routes/auth.js';
@@ -30,6 +38,7 @@ import { runMirrorSyncOnce } from './services/mirror-sync.js';
 import { startDbRouter, dbRouterEnabled, dbState } from './services/db-router.js';
 import proveedoresRoutes from './routes/proveedores.js';
 import empleadosRoutes from './routes/empleados.js';
+import bancoHorasRoutes from './routes/banco-horas.js';
 import configuracionRoutes from './routes/configuracion.js';
 import clientesRoutes from './routes/clientes.js';
 import mayoristasRoutes from './routes/mayoristas.js';
@@ -136,7 +145,11 @@ export async function buildServer() {
     name: 'santa-teresita-api',
     // Versión del .exe (la pasa Electron al spawnear el API). En modo dev
     // local sin Electron, sale como "dev".
-    version: process.env.STA_DESKTOP_VERSION ?? 'dev',
+    // STA_SERVER_VERSION la estampa el build del servidor local (S1) en el
+    // bundle; STA_DESKTOP_VERSION la setea el .exe de las cajas. Antes sólo se
+    // miraba la segunda, así que S1 reportaba 'dev' siempre y no había forma de
+    // saber qué release corría — hubo que deducirlo probando si una ruta existía.
+    version: process.env.STA_SERVER_VERSION ?? process.env.STA_DESKTOP_VERSION ?? 'dev',
     env: config.NODE_ENV,
     dbState: dbRouterEnabled() ? dbState() : 'PRIMARY',
     time: new Date().toISOString(),
@@ -185,33 +198,72 @@ export async function buildServer() {
   });
 
   // Rutas montadas bajo /api/v1
-  await app.register(
-    async (api) => {
-      // /api/v1/version — duplicado público de /health para que el web pueda
-      // consultar la versión del .exe via api.getCached() (que prefija /api/v1).
-      api.get('/version', async () => ({
-        version: process.env.STA_DESKTOP_VERSION ?? 'dev',
-        time: new Date().toISOString(),
-      }));
-      await api.register(authRoutes);
-      await api.register(catalogoRoutes);
-      await api.register(ventasRoutes);
-      await api.register(encargosRoutes);
-      await api.register(adminRoutes);
-      await api.register(analyticsRoutes);
-      await api.register(syncRoutes);
-      await api.register(proveedoresRoutes);
-      await api.register(empleadosRoutes);
-      await api.register(configuracionRoutes);
-      await api.register(clientesRoutes);
-      await api.register(mayoristasRoutes);
-      await api.register(listasRoutes);
-      await api.register(impresionRoutes);
-      await api.register(ingestRoutes);
-      await api.register(channelRoutes);
-    },
-    { prefix: '/api/v1' },
-  );
+  // El handler de errores va ANTES de registrar las rutas: si se declara
+  // después, las rutas de `/api/v1` quedan en un contexto que no lo hereda y
+  // los errores de validación salen con el "Bad Request" pelado de Fastify,
+  // sin código y sin decir qué campo falló.
+  /** Guarda el error en el registro reciente, con quién y desde dónde. */
+  const anotar = (
+    req: FastifyRequest,
+    e: Omit<ErrorRegistrado, 'metodo' | 'ruta' | 'usuario' | 'pcOrigen' | 'at'>,
+  ) => {
+    const pc = req.headers['x-pc-origen'];
+    registrarError({
+      ...e,
+      metodo: req.method,
+      ruta: req.url,
+      usuario: req.usuario?.nombre ?? null,
+      pcOrigen: typeof pc === 'string' ? pc : null,
+      at: new Date().toISOString(),
+    });
+  };
+
+  /**
+   * Red de seguridad: cualquier respuesta de error que NO pase por el
+   * manejador de arriba también sale con código.
+   *
+   * Un `reply.code(401).send({ error: 'Sesión inválida' })` no tira una
+   * excepción, así que el manejador de errores ni se entera — y ésos son
+   * justamente los que más se reportan ("no me deja entrar"). Lo mismo con el
+   * 404 de una ruta que no existe, que es el síntoma típico de una caja
+   * quedada en una versión vieja. Este hook los agarra a todos en la salida.
+   */
+  app.addHook('onSend', async (req, reply, payload) => {
+    const status = reply.statusCode;
+    if (status < 400) return payload;
+    if (typeof payload !== 'string' || !payload.startsWith('{')) return payload;
+
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(payload) as Record<string, unknown>;
+    } catch {
+      return payload;
+    }
+    // Ya tiene código: vino del manejador de errores, no lo tocamos.
+    if (typeof body.codigo === 'string') return payload;
+
+    const categoria = categoriaDeStatus(status);
+    const codigo = nuevoCodigo(categoria);
+    // Fastify arma `{ error: 'Not Found', message: 'Route ... not found' }`:
+    // ahí el texto útil es `message`. Lo nuestro manda sólo `error`.
+    const propio =
+      typeof body.message === 'string'
+        ? body.message
+        : typeof body.error === 'string'
+          ? body.error
+          : undefined;
+    const mensaje = mensajeParaPantalla(categoria, codigo, propio);
+
+    anotar(req, {
+      codigo,
+      categoria,
+      status,
+      mensaje,
+      detalle: propio ?? `(sin detalle) HTTP ${status}`,
+      stack: null,
+    });
+    return JSON.stringify({ ...body, error: mensaje, codigo, categoria });
+  });
 
   app.setErrorHandler((err, req, reply) => {
     // Errores de validación Zod via fastify-type-provider-zod. Antes los
@@ -237,24 +289,76 @@ export async function buildServer() {
         };
       });
       const summary = issues.map((i) => `${i.path}: ${i.message}`).join('; ');
-      app.log.warn({ url: req.url, issues }, 'validation failed');
+      const codigo = nuevoCodigo('VAL');
+      app.log.warn({ url: req.url, issues, codigo }, 'validation failed');
+      anotar(req, { codigo, categoria: 'VAL', status: 400, mensaje: summary, detalle: summary, stack: null });
       return reply.code(400).send({
-        error: `Validación fallida — ${summary}`,
+        error: `Validación fallida — ${summary} (código ${codigo})`,
+        codigo,
         issues,
       });
     }
     if (err instanceof ZodError) {
-      return reply.code(400).send({ error: 'Validación fallida', issues: err.issues });
-    }
-    app.log.error(err);
-    const e = err as { statusCode?: number; message?: string };
-    if (typeof e.statusCode === 'number') {
+      const codigo = nuevoCodigo('VAL');
+      const detalle = err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+      app.log.warn({ url: req.url, issues: err.issues, codigo }, 'validation failed');
+      anotar(req, { codigo, categoria: 'VAL', status: 400, mensaje: detalle, detalle, stack: null });
       return reply
-        .code(e.statusCode)
-        .send({ error: typeof e.message === 'string' ? e.message : 'Error' });
+        .code(400)
+        .send({ error: `Validación fallida (código ${codigo})`, codigo, issues: err.issues });
     }
-    return reply.code(500).send({ error: 'Error interno' });
+
+    // Todo lo demás pasa por el clasificador: sale con un código que se puede
+    // leer por teléfono y que queda en Admin → Errores junto al stack. Antes
+    // esto respondía "Error interno" a secas y no había con qué distinguir una
+    // base caída de un bug nuestro.
+    const { categoria, status, detalle } = clasificar(err);
+    const codigo = nuevoCodigo(categoria);
+    const e = err as { message?: string; stack?: string };
+    // El mensaje propio se muestra sólo cuando alguien lo escribió a propósito
+    // (las reglas de negocio, status < 500). Un texto de Prisma en pantalla no
+    // le dice nada a nadie.
+    const mensajePropio = status < 500 && typeof e.message === 'string' ? e.message : undefined;
+    const mensaje = mensajeParaPantalla(categoria, codigo, mensajePropio);
+
+    app.log.error(
+      { codigo, categoria, status, detalle, url: req.url, metodo: req.method, err },
+      'request falló',
+    );
+    anotar(req, { codigo, categoria, status, mensaje, detalle, stack: e.stack ?? null });
+
+    return reply.code(status).send({ error: mensaje, codigo, categoria });
   });
+
+  await app.register(
+    async (api) => {
+      // /api/v1/version — duplicado público de /health para que el web pueda
+      // consultar la versión del .exe via api.getCached() (que prefija /api/v1).
+      api.get('/version', async () => ({
+        version: process.env.STA_SERVER_VERSION ?? process.env.STA_DESKTOP_VERSION ?? 'dev',
+        time: new Date().toISOString(),
+      }));
+      await api.register(authRoutes);
+      await api.register(catalogoRoutes);
+      await api.register(ventasRoutes);
+      await api.register(encargosRoutes);
+      await api.register(adminRoutes);
+      await api.register(analyticsRoutes);
+      await api.register(syncRoutes);
+      await api.register(proveedoresRoutes);
+      await api.register(empleadosRoutes);
+      await api.register(bancoHorasRoutes);
+      await api.register(configuracionRoutes);
+      await api.register(clientesRoutes);
+      await api.register(mayoristasRoutes);
+      await api.register(listasRoutes);
+      await api.register(impresionRoutes);
+      await api.register(ingestRoutes);
+      await api.register(channelRoutes);
+    },
+    { prefix: '/api/v1' },
+  );
+
 
   return app;
 }

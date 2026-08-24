@@ -2,8 +2,11 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
+import { AvisosDePrecio } from '@/components/admin/AvisosDePrecio';
+import { ExcelProveedores } from '@/components/admin/ExcelProveedores';
 import { cn } from '@/lib/cn';
 
 interface Proveedor {
@@ -68,10 +71,34 @@ const CATEGORIA_LABEL: Record<string, string> = {
   OTROS: 'Otros',
 };
 
-type Tab = 'proveedores' | 'insumos';
+type Tab = 'proveedores' | 'insumos' | 'avisos' | 'excel';
+
+const TABS = ['proveedores', 'insumos', 'avisos', 'excel'] as const;
 
 export default function InsumosYProveedoresPage() {
-  const [tab, setTab] = useState<Tab>('proveedores');
+  // El tab puede venir por URL: el dashboard linkea directo a los avisos de
+  // aumento, y sin esto caería en Proveedores y habría que buscarlos.
+  const searchParams = useSearchParams();
+  const inicial = searchParams.get('tab');
+  const [tab, setTab] = useState<Tab>(
+    TABS.includes(inicial as Tab) ? (inicial as Tab) : 'proveedores',
+  );
+  const [avisosPendientes, setAvisosPendientes] = useState(0);
+
+  // Contador para el badge del tab. La pantalla de avisos lo actualiza al
+  // resolver uno (ver `onCambio`), así que esto es sólo el valor inicial.
+  useEffect(() => {
+    api
+      .get<{ pendientes: { avisosPrecio: number } }>('/admin/pendientes')
+      .then((r) => setAvisosPendientes(r.pendientes.avisosPrecio ?? 0))
+      .catch(() => {
+        /* silencioso: el badge no vale una pantalla de error */
+      });
+  }, []);
+
+  // Estable a propósito: `AvisosDePrecio` la tiene como dependencia de su
+  // fetch. Una función nueva en cada render lo dispararía en loop.
+  const handleAvisos = useCallback((n: number) => setAvisosPendientes(n), []);
 
   return (
     <div className="max-w-6xl mx-auto space-y-4">
@@ -82,29 +109,39 @@ export default function InsumosYProveedoresPage() {
         </div>
       </header>
 
-      <nav className="flex gap-1 border-b border-cream-300">
+      <nav className="flex gap-1 border-b border-cream-300 overflow-x-auto">
         {(
           [
             { v: 'proveedores', label: 'Proveedores' },
             { v: 'insumos', label: 'Insumos' },
+            { v: 'avisos', label: 'Avisos de precio' },
+            { v: 'excel', label: 'Excel' },
           ] as const
         ).map((t) => (
           <button
             key={t.v}
             onClick={() => setTab(t.v)}
             className={cn(
-              'px-4 py-2 text-sm font-medium transition-colors border-b-2',
+              'px-4 py-2 text-sm font-medium transition-colors border-b-2 whitespace-nowrap',
               tab === t.v
                 ? 'border-teresita-700 text-teresita-700'
                 : 'border-transparent text-ink-500 hover:text-ink-700',
             )}
           >
             {t.label}
+            {t.v === 'avisos' && avisosPendientes > 0 && (
+              <span className="ml-1.5 bg-pomodoro-600 text-white text-2xs font-mono rounded-full px-1.5 py-0.5">
+                {avisosPendientes}
+              </span>
+            )}
           </button>
         ))}
       </nav>
 
-      {tab === 'proveedores' ? <ProveedoresTab /> : <InsumosTab />}
+      {tab === 'proveedores' && <ProveedoresTab />}
+      {tab === 'insumos' && <InsumosTab />}
+      {tab === 'avisos' && <AvisosDePrecio onCambio={handleAvisos} />}
+      {tab === 'excel' && <ExcelProveedores />}
     </div>
   );
 }
