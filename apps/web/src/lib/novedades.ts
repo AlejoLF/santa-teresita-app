@@ -34,6 +34,18 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.65',
+    fecha: '24 de agosto',
+    titulo: 'Cargar las horas y pagarlas en el mismo paso',
+    cambios: [
+      'Al cargar las horas de alguien ahora aparece "Pagarle ahora". Si lo tildás, en el mismo paso se le paga: no hace falta cargar las horas y después ir a liquidar. Antes de confirmar te muestra la cuenta hecha —lo de hoy, lo que ya se le debía y los adelantos descontados— así ves exactamente cuánto va a salir.',
+      'Ese pago tiene las mismas opciones que el pago de sueldo de siempre: elegís el concepto (Sueldo, Jornada, Horas extra…) y podés repartirlo entre dos cuentas, una parte en efectivo y otra por transferencia.',
+      'Al cargar las horas podés cambiar la categoría SÓLO POR ESE DÍA. Sirve para cuando alguien de mostrador cubre cocina y ese día cobra distinto: se le paga a la tarifa de cocina y su categoría de siempre no cambia. En el listado, esos días quedan marcados con la categoría entre paréntesis para que se vean de un vistazo.',
+      'Al dar de alta a un empleado ahora se le elige la categoría ahí mismo. Y en la lista de empleados, el que no tenga ninguna aparece avisado: sin categoría, las horas que le cargues valen $0.',
+      'En la ficha de cada persona podés cambiar de dónde sale su valor hora (por categoría o un valor propio) con el botón "cambiar", al lado del nombre.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.64',
     fecha: '22 de agosto',
     titulo: 'Banco de horas: llevá la cuenta de lo que se le debe a cada uno',

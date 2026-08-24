@@ -18,6 +18,7 @@ import {
   descripcionFiltros,
   nombreArchivoExport,
 } from '../services/export-busqueda.js';
+import { ReglaNegocioError } from '../services/errores.js';
 
 /**
  * CRUD de empleados + carga de movimientos de personal (sueldos, adelantos, comisiones).
@@ -30,6 +31,21 @@ import {
  * muestra la etiqueta linda y el archivo tiene que coincidir con lo que la
  * encargada ve.
  */
+/**
+ * La categoría tiene que existir y estar activa.
+ *
+ * Sin esto, un id inventado revienta contra la foreign key y sale como error
+ * interno del sistema — justo lo que los códigos de error vinieron a evitar.
+ */
+async function exigirCategoria(id: string): Promise<void> {
+  const cat = await prisma.categoriaLaboral.findUnique({
+    where: { id },
+    select: { activo: true },
+  });
+  if (!cat) throw new ReglaNegocioError('Esa categoría laboral no existe.', 404);
+  if (!cat.activo) throw new ReglaNegocioError('Esa categoría laboral está desactivada.');
+}
+
 const PUESTO_LABEL: Record<string, string> = {
   CAJERO: 'Cajero',
   COCINERO: 'Cocinero',
@@ -106,7 +122,13 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
       const take = exportando ? TOPE_EXPORT : q.pageSize;
 
       const [empleados, total] = await Promise.all([
-        prisma.empleado.findMany({ where, orderBy, skip, take }),
+        prisma.empleado.findMany({
+          where,
+          orderBy,
+          skip,
+          take,
+          include: { categoriaLaboral: { select: { id: true, nombre: true } } },
+        }),
         prisma.empleado.count({ where }),
       ]);
 
@@ -191,6 +213,7 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
             { header: 'Nombre', key: 'nombre', width: 22 },
             { header: 'Apellido', key: 'apellido', width: 22 },
             { header: 'Puesto', key: 'puesto', width: 16 },
+            { header: 'Categoría laboral', key: 'categoria', width: 18 },
             { header: 'Estado', key: 'estado', width: 10 },
             { header: 'DNI', key: 'dni', width: 14 },
             { header: 'CUIL', key: 'cuil', width: 16 },
@@ -212,6 +235,7 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
             nombre: f.e.nombre,
             apellido: f.e.apellido ?? '',
             puesto: PUESTO_LABEL[f.e.puesto] ?? f.e.puesto,
+            categoria: f.e.categoriaLaboral?.nombre ?? (f.e.valorHoraPropio ? 'valor propio' : ''),
             estado: f.e.activo ? 'Activo' : 'Inactivo',
             dni: f.e.dni ?? '',
             cuil: f.e.cuil ?? '',
@@ -365,6 +389,11 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
           ]),
           sueldoBase: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
           formaPago: z.string().max(40).optional(),
+          // De dónde sale su valor hora en el banco de horas. Se pide acá —al
+          // dar de alta— y no en una pantalla aparte: un empleado sin categoría
+          // acumula horas que valen $0, y el único síntoma sería un total más
+          // bajo de lo que corresponde.
+          categoriaLaboralId: z.string().uuid().nullish(),
           telefono: z.string().max(40).optional(),
           email: z.string().email().optional(),
           fechaIngreso: z.string().optional(),
@@ -381,11 +410,13 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
         puesto: 'CAJERO' | 'COCINERO' | 'ENCARGADO' | 'MOTOQUERO' | 'ADMINISTRATIVO' | 'OTRO';
         sueldoBase?: string;
         formaPago?: string;
+        categoriaLaboralId?: string | null;
         telefono?: string;
         email?: string;
         fechaIngreso?: string;
         observaciones?: string;
       };
+      if (body.categoriaLaboralId) await exigirCategoria(body.categoriaLaboralId);
       const created = await prisma.empleado.create({
         data: {
           nombre: body.nombre,
@@ -395,6 +426,7 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
           puesto: body.puesto,
           sueldoBase: body.sueldoBase ?? null,
           formaPago: body.formaPago ?? null,
+          categoriaLaboralId: body.categoriaLaboralId ?? null,
           telefono: body.telefono ?? null,
           email: body.email ?? null,
           fechaIngreso: body.fechaIngreso ? new Date(body.fechaIngreso) : null,
@@ -429,6 +461,7 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
             .optional(),
           sueldoBase: z.string().regex(/^\d+(\.\d{1,2})?$/).nullable().optional(),
           formaPago: z.string().max(40).nullable().optional(),
+          categoriaLaboralId: z.string().uuid().nullable().optional(),
           telefono: z.string().max(40).nullable().optional(),
           email: z.string().email().nullable().optional(),
           activo: z.boolean().optional(),
@@ -440,9 +473,13 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
       const params = req.params as { id: string };
       const before = await prisma.empleado.findUnique({ where: { id: params.id } });
       if (!before) return reply.code(404).send({ error: 'Empleado no encontrado' });
+      const cambios = req.body as Record<string, unknown>;
+      if (typeof cambios.categoriaLaboralId === 'string') {
+        await exigirCategoria(cambios.categoriaLaboralId);
+      }
       const updated = await prisma.empleado.update({
         where: { id: params.id },
-        data: req.body as Record<string, unknown>,
+        data: cambios,
       });
       await recordAudit({
         tabla: 'empleados',
