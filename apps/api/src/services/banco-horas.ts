@@ -11,6 +11,12 @@
  *    en contra del empleado: subiría el valor hora y terminaría debiendo más
  *    plata de la que se llevó.
  *
+ * 3. **Es una cuenta corriente, no un todo-o-nada.** Un préstamo de $100.000 no
+ *    se cubre al día siguiente trabajando gratis: se devuelve de a poco, en los
+ *    días que la encargada decide, mientras la persona sigue cobrando normal.
+ *    Por eso cada fila lleva cuánto se le aplicó, y liquidar recibe DOS montos
+ *    —cuánto se paga y cuánto va contra el préstamo— en vez de netear solo.
+ *
  * De ahí sale lo que más condiciona el código: **el saldo no se persiste**. Se
  * calcula al leer. Un saldo guardado en pesos quedaría viejo apenas alguien
  * toca una categoría, y nadie se enteraría de que está mintiendo.
@@ -111,7 +117,13 @@ export interface SaldoEmpleado {
   sinValorHora: boolean;
   /** Esas horas valuadas a HOY, tipo por tipo. */
   montoHoras: number;
-  /** Adelantos entregados y todavía no descontados. */
+  /**
+   * Préstamos entregados y todavía no devueltos.
+   *
+   * NO se descuenta solo al pagar: es una deuda que se salda de a poco, cuando
+   * la encargada lo decide. Netearla automáticamente obligaba a la persona a
+   * trabajar gratis hasta cubrirla, que no es cómo funciona el local.
+   */
   adelantosPendientes: number;
   /** `montoHoras − adelantosPendientes`. Negativo = la persona debe. */
   saldo: number;
@@ -120,13 +132,24 @@ export interface SaldoEmpleado {
 
 /** Filas pendientes de un empleado (sin liquidar), con su tipo de hora. */
 type FilaPendiente = {
+  id?: string;
   tipo: string;
   horas: Prisma.Decimal | null;
+  horasAplicadas: Prisma.Decimal;
   montoPesos: Prisma.Decimal | null;
+  montoAplicado: Prisma.Decimal;
   tipoHora: TipoHoraTarifa | null;
   /** Excepción del día: se trabajó en otra categoría. null = la de siempre. */
   categoriaLaboral: { id: string; nombre: string; valorHora: Prisma.Decimal } | null;
 };
+
+/** Lo que falta cobrar de una fila de horas, y lo que falta devolver de un préstamo. */
+export function restanteHoras(f: { horas: Prisma.Decimal | null; horasAplicadas: Prisma.Decimal | number }): number {
+  return Math.max(0, Number(f.horas ?? 0) - Number(f.horasAplicadas));
+}
+export function restantePrestamo(f: { montoPesos: Prisma.Decimal | null; montoAplicado: Prisma.Decimal | number }): number {
+  return Math.max(0, Number(f.montoPesos ?? 0) - Number(f.montoAplicado));
+}
 
 /**
  * Saldo a partir de las filas pendientes ya cargadas.
@@ -175,8 +198,8 @@ export function calcularSaldo(
   let algunaSinValor = false;
 
   for (const f of filas) {
-    const horas = f.horas != null ? Number(f.horas) : 0;
-    const pesos = f.montoPesos != null ? Number(f.montoPesos) : 0;
+    const horas = restanteHoras(f);
+    const pesos = restantePrestamo(f);
     if (horas) {
       horasPendientes += horas;
       // Cada fila se valúa con SU tipo y SU categoría: mezclar normales con
@@ -206,21 +229,28 @@ export async function filasPendientesDe(empleadoIds: string[]) {
   const filas = await prisma.movimientoBancoHoras.findMany({
     where: { empleadoId: { in: empleadoIds }, liquidacionId: null },
     select: {
+      id: true,
       empleadoId: true,
       tipo: true,
       horas: true,
+      horasAplicadas: true,
       montoPesos: true,
+      montoAplicado: true,
       tipoHora: { select: { multiplicador: true, valorHoraFijo: true } },
       categoriaLaboral: { select: { id: true, nombre: true, valorHora: true } },
     },
+    orderBy: [{ fecha: 'asc' }, { creadoAt: 'asc' }],
   });
   const out = new Map<string, FilaPendiente[]>();
   for (const f of filas) {
     const arr = out.get(f.empleadoId) ?? [];
     arr.push({
+      id: f.id,
       tipo: f.tipo,
       horas: f.horas,
+      horasAplicadas: f.horasAplicadas,
       montoPesos: f.montoPesos,
+      montoAplicado: f.montoAplicado,
       tipoHora: f.tipoHora,
       categoriaLaboral: f.categoriaLaboral,
     });
@@ -291,62 +321,116 @@ export async function resolverCategoriaPago(
   }
   return { id: cat.id, nombre: cat.nombre };
 }
+export interface FilaConsumible {
+  id: string;
+  tipo: string;
+  horasRestantes: number;
+  /** Valor hora YA resuelto para esta fila (su categoría y su tipo de hora). */
+  valorHora: number;
+  montoRestante: number;
+  prestamoRestante: number;
+}
 
 export interface ResumenLiquidacion {
+  /** Horas cargadas y todavía no cobradas. */
   horas: number;
+  /** Lo que valen esas horas HOY. Es el techo de lo que se puede liquidar. */
   montoHoras: number;
-  adelantos: number;
-  aPagar: number;
-  idsPendientes: string[];
+  /** Préstamos entregados y todavía no devueltos. */
+  prestamos: number;
+  /** Filas de horas, de la más vieja a la más nueva. */
+  horasFilas: FilaConsumible[];
+  /** Préstamos, del más viejo al más nuevo. */
+  prestamoFilas: FilaConsumible[];
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+/** Las horas aplicadas van a 6 decimales: ver el comentario del schema. */
+const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
 
 /**
- * Qué se le debe hoy, sin tocar nada. Lo usan la pantalla (para mostrar el
- * total antes de confirmar) y la liquidación (para cobrarlo).
+ * Qué se le debe hoy y qué debe él, sin tocar nada.
+ *
+ * Lo usan la pantalla (para mostrar los números antes de confirmar) y la
+ * liquidación (para cobrarlos). Que salgan del mismo lugar es lo que garantiza
+ * que el cartel y la caja digan lo mismo.
  */
 export async function resumenPendiente(
   empleado: EmpleadoTarifa & { nombre: string; apellido?: string | null },
   tx: { movimientoBancoHoras: { findMany: typeof prisma.movimientoBancoHoras.findMany } } = prisma,
 ): Promise<ResumenLiquidacion> {
-  const pendientes = await tx.movimientoBancoHoras.findMany({
+  const filas = await tx.movimientoBancoHoras.findMany({
     where: { empleadoId: empleado.id, liquidacionId: null },
     select: {
       id: true,
+      tipo: true,
       horas: true,
+      horasAplicadas: true,
       montoPesos: true,
+      montoAplicado: true,
       tipoHora: { select: { multiplicador: true, valorHoraFijo: true } },
       categoriaLaboral: { select: { valorHora: true } },
     },
+    // FIFO: se cobran primero las horas más viejas y se devuelve primero el
+    // préstamo más viejo. Sin un orden fijo, dos liquidaciones iguales podrían
+    // dejar saldos distintos.
+    orderBy: [{ fecha: 'asc' }, { creadoAt: 'asc' }],
   });
 
+  const horasFilas: FilaConsumible[] = [];
+  const prestamoFilas: FilaConsumible[] = [];
   let horas = 0;
   let montoHoras = 0;
-  let adelantos = 0;
-  for (const f of pendientes) {
-    const h = f.horas != null ? Number(f.horas) : 0;
-    if (h) {
-      horas += h;
-      montoHoras += h * valorDeTipoHora(valorHoraDeFila(empleado, f.categoriaLaboral), f.tipoHora);
+  let prestamos = 0;
+
+  for (const f of filas) {
+    const hRest = restanteHoras(f);
+    if (hRest > 0) {
+      const vh = valorDeTipoHora(valorHoraDeFila(empleado, f.categoriaLaboral), f.tipoHora);
+      const monto = r2(hRest * vh);
+      horas += hRest;
+      montoHoras += monto;
+      horasFilas.push({
+        id: f.id,
+        tipo: f.tipo,
+        horasRestantes: hRest,
+        valorHora: vh,
+        montoRestante: monto,
+        prestamoRestante: 0,
+      });
     }
-    if (f.montoPesos != null) adelantos += Number(f.montoPesos);
+    const pRest = restantePrestamo(f);
+    if (pRest > 0) {
+      prestamos += pRest;
+      prestamoFilas.push({
+        id: f.id,
+        tipo: f.tipo,
+        horasRestantes: 0,
+        valorHora: 0,
+        montoRestante: 0,
+        prestamoRestante: pRest,
+      });
+    }
   }
-  horas = r2(horas);
-  montoHoras = r2(montoHoras);
-  adelantos = r2(adelantos);
-  return {
-    horas,
-    montoHoras,
-    adelantos,
-    aPagar: r2(montoHoras - adelantos),
-    idsPendientes: pendientes.map((p) => p.id),
-  };
+
+  return { horas: r2(horas), montoHoras: r2(montoHoras), prestamos: r2(prestamos), horasFilas, prestamoFilas };
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Liquidar
+// ────────────────────────────────────────────────────────────────────────
+
+export interface PlanLiquidacion {
+  /** Lo que sale de la caja y se le entrega. */
+  montoPagado: number;
+  /** Lo que se descuenta del préstamo en vez de pagarse. */
+  montoAlPrestamo: number;
 }
 
 export interface OpcionesLiquidar {
   empleado: EmpleadoTarifa & { nombre: string; apellido?: string | null };
   resumen: ResumenLiquidacion;
+  plan: PlanLiquidacion;
   lineas: LineaPagoLiq[];
   categoriaMovimientoId: string;
   sesionCajaId: string;
@@ -358,32 +442,89 @@ export interface OpcionesLiquidar {
 }
 
 /**
- * Cierra las horas pendientes y paga.
+ * Valida el plan contra lo que hay pendiente.
  *
- * Todo adentro de UNA transacción, con las mismas dos guardas que tenía el
- * botón de liquidar:
+ * Separado de la escritura para que la pantalla pueda pedir la misma
+ * validación antes de mostrar el botón, sin duplicar los límites.
+ */
+export function validarPlan(resumen: ResumenLiquidacion, plan: PlanLiquidacion): void {
+  const total = r2(plan.montoPagado + plan.montoAlPrestamo);
+  if (total <= 0) {
+    throw new ReglaNegocioError('Poné cuánto se le paga, o cuánto va contra el préstamo.');
+  }
+  // Medio centavo de tolerancia: los montos vienen de dividir pesos por el
+  // valor hora, y exigir igualdad exacta rechazaría un "pagar todo" legítimo.
+  if (total > resumen.montoHoras + 0.005) {
+    throw new ReglaNegocioError(
+      `Sólo hay $${resumen.montoHoras.toFixed(2)} en horas para cubrir. Estás queriendo aplicar $${total.toFixed(2)}.`,
+    );
+  }
+  if (plan.montoAlPrestamo > resumen.prestamos + 0.005) {
+    throw new ReglaNegocioError(
+      `El préstamo pendiente es de $${resumen.prestamos.toFixed(2)}, no se le puede descontar $${plan.montoAlPrestamo.toFixed(2)}.`,
+    );
+  }
+}
+
+/**
+ * Cierra las horas que se cubren y paga.
  *
- * - Cierra **sólo las filas que se leyeron**, por id. Un `liquidacionId: null`
- *   a secas arrastraría una fila que entró en el medio sin haberla contado, y
- *   se pagaría de menos.
- * - Si el update no cierra exactamente esas filas, aborta: alguien liquidó en
- *   paralelo, y pagar dos veces las mismas horas no se deshace solo.
+ * Todo adentro de UNA transacción. Dos cosas que no son obvias:
+ *
+ * - **Consume de a partes.** Una fila de 8 hs puede quedar cobrada a medias.
+ *   Lo que sigue pendiente son HORAS, no pesos: si el valor sube, sube lo que
+ *   falta cobrar. Ése es el punto del banco de horas.
+ * - **El préstamo NO se netea solo.** Se descuenta lo que diga el plan y nada
+ *   más. Netearlo automáticamente obligaba a la persona a trabajar gratis
+ *   hasta cubrirlo.
  */
 export async function liquidarEnTransaccion(
   tx: Prisma.TransactionClient,
   o: OpcionesLiquidar,
-): Promise<{ liquidacionId: string; movimientoId: string | null }> {
-  const { resumen: r, empleado } = o;
-  const base = valorHoraBase(empleado);
+): Promise<{ liquidacionId: string; movimientoId: string | null; horasConsumidas: number }> {
+  const { resumen, plan, empleado } = o;
+  validarPlan(resumen, plan);
 
-  // Puede dar 0 si las horas cubren justo los adelantos: la liquidación existe
-  // igual (cierra las filas), pero no sale plata y no corresponde movimiento.
+  const aCubrir = r2(plan.montoPagado + plan.montoAlPrestamo);
+
+  // ── 1. Consumir horas, de la más vieja a la más nueva ──
+  let restante = aCubrir;
+  let horasConsumidas = 0;
+  const cerradas: string[] = [];
+  for (const f of resumen.horasFilas) {
+    if (restante <= 0.004) break;
+    const cubreEntera = f.montoRestante <= restante + 0.004;
+    const horas = cubreEntera ? f.horasRestantes : r6(restante / f.valorHora);
+    if (horas <= 0) continue;
+    await tx.movimientoBancoHoras.update({
+      where: { id: f.id },
+      data: { horasAplicadas: { increment: horas } },
+    });
+    horasConsumidas += horas;
+    restante = r2(restante - (cubreEntera ? f.montoRestante : restante));
+    if (cubreEntera) cerradas.push(f.id);
+  }
+
+  // ── 2. Descontar del préstamo lo que diga el plan ──
+  let alPrestamo = plan.montoAlPrestamo;
+  for (const f of resumen.prestamoFilas) {
+    if (alPrestamo <= 0.004) break;
+    const monto = Math.min(f.prestamoRestante, alPrestamo);
+    await tx.movimientoBancoHoras.update({
+      where: { id: f.id },
+      data: { montoAplicado: { increment: monto } },
+    });
+    alPrestamo = r2(alPrestamo - monto);
+    if (monto >= f.prestamoRestante - 0.004) cerradas.push(f.id);
+  }
+
+  // ── 3. La plata que sale de la caja ──
   let mov: { id: string } | null = null;
-  if (r.aPagar > 0) {
+  if (plan.montoPagado > 0) {
     mov = await tx.movimiento.create({
       data: {
         tipo: 'EGRESO',
-        monto: r.aPagar,
+        monto: plan.montoPagado,
         categoriaId: o.categoriaMovimientoId,
         cuentaOrigenId: o.lineas[0]!.cuentaId,
         entidadId: empleado.id,
@@ -391,7 +532,7 @@ export async function liquidarEnTransaccion(
         fechaComputo: o.fechaComputo,
         observacion:
           o.observacion ??
-          `Liquidación de ${r.horas.toFixed(2)} hs a ${empleado.nombre}${empleado.apellido ? ' ' + empleado.apellido : ''}`,
+          `Pago de ${r2(horasConsumidas).toFixed(2)} hs a ${empleado.nombre}${empleado.apellido ? ' ' + empleado.apellido : ''}`,
         estado: 'CONFIRMADO',
         usuarioId: o.usuarioId,
       },
@@ -424,37 +565,46 @@ export async function liquidarEnTransaccion(
     data: {
       empleadoId: empleado.id,
       fecha: o.fechaHoy,
-      horasLiquidadas: r.horas,
-      // El valor BASE aplicado. El monto sale de valuar fila por fila con su
-      // tipo y su categoría, así que con filas mezcladas este número es la
+      horasLiquidadas: r2(horasConsumidas),
+      // El valor BASE del empleado. El monto sale de valuar fila por fila con
+      // su tipo y su categoría, así que con filas mezcladas este número es la
       // referencia, no una multiplicación directa.
-      valorHoraAplicado: base,
-      montoHoras: r.montoHoras,
-      adelantosAplicados: r.adelantos,
-      montoPagado: r.aPagar,
+      valorHoraAplicado: valorHoraBase(empleado),
+      montoHoras: aCubrir,
+      adelantosAplicados: plan.montoAlPrestamo,
+      montoPagado: plan.montoPagado,
       movimientoId: mov?.id ?? null,
       observacion: o.observacion ?? null,
       usuarioId: o.usuarioId,
     },
   });
 
-  const cerradas = await tx.movimientoBancoHoras.updateMany({
-    where: { id: { in: r.idsPendientes }, liquidacionId: null },
-    data: { liquidacionId: liq.id },
-  });
-  if (cerradas.count !== r.idsPendientes.length) {
-    throw new ReglaNegocioError(
-      'Otra persona liquidó a este empleado al mismo tiempo. Volvé a abrir la ficha y fijate el saldo antes de reintentar.',
-    );
+  // Cerrar SÓLO las filas que quedaron consumidas del todo, y sólo si seguían
+  // abiertas. Si alguien liquidó en paralelo entre la lectura y esto, el
+  // updateMany no las toca y se aborta: pagar dos veces las mismas horas no se
+  // deshace solo.
+  if (cerradas.length) {
+    const n = await tx.movimientoBancoHoras.updateMany({
+      where: { id: { in: cerradas }, liquidacionId: null },
+      data: { liquidacionId: liq.id },
+    });
+    if (n.count !== cerradas.length) {
+      throw new ReglaNegocioError(
+        'Otra persona liquidó a este empleado al mismo tiempo. Volvé a abrir la ficha y fijate el saldo antes de reintentar.',
+      );
+    }
   }
 
-  // El asiento que deja el saldo en cero, ya marcado como liquidado.
+  // El asiento del pago, ya marcado como liquidado para que no vuelva a
+  // contarse como pendiente.
   await tx.movimientoBancoHoras.create({
     data: {
       empleadoId: empleado.id,
       tipo: 'LIQUIDACION',
-      horas: -r.horas,
-      montoPesos: r.aPagar > 0 ? -r.aPagar : null,
+      horas: -r2(horasConsumidas),
+      horasAplicadas: -r2(horasConsumidas),
+      montoPesos: plan.montoPagado > 0 ? -plan.montoPagado : null,
+      montoAplicado: plan.montoPagado > 0 ? -plan.montoPagado : 0,
       fecha: o.fechaHoy,
       observacion: o.observacion ?? null,
       movimientoId: mov?.id ?? null,
@@ -463,5 +613,5 @@ export async function liquidarEnTransaccion(
     },
   });
 
-  return { liquidacionId: liq.id, movimientoId: mov?.id ?? null };
+  return { liquidacionId: liq.id, movimientoId: mov?.id ?? null, horasConsumidas: r2(horasConsumidas) };
 }

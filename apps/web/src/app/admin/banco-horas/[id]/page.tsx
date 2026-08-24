@@ -164,15 +164,21 @@ export default function BancoHorasEmpleadoPage() {
           <MoneyAmount value={d.saldo.montoHoras} className="text-lg text-basil-600" />
         </div>
         <div>
-          <div className="text-2xs uppercase tracking-wider text-ink-500">Adelantos</div>
+          {/* Deuda propia, no un descuento automático: se devuelve de a poco,
+              los días que la encargada decide. */}
+          <div className="text-2xs uppercase tracking-wider text-ink-500">Préstamos</div>
           <MoneyAmount value={d.saldo.adelantosPendientes} className="text-lg text-saffron-600" />
+          <div className="text-2xs text-ink-400">que él debe</div>
         </div>
         <div>
-          <div className="text-2xs uppercase tracking-wider text-ink-500">Saldo</div>
+          <div className="text-2xs uppercase tracking-wider text-ink-500">Diferencia</div>
           <MoneyAmount
             value={d.saldo.saldo}
             className={cn('text-lg font-medium', saldoNum < 0 && 'text-pomodoro-600')}
           />
+          <div className="text-2xs text-ink-400">
+            {saldoNum < 0 ? 'a favor del local' : 'si se cancelara todo'}
+          </div>
         </div>
       </section>
 
@@ -312,6 +318,95 @@ interface Linea {
   monto: string;
   metodo: Metodo;
   numeroReferencia: string;
+}
+
+/**
+ * Cómo se reparte lo que valen las horas: cuánto se le paga y cuánto va contra
+ * el préstamo.
+ *
+ * El default cubre el día normal —se paga todo, el préstamo no se toca— así
+ * que en el caso de todos los días no hay nada que tocar acá. Los campos están
+ * porque el préstamo se devuelve de a poco, cuando ella decide, y porque a
+ * veces se paga una parte y el resto queda para otro día.
+ */
+function Reparto({
+  disponible,
+  prestamos,
+  pagado,
+  setPagado,
+  alPrestamo,
+  setAlPrestamo,
+}: {
+  disponible: number;
+  prestamos: number;
+  pagado: string;
+  setPagado: (v: string) => void;
+  alPrestamo: string;
+  setAlPrestamo: (v: string) => void;
+}) {
+  const p = Number(pagado || 0);
+  const a = Number(alPrestamo || 0);
+  const queda = Math.round((disponible - p - a) * 100) / 100;
+  const excedido = queda < -0.005;
+  const excedePrestamo = a > prestamos + 0.005;
+
+  return (
+    <div className="bg-cream-100 rounded p-3 space-y-2">
+      <div className="flex justify-between text-sm font-medium">
+        <span>Horas para cobrar</span>
+        <MoneyAmount value={disponible.toFixed(2)} />
+      </div>
+
+      <label className="block text-2xs text-ink-500">
+        Se le paga ahora
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          value={pagado}
+          onChange={(e) => setPagado(e.target.value)}
+          className="input w-full mt-1 text-sm"
+        />
+      </label>
+
+      {prestamos > 0 && (
+        <label className="block text-2xs text-ink-500">
+          Va contra el préstamo — debe{' '}
+          <MoneyAmount value={prestamos.toFixed(2)} className="text-saffron-600" />
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={alPrestamo}
+            onChange={(e) => setAlPrestamo(e.target.value)}
+            className="input w-full mt-1 text-sm"
+          />
+          <span className="block mt-1">
+            Dejalo en 0 si esta vez no le descontás nada. El préstamo queda como está.
+          </span>
+        </label>
+      )}
+
+      <div className="flex justify-between text-2xs border-t border-cream-300 pt-2">
+        <span className="text-ink-500">Queda sin cobrar, en horas</span>
+        <MoneyAmount
+          value={Math.max(0, queda).toFixed(2)}
+          className={queda > 0.005 ? 'text-ink-700' : 'text-ink-300'}
+        />
+      </div>
+
+      {excedido && (
+        <div className="bg-pomodoro-100 text-pomodoro-600 px-2 py-1.5 rounded text-2xs">
+          Estás repartiendo ${(p + a).toFixed(2)} y sólo hay ${disponible.toFixed(2)} en horas.
+        </div>
+      )}
+      {excedePrestamo && (
+        <div className="bg-pomodoro-100 text-pomodoro-600 px-2 py-1.5 rounded text-2xs">
+          El préstamo pendiente es de ${prestamos.toFixed(2)}.
+        </div>
+      )}
+    </div>
+  );
 }
 
 function BloquePago({
@@ -459,9 +554,10 @@ interface PreviewPago {
   montoNuevo: string;
   horasPendientes: string;
   montoPendiente: string;
-  adelantos: string;
+  /** Lo que debe de préstamos. NO se descuenta solo. */
+  prestamos: string;
+  /** Techo de lo que se puede cobrar hoy: horas viejas + las nuevas. */
   montoHoras: string;
-  aPagar: string;
   sinValorHora: boolean;
 }
 
@@ -500,6 +596,11 @@ function ModalAccion({
   const [yaCargado, setYaCargado] = useState<string | null>(null);
   const [pagarAhora, setPagarAhora] = useState(false);
   const [preview, setPreview] = useState<PreviewPago | null>(null);
+  // Reparto: cuánto se le paga y cuánto va contra el préstamo. Vacío = todavía
+  // no lo tocó, y vale el default (pagar todo, préstamo intacto).
+  const [montoPagado, setMontoPagado] = useState('');
+  const [alPrestamo, setAlPrestamo] = useState('0');
+  const [tocoElReparto, setTocoElReparto] = useState(false);
   const [concepto, setConcepto] = useState('Sueldo');
   const [conceptos, setConceptos] = useState<string[]>(['Sueldo', 'Jornada', 'Horas extra']);
   const [lineas, setLineas] = useState<Linea[]>([
@@ -556,8 +657,23 @@ function ModalAccion({
     };
   }, [tipo, pagarAhora, horas, tipoHoraId, categoriaId, empleadoId]);
 
-  const aPagarLiq = Number(saldo.saldo);
-  const totalAPagar = tipo === 'liquidar' ? aPagarLiq : Number(preview?.aPagar ?? 0);
+  // Lo que hay para cobrar HOY: en liquidar, las horas pendientes; en cargar,
+  // ésas más las que se están cargando ahora.
+  const disponible =
+    tipo === 'liquidar' ? Number(saldo.montoHoras) : Number(preview?.montoHoras ?? 0);
+  const prestamos =
+    tipo === 'liquidar' ? Number(saldo.adelantosPendientes) : Number(preview?.prestamos ?? 0);
+
+  // Mientras no lo toque, "se le paga" sigue al total: cargar 8 hs y pagarlas
+  // es un solo gesto, sin escribir un número.
+  const pagadoEfectivo = tocoElReparto
+    ? Number(montoPagado || 0)
+    : Math.max(0, Math.round((disponible - Number(alPrestamo || 0)) * 100) / 100);
+  const totalAPagar = pagadoEfectivo;
+
+  useEffect(() => {
+    if (!tocoElReparto) setMontoPagado(disponible > 0 ? disponible.toFixed(2) : '');
+  }, [disponible, tocoElReparto]);
 
   function cuerpoPago() {
     const dividido = lineas.length > 1;
@@ -588,7 +704,12 @@ function ModalAccion({
           ...(tipoHoraId && { tipoHoraId }),
           ...(categoriaId && { categoriaLaboralId: categoriaId }),
           ...(observacion.trim() && !pagarAhora && { observacion: observacion.trim() }),
-          ...(pagarAhora && { pagarAhora: true, pago: cuerpoPago() }),
+          ...(pagarAhora && {
+            pagarAhora: true,
+            pago: cuerpoPago(),
+            montoPagado: pagadoEfectivo,
+            montoAlPrestamo: Number(alPrestamo || 0),
+          }),
         });
       } else if (tipo === 'adelanto') {
         await api.post(`/admin/banco-horas/${empleadoId}/adelanto`, {
@@ -598,7 +719,11 @@ function ModalAccion({
           ...(observacion.trim() && { observacion: observacion.trim() }),
         });
       } else {
-        await api.post(`/admin/banco-horas/${empleadoId}/liquidar`, cuerpoPago());
+        await api.post(`/admin/banco-horas/${empleadoId}/liquidar`, {
+          ...cuerpoPago(),
+          montoPagado: pagadoEfectivo,
+          montoAlPrestamo: Number(alPrestamo || 0),
+        });
       }
       onHecho();
     } catch (e) {
@@ -617,6 +742,15 @@ function ModalAccion({
     lineas.length > 1 &&
     Math.abs(lineas.reduce((a, l) => a + Number(l.monto || 0), 0) - totalAPagar) > 0.009;
   const faltaCuenta = lineas.some((l) => !l.cuentaId);
+
+  // El reparto no cierra: se aplica más de lo que valen las horas, se descuenta
+  // más de lo que se debe, o no se aplica nada.
+  const alPrestamoNum = Number(alPrestamo || 0);
+  const repartoInvalido =
+    disponible <= 0 ||
+    totalAPagar + alPrestamoNum > disponible + 0.005 ||
+    alPrestamoNum > prestamos + 0.005 ||
+    totalAPagar + alPrestamoNum <= 0;
 
   return (
     <div className="fixed inset-0 bg-ink-900/40 flex items-center justify-center p-4 z-50">
@@ -726,21 +860,11 @@ function ModalAccion({
                   {Number(preview.horasPendientes) > 0 && (
                     <div className="flex justify-between">
                       <span className="text-ink-500">
-                        + {preview.horasPendientes} hs que ya debía
+                        + {preview.horasPendientes} hs que ya tenía sin cobrar
                       </span>
                       <MoneyAmount value={preview.montoPendiente} />
                     </div>
                   )}
-                  {Number(preview.adelantos) > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-ink-500">− adelantos</span>
-                      <MoneyAmount value={preview.adelantos} className="text-saffron-600" />
-                    </div>
-                  )}
-                  <div className="flex justify-between font-medium border-t border-cream-300 pt-1">
-                    <span>A pagar</span>
-                    <MoneyAmount value={preview.aPagar} />
-                  </div>
                 </div>
                 {preview.sinValorHora && (
                   <div className="bg-pomodoro-100 text-pomodoro-600 px-3 py-2 rounded text-2xs">
@@ -748,20 +872,30 @@ function ModalAccion({
                     una antes de pagarle.
                   </div>
                 )}
-                {Number(preview.aPagar) < 0 && (
-                  <div className="bg-pomodoro-100 text-pomodoro-600 px-3 py-2 rounded text-2xs">
-                    Los adelantos superan lo trabajado: no hay nada que pagarle todavía.
-                  </div>
-                )}
-                <BloquePago
-                  total={Number(preview.aPagar)}
-                  cuentas={cuentas}
-                  concepto={concepto}
-                  setConcepto={setConcepto}
-                  conceptos={conceptos}
-                  lineas={lineas}
-                  setLineas={setLineas}
+                <Reparto
+                  disponible={disponible}
+                  prestamos={prestamos}
+                  pagado={montoPagado}
+                  setPagado={(v) => {
+                    setTocoElReparto(true);
+                    setMontoPagado(v);
+                  }}
+                  alPrestamo={alPrestamo}
+                  setAlPrestamo={setAlPrestamo}
                 />
+                {/* Si no sale plata —sólo se descuenta del préstamo— no hay
+                    nada que elegir: ni cuenta, ni método, ni concepto. */}
+                {totalAPagar > 0 && (
+                  <BloquePago
+                    total={totalAPagar}
+                    cuentas={cuentas}
+                    concepto={concepto}
+                    setConcepto={setConcepto}
+                    conceptos={conceptos}
+                    lineas={lineas}
+                    setLineas={setLineas}
+                  />
+                )}
               </>
             )}
           </>
@@ -803,35 +937,42 @@ function ModalAccion({
 
         {tipo === 'liquidar' && (
           <>
-            <div className="bg-cream-100 rounded p-3 text-sm space-y-1">
+            <div className="bg-cream-100 rounded p-3 text-sm">
               <div className="flex justify-between">
-                <span className="text-ink-500">{saldo.horasPendientes} hs</span>
+                <span className="text-ink-500">{saldo.horasPendientes} hs sin cobrar</span>
                 <MoneyAmount value={saldo.montoHoras} />
               </div>
-              <div className="flex justify-between">
-                <span className="text-ink-500">− adelantos</span>
-                <MoneyAmount value={saldo.adelantosPendientes} className="text-saffron-600" />
-              </div>
-              <div className="flex justify-between font-medium border-t border-cream-300 pt-1">
-                <span>A pagar</span>
-                <MoneyAmount value={saldo.saldo} />
-              </div>
             </div>
-            {aPagarLiq < 0 && (
-              <div className="bg-pomodoro-100 text-pomodoro-600 px-3 py-2 rounded text-2xs">
-                Los adelantos superan las horas trabajadas. Cargá las horas que falten antes
-                de liquidar.
+            {disponible <= 0 && (
+              <div className="bg-saffron-100 text-saffron-700 px-3 py-2 rounded text-2xs">
+                No tiene horas cargadas sin cobrar.
+                {prestamos > 0 && ' Para descontarle del préstamo, cargale las horas primero.'}
               </div>
             )}
-            <BloquePago
-              total={aPagarLiq}
-              cuentas={cuentas}
-              concepto={concepto}
-              setConcepto={setConcepto}
-              conceptos={conceptos}
-              lineas={lineas}
-              setLineas={setLineas}
-            />
+            {disponible > 0 && (
+              <Reparto
+                disponible={disponible}
+                prestamos={prestamos}
+                pagado={montoPagado}
+                setPagado={(v) => {
+                  setTocoElReparto(true);
+                  setMontoPagado(v);
+                }}
+                alPrestamo={alPrestamo}
+                setAlPrestamo={setAlPrestamo}
+              />
+            )}
+            {totalAPagar > 0 && (
+              <BloquePago
+                total={totalAPagar}
+                cuentas={cuentas}
+                concepto={concepto}
+                setConcepto={setConcepto}
+                conceptos={conceptos}
+                lineas={lineas}
+                setLineas={setLineas}
+              />
+            )}
           </>
         )}
 
@@ -860,14 +1001,11 @@ function ModalAccion({
             disabled={
               enviando ||
               (tipo === 'adelanto' && !(Number(monto) > 0)) ||
-              (tipo === 'liquidar' && (aPagarLiq < 0 || faltaCuenta || faltaRepartir)) ||
-              (tipo === 'horas' &&
-                pagarAhora &&
-                (!preview ||
-                  preview.sinValorHora ||
-                  Number(preview.aPagar) < 0 ||
-                  faltaCuenta ||
-                  faltaRepartir))
+              // En las dos que mueven plata: que el reparto cierre, que no se
+              // pase del préstamo, y que si sale plata haya cuenta elegida.
+              ((tipo === 'liquidar' || (tipo === 'horas' && pagarAhora)) &&
+                (repartoInvalido || (totalAPagar > 0 && (faltaCuenta || faltaRepartir)))) ||
+              (tipo === 'horas' && pagarAhora && (!preview || preview.sinValorHora))
             }
           >
             {enviando ? 'Guardando…' : textoBoton}

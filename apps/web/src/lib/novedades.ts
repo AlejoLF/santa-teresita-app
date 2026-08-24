@@ -38,7 +38,10 @@ export const NOVEDADES: Novedad[] = [
     fecha: '24 de agosto',
     titulo: 'Cargar las horas y pagarlas en el mismo paso',
     cambios: [
-      'Al cargar las horas de alguien ahora aparece "Pagarle ahora". Si lo tildás, en el mismo paso se le paga: no hace falta cargar las horas y después ir a liquidar. Antes de confirmar te muestra la cuenta hecha —lo de hoy, lo que ya se le debía y los adelantos descontados— así ves exactamente cuánto va a salir.',
+      'Al cargar las horas de alguien ahora aparece "Pagarle ahora". Si lo tildás, en el mismo paso se le paga: no hace falta cargar las horas y después ir a liquidar. Antes de confirmar te muestra la cuenta hecha, así ves exactamente cuánto va a salir.',
+      'Los préstamos ya NO se descuentan solos. Si alguien debe $100.000 y trabaja un día, cobra su día completo y el préstamo queda igual — antes se le comía todo el sueldo hasta cubrirlo. Cuando le quieras descontar, ponés cuánto en el casillero "Va contra el préstamo": esta vez $10.000, la próxima lo que decidas, o nada.',
+      'También podés pagarle sólo una parte de lo que trabajó y dejar el resto para otro día: lo que queda sin cobrar sigue guardado en HORAS, así que si sube el valor de la hora, sube también lo que le falta cobrar.',
+      'Y si alguien trabaja un día entero para bajar el préstamo, se puede: ponés 0 en "se le paga" y el monto en "va contra el préstamo". No sale plata de la caja.',
       'Ese pago tiene las mismas opciones que el pago de sueldo de siempre: elegís el concepto (Sueldo, Jornada, Horas extra…) y podés repartirlo entre dos cuentas, una parte en efectivo y otra por transferencia.',
       'Al cargar las horas podés cambiar la categoría SÓLO POR ESE DÍA. Sirve para cuando alguien de mostrador cubre cocina y ese día cobra distinto: se le paga a la tarifa de cocina y su categoría de siempre no cambia. En el listado, esos días quedan marcados con la categoría entre paréntesis para que se vean de un vistazo.',
       'Al dar de alta a un empleado ahora se le elige la categoría ahí mismo. Y en la lista de empleados, el que no tenga ninguna aparece avisado: sin categoría, las horas que le cargues valen $0.',

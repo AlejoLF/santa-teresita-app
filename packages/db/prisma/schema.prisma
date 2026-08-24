@@ -1845,6 +1845,22 @@ model MovimientoBancoHoras {
   horas              Decimal?                 @db.Decimal(8, 2)
   /// Pesos (− adelanto / − pago). Null en los asientos de horas.
   montoPesos         Decimal?                 @map("monto_pesos") @db.Decimal(18, 2)
+  /// Cuántas de esas horas YA se cobraron. El banco de horas es una cuenta
+  /// corriente: se puede pagar una parte hoy y dejar el resto pendiente, así
+  /// que una fila no es "pagada o no pagada" sino "pagada hasta acá".
+  ///
+  /// Lo que queda pendiente son HORAS, no pesos: si sube el valor, sube lo que
+  /// falta cobrar. Ése es el punto del banco de horas, y guardar el resto en
+  /// pesos lo rompería.
+  ///
+  /// SEIS decimales, no dos como `horas`: acá se guarda el resultado de dividir
+  /// un monto en pesos por el valor hora. Con 2 decimales, el grano mínimo a
+  /// $3.000/h es $30 — cada pago parcial dejaría hasta esa diferencia colgada.
+  horasAplicadas     Decimal                  @default(0) @map("horas_aplicadas") @db.Decimal(12, 6)
+  /// Cuánto de este préstamo ya se devolvió. Mismo motivo: el adelanto de
+  /// $100.000 se descuenta de a poco, en los días que la encargada decide —
+  /// no de una, y no necesariamente el día que se le pagan las horas.
+  montoAplicado      Decimal                  @default(0) @map("monto_aplicado") @db.Decimal(18, 2)
   tipoHoraId         String?                  @map("tipo_hora_id") @db.Uuid
   /// Excepción del día: la persona trabajó en OTRA categoría que la suya.
   ///
@@ -1861,8 +1877,9 @@ model MovimientoBancoHoras {
   /// El movimiento de caja de un adelanto o una liquidación. Sin esto, la plata
   /// del banco de horas y la de la caja se separan y no vuelven a juntarse.
   movimientoId       String?                  @map("movimiento_id") @db.Uuid
-  /// Marca de liquidación: una fila liquidada no puede entrar en otra. Un
-  /// booleano `pagado` no alcanza — no dice en cuál entró.
+  /// La liquidación que TERMINÓ de consumir esta fila. Mientras se aplica de a
+  /// partes queda en null: lo que dice si algo sigue pendiente es
+  /// `horasAplicadas`/`montoAplicado`, no este campo.
   liquidacionId      String?                  @map("liquidacion_id") @db.Uuid
   usuarioId          String                   @map("usuario_id") @db.Uuid
   creadoAt           DateTime                 @default(now()) @map("creado_at")
