@@ -403,7 +403,103 @@ function tcpReachable(host, port, timeoutMs) {
   });
 }
 
+/**
+ * URL del **API** del servidor local (S1), ej. `http://192.168.1.10:3001`.
+ * Mismo orden que `lanDbUrl`: userData/config.json primero, bundle después.
+ *
+ * Si está presente, la caja arranca en modo PROXY: no recibe credenciales de
+ * base de datos y le reenvía todo a S1, que es el único que habla con Postgres
+ * (pendiente de seguridad C4). Tiene PRIORIDAD sobre `lanDbUrl`: si están las
+ * dos, gana ésta — la idea es migrar sin tener que borrar la vieja de golpe en
+ * todas las cajas.
+ */
+function leerLanApiUrl() {
+  const userConfigPath = path.join(app.getPath('userData'), 'config.json');
+  if (fs.existsSync(userConfigPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(userConfigPath, 'utf8'));
+      if (typeof cfg.lanApiUrl === 'string' && cfg.lanApiUrl) return cfg.lanApiUrl;
+    } catch (e) {
+      log('Error leyendo lanApiUrl de config.json: ' + (e?.message ?? e));
+    }
+  }
+  const bundleConfigPath = path.join(resourcesDir(), 'cloud-config.json');
+  if (fs.existsSync(bundleConfigPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(bundleConfigPath, 'utf8'));
+      if (typeof cfg.lanApiUrl === 'string' && cfg.lanApiUrl) return cfg.lanApiUrl;
+    } catch (e) {
+      log('Error leyendo lanApiUrl de cloud-config.json: ' + (e?.message ?? e));
+    }
+  }
+  return null;
+}
+
+/** API de la nube (Railway) para lecturas cuando S1 no responde. */
+function leerCloudApiUrl() {
+  const userConfigPath = path.join(app.getPath('userData'), 'config.json');
+  for (const p of [userConfigPath, path.join(resourcesDir(), 'cloud-config.json')]) {
+    if (!fs.existsSync(p)) continue;
+    try {
+      const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (typeof cfg.cloudApiUrl === 'string' && cfg.cloudApiUrl) return cfg.cloudApiUrl;
+    } catch {
+      /* siguiente */
+    }
+  }
+  return null;
+}
+
+/**
+ * Modo PROXY (C4): la caja NO tiene credenciales de base. Levanta `proxy.mjs`,
+ * que reenvía a S1 y conserva el outbox local.
+ *
+ * A diferencia del modo con `lanDbUrl`, acá NO hay chequeo de alcanzabilidad al
+ * arranque para caer a otra cosa: si S1 no responde, el proxy arranca igual en
+ * DEGRADED (lecturas por la nube, escrituras al outbox) y se recupera solo
+ * cuando S1 vuelve. Caer a "cloud-first" implicaría darle credenciales a la
+ * caja, que es exactamente lo que este modo viene a eliminar.
+ */
+function startApiProxy(lanApiUrl) {
+  setSplashStatus('Iniciando servidor de la app...');
+  const proxyEntry = path.join(resourcesDir(), 'api', 'proxy.mjs');
+  const cloudApiUrl = leerCloudApiUrl();
+  log('Spawning API en modo PROXY (sin credenciales de DB): ' + proxyEntry);
+  log(`  upstream: ${lanApiUrl}${cloudApiUrl ? ` | respaldo de lectura: ${cloudApiUrl}` : ' | sin respaldo de lectura'}`);
+
+  apiProcess = spawn(process.execPath, [proxyEntry], {
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      NODE_ENV: 'production',
+      TZ: 'America/Argentina/Buenos_Aires',
+      STA_UPSTREAM_URL: lanApiUrl,
+      ...(cloudApiUrl ? { STA_CLOUD_API_URL: cloudApiUrl } : {}),
+      API_PORT: String(API_PORT),
+      OUTBOX_DB_PATH: path.join(dataDir(), 'outbox.sqlite'),
+      STA_DESKTOP_VERSION: app.getVersion(),
+      LOG_LEVEL: 'info',
+    },
+    cwd: path.join(resourcesDir(), 'api'),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  apiProcess.stdout.on('data', (d) => log('[api] ' + d.toString().trim()));
+  apiProcess.stderr.on('data', (d) => log('[api:err] ' + d.toString().trim()));
+  apiProcess.on('exit', (code) => {
+    log('[api] exited code=' + code);
+    if (!shuttingDown) gracefulShutdown('API crashed');
+  });
+}
+
 async function startApi(cloudDbUrl) {
+  // C4: si la caja está configurada para hablarle al API de S1, va por el
+  // proxy y no ve una credencial de base en ningún momento.
+  const lanApiUrl = leerLanApiUrl();
+  if (lanApiUrl) {
+    startApiProxy(lanApiUrl);
+    return;
+  }
+
   setSplashStatus('Iniciando servidor de la app...');
   const apiEntry = path.join(resourcesDir(), 'api', 'server.mjs');
   log('Spawning API: ' + apiEntry);
