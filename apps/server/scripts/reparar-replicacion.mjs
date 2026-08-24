@@ -192,6 +192,23 @@ async function asegurarHijos(modelo, id, escribir, vistos, copiadas) {
   }
 }
 
+/**
+ * "Proveedor <uuid>, FacturaItemRecibida <uuid>, FacturaItemRecibida <uuid>…"
+ * → "1 Proveedor, 1 FacturaRecibida, 7 FacturaItemRecibida".
+ *
+ * Con 7 renglones por factura, listar los UUID uno por uno tapa la pantalla y
+ * esconde lo único que se lee de un vistazo: QUÉ y CUÁNTO. Los ids siguen en
+ * la DB si hay que rastrear alguno.
+ */
+function resumirCopiadas(copiadas) {
+  const conteo = new Map();
+  for (const c of copiadas) {
+    const modelo = c.split(' ')[0];
+    conteo.set(modelo, (conteo.get(modelo) ?? 0) + 1);
+  }
+  return [...conteo].map(([m, n]) => `${n} ${m}`).join(', ');
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 const pendientes = await local.outboxEvent.findMany({
   where: { publicadoAt: null },
@@ -221,11 +238,12 @@ for (const ev of pendientes) {
   const modelo = porTabla.get(tabla);
   const edadMin = Math.round((Date.now() - ev.agregadoAt.getTime()) / 60000);
   console.log(`─ ${tabla} ${registroId}  (${ev.intentos} intentos, hace ${edadMin} min)`);
-  if (ev.ultimoError) console.log(`    error: ${ev.ultimoError.slice(0, 200)}`);
-  // Un error vacío es típico de los eventos que quedaron trabados con el server
-  // anterior a `describirError`: no dice nada, por eso el diagnóstico de abajo
-  // no se apoya en el texto sino en mirar la nube.
-  else console.log('    error: (vacío)');
+  // Se etiqueta como YA GUARDADO y en una sola línea a propósito. Antes decía
+  // solo "error:" y ocupaba varios renglones: en modo --aplicar parecía que el
+  // script estaba fallando EN VIVO, cuando es el error histórico que dejó el
+  // replicador y es justamente lo que se viene a arreglar. Confundió dos veces.
+  const previo = (ev.ultimoError ?? '(vacío)').replace(/\s+/g, ' ').trim();
+  console.log(`    causa que lo trabó (ya registrada, NO es de ahora): ${previo.slice(0, 160)}`);
 
   if (!modelo) {
     console.log('    ⚠ tabla desconocida para el schema actual. Se saltea.');
@@ -248,10 +266,13 @@ for (const ev of pendientes) {
   await asegurarHijos(modelo, registroId, APLICAR, vistos, copiadas);
 
   if (copiadas.length) {
-    console.log(`    falta(n) en la nube: ${copiadas.join(', ')}`);
+    // En --aplicar estas filas YA se escribieron (asegurar/asegurarHijos las
+    // copian). Decir "faltan" ahí sería mentir sobre lo que acaba de pasar.
+    const verbo = APLICAR ? '✔ copiado a la nube' : 'falta en la nube';
+    console.log(`    ${verbo}: ${resumirCopiadas(copiadas)}`);
     for (const c of copiadas) faltantes.add(c);
   } else {
-    console.log('    ya está completo en la nube — el evento solo hay que marcarlo.');
+    console.log('    ya estaba completo en la nube — solo hay que marcar el evento.');
   }
   aReactivar.push(ev.id);
 }
