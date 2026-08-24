@@ -25,6 +25,8 @@ import {
   liquidarEnTransaccion,
   resumenPendiente,
   resolverCategoriaPago,
+  aplicarDevolucion,
+  asentarDevolucion,
   restanteHoras,
   restantePrestamo,
   type LineaPagoLiq,
@@ -678,6 +680,140 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
         valorNuevo: out.fila,
       });
       return reply.code(201).send({ ok: true, id: out.fila.id, movimientoId: out.mov.id });
+    },
+  );
+
+  // ── Devolución: el empleado paga parte del préstamo con plata ───────────
+  //
+  // La contracara del adelanto. Entra plata a la caja y baja la deuda, en una
+  // sola acción: si fueran dos cargas separadas, tarde o temprano queda una
+  // devolución cobrada que la deuda no registra, o al revés.
+  fastify.post(
+    '/admin/banco-horas/:empleadoId/devolucion',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ empleadoId: z.string().uuid() }),
+        body: z.object({
+          monto: z.number().positive(),
+          cuentaId: z.string().uuid(),
+          metodo: z.enum(METODOS).default('EFECTIVO'),
+          numeroReferencia: z.string().max(80).optional(),
+          observacion: z.string().max(300).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { empleadoId } = req.params as { empleadoId: string };
+      const body = req.body as {
+        monto: number;
+        cuentaId: string;
+        metodo: string;
+        numeroReferencia?: string;
+        observacion?: string;
+      };
+
+      const empleado = await prisma.empleado.findUnique({
+        where: { id: empleadoId },
+        select: { id: true, nombre: true, apellido: true },
+      });
+      if (!empleado) return reply.code(404).send({ error: 'Empleado no encontrado' });
+      const nombre = `${empleado.nombre}${empleado.apellido ? ' ' + empleado.apellido : ''}`;
+
+      const categoria = await prisma.categoriaMovimiento.findUnique({
+        where: { nombre: 'Devolución de préstamo' },
+      });
+      if (!categoria) {
+        throw new ReglaNegocioError(
+          'Falta la categoría de movimiento "Devolución de préstamo". Corré las migraciones de la base.',
+        );
+      }
+
+      let sesion;
+      try {
+        sesion = await getOrCreateSesionActual(req.usuario!.id);
+      } catch (e) {
+        if (e instanceof FueraDeHorarioError) {
+          return reply.code(423).send({
+            error: 'Fuera del horario de atención — no hay sesión de caja abierta',
+            codigo: 'FUERA_DE_HORARIO',
+            resolucion: e.resolucion,
+          });
+        }
+        throw e;
+      }
+
+      const fecha = new Date();
+      const out = await prisma.$transaction(async (tx) => {
+        const r = await aplicarDevolucion(tx, empleadoId, body.monto);
+        // Devolver más de lo que se debe sería plata que entra sin contra-
+        // partida: mejor negarse y decir cuánto es la deuda de verdad.
+        if (r.sobrante > 0.004) {
+          throw new ReglaNegocioError(
+            r.aplicado > 0
+              ? `${nombre} debe $${r.aplicado.toFixed(2)} y estás cargando $${body.monto.toFixed(2)}. Cargá como mucho lo que debe.`
+              : `${nombre} no tiene préstamos pendientes.`,
+          );
+        }
+
+        const mov = await tx.movimiento.create({
+          data: {
+            tipo: 'INGRESO',
+            monto: body.monto,
+            categoriaId: categoria.id,
+            cuentaDestinoId: body.cuentaId,
+            entidadId: empleadoId,
+            sesionCajaId: sesion.id,
+            fechaComputo: fecha,
+            observacion: body.observacion ?? `Devolución de préstamo — ${nombre}`,
+            estado: EstadoMovimiento.CONFIRMADO,
+            usuarioId: req.usuario!.id,
+          },
+          select: { id: true },
+        });
+        await tx.pago.create({
+          data: {
+            movimientoId: mov.id,
+            metodo: body.metodo as never,
+            cuentaId: body.cuentaId,
+            monto: body.monto,
+            numeroReferencia: body.numeroReferencia ?? null,
+            estado: 'CONFIRMADO',
+            fecha,
+          },
+        });
+        await tx.cuenta.update({
+          where: { id: body.cuentaId },
+          data: { saldoActual: { increment: body.monto } },
+        });
+
+        await asentarDevolucion(tx, {
+          empleadoId,
+          monto: body.monto,
+          fecha: hoyFecha(),
+          movimientoId: mov.id,
+          observacion: body.observacion ?? null,
+          usuarioId: req.usuario!.id,
+        });
+
+        return { mov, r };
+      });
+
+      await recordAudit({
+        tabla: 'movimientos',
+        registroId: out.mov.id,
+        accion: 'INSERT',
+        usuarioId: req.usuario!.id,
+        valorNuevo: { tipo: 'DEVOLUCION', empleadoId, monto: body.monto },
+      });
+
+      return reply.code(201).send({
+        ok: true,
+        movimientoId: out.mov.id,
+        aplicado: out.r.aplicado.toFixed(2),
+        prestamoRestante: out.r.prestamoRestante.toFixed(2),
+        cancelado: out.r.prestamoRestante <= 0.004,
+      });
     },
   );
 

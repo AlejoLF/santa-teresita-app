@@ -1,7 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@sta/db/client';
-import { erroresRecientes, type CategoriaError } from '../services/errores.js';
+import {
+  erroresRecientes,
+  ReglaNegocioError,
+  type CategoriaError,
+} from '../services/errores.js';
+import { aplicarDevolucion, asentarDevolucion } from '../services/banco-horas.js';
 import {
   EstadoVenta,
   EstadoLiquidacion,
@@ -1427,6 +1432,38 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             data: { saldoActual: { increment: monto } },
           });
         }
+
+        // Devolución de préstamo cargada desde Aportes y egresos: además de
+        // entrar a la caja, tiene que BAJAR LA DEUDA del empleado. Sin esto la
+        // plata entra y el banco de horas sigue diciendo que debe todo —
+        // exactamente el descalce que la pantalla de préstamos vino a evitar.
+        //
+        // Va contra el mismo servicio que usa el botón de la ficha: dos
+        // caminos que descuentan por su cuenta terminan descontando distinto.
+        if (cat.nombre === 'Devolución de préstamo') {
+          if (!body.entidadId) {
+            throw new ReglaNegocioError(
+              'Elegí de qué empleado es la devolución: si no, la plata entra a la caja pero la deuda queda viva.',
+            );
+          }
+          const r = await aplicarDevolucion(tx, body.entidadId, monto);
+          if (r.sobrante > 0.004) {
+            throw new ReglaNegocioError(
+              r.aplicado > 0
+                ? `Ese empleado debe $${r.aplicado.toFixed(2)} y estás cargando $${monto.toFixed(2)}. Cargá como mucho lo que debe.`
+                : 'Ese empleado no tiene préstamos pendientes.',
+            );
+          }
+          await asentarDevolucion(tx, {
+            empleadoId: body.entidadId,
+            monto,
+            fecha: new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate()),
+            movimientoId: mov.id,
+            observacion: body.observacion ?? null,
+            usuarioId: req.usuario!.id,
+          });
+        }
+
         return mov;
       });
 

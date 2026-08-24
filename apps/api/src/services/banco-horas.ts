@@ -615,3 +615,83 @@ export async function liquidarEnTransaccion(
 
   return { liquidacionId: liq.id, movimientoId: mov?.id ?? null, horasConsumidas: r2(horasConsumidas) };
 }
+
+// ────────────────────────────────────────────────────────────────────────
+//   Devolución: el empleado paga parte del préstamo con plata
+// ────────────────────────────────────────────────────────────────────────
+
+/**
+ * La deuda también se salda con dinero, no sólo trabajando.
+ *
+ * Vive acá y no en la ruta porque tiene DOS entradas: el botón de la ficha del
+ * banco de horas y la carga desde Aportes y egresos. Si el descuento del
+ * préstamo lo hiciera cada pantalla por su cuenta, tarde o temprano una
+ * devolución entraría a la caja sin bajar la deuda, o al revés.
+ *
+ * Aplica de la deuda más vieja a la más nueva y devuelve cuánto pudo aplicar:
+ * quien llama decide si sobrar es un error o simplemente un pago de más.
+ */
+export async function aplicarDevolucion(
+  tx: Prisma.TransactionClient,
+  empleadoId: string,
+  monto: number,
+): Promise<{ aplicado: number; sobrante: number; prestamoRestante: number }> {
+  const filas = await tx.movimientoBancoHoras.findMany({
+    where: { empleadoId, tipo: 'ADELANTO', liquidacionId: null },
+    select: { id: true, montoPesos: true, montoAplicado: true },
+    orderBy: [{ fecha: 'asc' }, { creadoAt: 'asc' }],
+  });
+
+  let restante = r2(monto);
+  let aplicado = 0;
+  let deuda = 0;
+
+  for (const f of filas) {
+    const pendiente = restantePrestamo(f);
+    deuda += pendiente;
+    if (pendiente <= 0 || restante <= 0.004) continue;
+    const aplicar = Math.min(pendiente, restante);
+    await tx.movimientoBancoHoras.update({
+      where: { id: f.id },
+      data: { montoAplicado: { increment: aplicar } },
+    });
+    aplicado = r2(aplicado + aplicar);
+    restante = r2(restante - aplicar);
+  }
+
+  return { aplicado, sobrante: r2(restante), prestamoRestante: r2(deuda - aplicado) };
+}
+
+/**
+ * Registra la devolución en el libro del banco de horas.
+ *
+ * El asiento nace ya cerrado (`liquidacionId` no aplica acá, pero el monto sale
+ * con `montoAplicado` igual al monto): sin eso volvería a leerse como un
+ * préstamo pendiente y la deuda subiría en vez de bajar.
+ */
+export async function asentarDevolucion(
+  tx: Prisma.TransactionClient,
+  o: {
+    empleadoId: string;
+    monto: number;
+    fecha: Date;
+    movimientoId: string | null;
+    observacion?: string | null;
+    usuarioId: string;
+  },
+): Promise<void> {
+  await tx.movimientoBancoHoras.create({
+    data: {
+      empleadoId: o.empleadoId,
+      tipo: 'DEVOLUCION',
+      // Negativo: baja la deuda. Y `montoAplicado` igual, para que este asiento
+      // no se cuente como un préstamo nuevo.
+      montoPesos: -o.monto,
+      montoAplicado: -o.monto,
+      fecha: o.fecha,
+      observacion: o.observacion ?? null,
+      movimientoId: o.movimientoId,
+      usuarioId: o.usuarioId,
+    },
+  });
+}

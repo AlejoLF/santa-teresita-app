@@ -1761,6 +1761,9 @@ enum TipoMovimientoBancoHoras {
   HORAS_TRABAJADAS
   ADELANTO
   LIQUIDACION
+  /// El empleado devolvió plata del préstamo. Es un INGRESO a la caja: la
+  /// deuda también se salda con dinero, no sólo trabajando.
+  DEVOLUCION
   AJUSTE
 }
 

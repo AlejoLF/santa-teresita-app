@@ -12,7 +12,7 @@ import { cn } from '@/lib/cn';
 
 interface Movimiento {
   id: string;
-  tipo: 'HORAS_TRABAJADAS' | 'ADELANTO' | 'LIQUIDACION' | 'AJUSTE';
+  tipo: 'HORAS_TRABAJADAS' | 'ADELANTO' | 'LIQUIDACION' | 'DEVOLUCION' | 'AJUSTE';
   horas: string | null;
   montoPesos: string | null;
   fecha: string;
@@ -49,6 +49,7 @@ const ETIQUETA: Record<Movimiento['tipo'], string> = {
   HORAS_TRABAJADAS: 'Horas trabajadas',
   ADELANTO: 'Adelanto',
   LIQUIDACION: 'Liquidación',
+  DEVOLUCION: 'Devolvió plata',
   AJUSTE: 'Ajuste',
 };
 
@@ -63,7 +64,9 @@ export default function BancoHorasEmpleadoPage() {
 
   const [d, setD] = useState<Detalle | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [modal, setModal] = useState<'horas' | 'adelanto' | 'liquidar' | null>(null);
+  const [modal, setModal] = useState<'horas' | 'adelanto' | 'liquidar' | 'devolucion' | null>(
+    null,
+  );
   const [editandoTarifa, setEditandoTarifa] = useState(false);
   const [tipos, setTipos] = useState<Array<{ id: string; nombre: string }>>([]);
   const [categorias, setCategorias] = useState<Array<{ id: string; nombre: string }>>([]);
@@ -139,8 +142,15 @@ export default function BancoHorasEmpleadoPage() {
             ➕ Cargar horas
           </Button>
           <Button size="sm" variant="secondary" onClick={() => setModal('adelanto')}>
-            💸 Adelanto
+            💸 Préstamo
           </Button>
+          {/* Sólo aparece si hay algo que devolver: un botón que siempre da
+              error no le sirve a nadie. */}
+          {Number(d.saldo.adelantosPendientes) > 0 && (
+            <Button size="sm" variant="secondary" onClick={() => setModal('devolucion')}>
+              💵 Devolvió plata
+            </Button>
+          )}
           <Button size="sm" onClick={() => setModal('liquidar')}>
             ✅ Liquidar
           </Button>
@@ -573,7 +583,7 @@ function ModalAccion({
   onClose,
   onHecho,
 }: {
-  tipo: 'horas' | 'adelanto' | 'liquidar';
+  tipo: 'horas' | 'adelanto' | 'liquidar' | 'devolucion';
   empleadoId: string;
   nombre: string;
   /** Cómo se le paga habitualmente, para etiquetar la opción "la de siempre". */
@@ -711,6 +721,13 @@ function ModalAccion({
             montoAlPrestamo: Number(alPrestamo || 0),
           }),
         });
+      } else if (tipo === 'devolucion') {
+        await api.post(`/admin/banco-horas/${empleadoId}/devolucion`, {
+          monto: Number(monto),
+          cuentaId,
+          metodo: 'EFECTIVO',
+          ...(observacion.trim() && { observacion: observacion.trim() }),
+        });
       } else if (tipo === 'adelanto') {
         await api.post(`/admin/banco-horas/${empleadoId}/adelanto`, {
           monto: Number(monto),
@@ -734,7 +751,13 @@ function ModalAccion({
   }
 
   const titulo =
-    tipo === 'horas' ? 'Cargar horas' : tipo === 'adelanto' ? 'Dar un adelanto' : 'Liquidar';
+    tipo === 'horas'
+      ? 'Cargar horas'
+      : tipo === 'adelanto'
+        ? 'Dar un préstamo'
+        : tipo === 'devolucion'
+          ? 'Devolvió plata'
+          : 'Liquidar';
   const textoBoton =
     tipo === 'horas' && pagarAhora ? 'Cargar y pagar' : titulo;
 
@@ -901,6 +924,57 @@ function ModalAccion({
           </>
         )}
 
+        {tipo === 'devolucion' && (
+          <>
+            <div className="bg-cream-100 rounded p-3 text-sm flex justify-between">
+              <span className="text-ink-500">Debe de préstamo</span>
+              <MoneyAmount value={saldo.adelantosPendientes} className="text-saffron-600" />
+            </div>
+            <label className="block text-2xs text-ink-500">
+              Cuánto devolvió
+              <input
+                type="number"
+                min="1"
+                step="0.01"
+                value={monto}
+                onChange={(e) => setMonto(e.target.value)}
+                className="input w-full mt-1 text-sm"
+                placeholder={saldo.adelantosPendientes}
+              />
+            </label>
+            <button
+              type="button"
+              className="text-2xs text-teresita-700 hover:underline"
+              onClick={() => setMonto(saldo.adelantosPendientes)}
+            >
+              Devolvió todo — {saldo.adelantosPendientes}
+            </button>
+            <label className="block text-2xs text-ink-500">
+              A qué cuenta entra
+              <select
+                value={cuentaId}
+                onChange={(e) => setCuentaId(e.target.value)}
+                className="input w-full mt-1 text-sm"
+              >
+                {cuentas.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.nombre}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {Number(monto) > Number(saldo.adelantosPendientes) + 0.005 && (
+              <div className="bg-pomodoro-100 text-pomodoro-600 px-3 py-2 rounded text-2xs">
+                Debe {saldo.adelantosPendientes}: no se puede cargar más que eso.
+              </div>
+            )}
+            <p className="text-2xs text-ink-500">
+              La plata ENTRA a la caja del turno y baja la deuda. Si cubre todo, el préstamo
+              queda cancelado.
+            </p>
+          </>
+        )}
+
         {tipo === 'adelanto' && (
           <>
             <label className="block text-2xs text-ink-500">
@@ -929,8 +1003,8 @@ function ModalAccion({
               </select>
             </label>
             <p className="text-2xs text-ink-500">
-              Sale de la caja y queda registrado como egreso del turno, además de descontarse
-              de su saldo.
+              Sale de la caja y queda como deuda. NO se descuenta solo: se salda de a poco,
+              cuando vos lo decidas, o cuando devuelva la plata.
             </p>
           </>
         )}
@@ -1000,7 +1074,9 @@ function ModalAccion({
             onClick={() => void enviar()}
             disabled={
               enviando ||
-              (tipo === 'adelanto' && !(Number(monto) > 0)) ||
+              ((tipo === 'adelanto' || tipo === 'devolucion') && !(Number(monto) > 0)) ||
+              (tipo === 'devolucion' &&
+                Number(monto) > Number(saldo.adelantosPendientes) + 0.005) ||
               // En las dos que mueven plata: que el reparto cierre, que no se
               // pase del préstamo, y que si sale plata haya cuenta elegida.
               ((tipo === 'liquidar' || (tipo === 'horas' && pagarAhora)) &&
