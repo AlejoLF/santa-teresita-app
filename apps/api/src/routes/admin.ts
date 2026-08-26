@@ -8,6 +8,11 @@ import {
 } from '../services/errores.js';
 import { aplicarDevolucion, asentarDevolucion } from '../services/banco-horas.js';
 import {
+  facturasPendientesDe,
+  planificarImputacion,
+  aplicarImputacion,
+} from '../services/imputacion-facturas.js';
+import {
   EstadoVenta,
   EstadoLiquidacion,
   EstadoMovimiento,
@@ -310,7 +315,6 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const [
         ventasHoy,
         ventasAyer,
-        pedidosAbiertos,
         pagosHoy,
         aportesPorCategoria,
         egresosPorCategoria,
@@ -342,9 +346,6 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             fechaFinalizacion: { gte: inicioAyer, lt: finAyer },
           },
         }),
-        // `esEncargo: false`: los encargos A_PAGAR (pedidos futuros que se cobran
-        // otro día) no son "pedidos abiertos" del turno — tienen su propia pestaña.
-        prisma.venta.count({ where: { estado: EstadoVenta.PROCESADA, esEncargo: false } }),
         prisma.pago.findMany({
           where: {
             estado: 'CONFIRMADO',
@@ -654,7 +655,6 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               cantidad: e.cantidad,
             })),
           },
-          pedidosAbiertos,
         },
         proximosDepositos: proximosDepositos.map((p) => {
           const cuenta = cuentaPorId.get(p.cuentaACobrarId);
@@ -1306,6 +1306,27 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             fechaComputo: z.string().datetime().optional(),
             entidadId: z.string().uuid().optional(),
             observacion: z.string().max(500).optional(),
+            // Para egresos a un proveedor: contra qué facturas va este pago.
+            //
+            // `monto` por factura es opcional. Sin él la factura se llena por
+            // FIFO con lo que quede; con él, esa factura recibe exactamente eso
+            // (que es como se paga "una parte" de una factura grande).
+            //
+            // Si NO se manda nada, el pago igual se imputa FIFO contra todas
+            // las facturas pendientes del proveedor. Ése era el agujero: el
+            // egreso salía de la caja y las facturas quedaban impagas, así que
+            // el saldo del proveedor no bajaba nunca.
+            facturas: z
+              .array(
+                z.object({
+                  facturaId: z.string().uuid(),
+                  monto: z
+                    .string()
+                    .regex(/^\d+(\.\d{1,2})?$/)
+                    .optional(),
+                }),
+              )
+              .optional(),
             // Para egresos a empleados (Sueldos / Adelanto): desglose por concepto.
             // Si se envía, el monto total debe coincidir con la suma de los conceptos.
             conceptos: z
@@ -1347,6 +1368,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         fechaComputo?: string;
         entidadId?: string;
         observacion?: string;
+        facturas?: Array<{ facturaId: string; monto?: string }>;
         conceptos?: Array<{ tipo: string; monto: string; detalle?: string }>;
       };
 
@@ -1379,6 +1401,26 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           });
         }
         throw e;
+      }
+
+      // ¿Este egreso va a un proveedor? `entidadId` es polimórfico (empleado o
+      // proveedor), así que lo resolvemos contra la tabla en vez de deducirlo de
+      // la categoría: una categoría mal elegida no debería imputar facturas de
+      // nadie, y un pago a proveedor con la categoría "rara" igual tiene que
+      // bajarle la deuda.
+      const proveedor =
+        body.tipo === 'EGRESO' && body.entidadId
+          ? await prisma.proveedor.findUnique({
+              where: { id: body.entidadId },
+              select: { id: true, nombre: true },
+            })
+          : null;
+
+      if (body.facturas?.length && !proveedor) {
+        return reply.code(400).send({
+          error:
+            'Para imputar facturas hay que elegir un proveedor y que el movimiento sea un egreso.',
+        });
       }
 
       // Si vienen conceptos, validar que sumen el monto total (tolerancia 0.5)
@@ -1433,6 +1475,37 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           });
         }
 
+        // Egreso a un proveedor con facturas elegidas: además de sacar la plata
+        // de la cuenta, tiene que BAJARLE LA DEUDA. Sin esto el movimiento
+        // salía de la caja y las facturas seguían "impagas": el saldo del
+        // proveedor no bajaba nunca y había que ir a marcarlas a mano desde
+        // Insumos o Facturas de compra.
+        //
+        // SÓLO con selección explícita. Adivinar por FIFO cuando nadie eligió
+        // ya se probó y se sacó: con varias facturas abiertas, el sistema no
+        // sabe cuál pagó realmente y cancelaba la que no era. Sin selección
+        // esto sigue siendo un pago a cuenta, que baja el total adeudado sin
+        // tocar ninguna factura en particular.
+        //
+        // Se leen las facturas DENTRO de la transacción: entre el plan y la
+        // escritura no puede meterse otro pago contra las mismas facturas.
+        let imputacion: { asignaciones: Array<{ facturaId: string; montoAplicado: number }>; excedente: number } | null =
+          null;
+        if (proveedor && body.facturas?.length) {
+          const pendientes = await facturasPendientesDe(tx, proveedor.id);
+          imputacion = planificarImputacion(pendientes, monto, body.facturas);
+          await aplicarImputacion(tx, {
+            asignaciones: imputacion.asignaciones,
+            facturas: pendientes,
+            movimientoId: mov.id,
+            fecha,
+          });
+          await tx.proveedor.update({
+            where: { id: proveedor.id },
+            data: { ultimoMovimientoAt: fecha },
+          });
+        }
+
         // Devolución de préstamo cargada desde Aportes y egresos: además de
         // entrar a la caja, tiene que BAJAR LA DEUDA del empleado. Sin esto la
         // plata entra y el banco de horas sigue diciendo que debe todo —
@@ -1464,7 +1537,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           });
         }
 
-        return mov;
+        return Object.assign(mov, { imputacion });
       });
 
       await recordAudit({
@@ -1478,10 +1551,30 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           categoria: created.categoria.nombre,
           cuentaOrigen: created.cuentaOrigen?.nombre,
           cuentaDestino: created.cuentaDestino?.nombre,
+          // Contra qué facturas se imputó. Va al audit porque es la única
+          // forma de reconstruir después por qué una factura quedó parcial.
+          ...(created.imputacion && {
+            facturasImputadas: created.imputacion.asignaciones.length,
+            excedente: created.imputacion.excedente.toFixed(2),
+          }),
         },
       });
 
-      return reply.code(201).send(created);
+      return reply.code(201).send({
+        ...created,
+        // El front lo usa para avisar "se imputó a 2 facturas, sobraron $500":
+        // sin esto la encargada no tiene forma de ver si el pago llegó a las
+        // facturas que quería.
+        imputacion: created.imputacion
+          ? {
+              facturas: created.imputacion.asignaciones.map((a) => ({
+                facturaId: a.facturaId,
+                montoAplicado: a.montoAplicado.toFixed(2),
+              })),
+              excedente: created.imputacion.excedente.toFixed(2),
+            }
+          : null,
+      });
     },
   );
 
@@ -1506,14 +1599,36 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       if (!mov) return reply.code(404).send({ error: 'Movimiento no encontrado' });
 
       // Audit log: todas las modificaciones del movimiento
-      const audits = await prisma.auditLog.findMany({
-        where: { tabla: 'movimientos', registroId: mov.id },
-        orderBy: { timestamp: 'asc' },
-        include: { usuario: { select: { nombre: true } } },
-      });
+      const [audits, pagos, atadoABancoHoras] = await Promise.all([
+        prisma.auditLog.findMany({
+          where: { tabla: 'movimientos', registroId: mov.id },
+          orderBy: { timestamp: 'asc' },
+          include: { usuario: { select: { nombre: true } } },
+        }),
+        // Cómo quedó repartido el pago entre cuentas. Un movimiento tiene UNA
+        // `cuentaOrigenId`, así que un pago mitad efectivo y mitad transferencia
+        // vive en estas filas, no en el movimiento.
+        prisma.pago.findMany({
+          where: { movimientoId: mov.id },
+          orderBy: { fecha: 'asc' },
+          include: { cuenta: { select: { id: true, nombre: true } } },
+        }),
+        prisma.movimientoBancoHoras.count({ where: { movimientoId: mov.id } }),
+      ]);
 
       return {
         ...mov,
+        lineas: pagos.map((p) => ({
+          id: p.id,
+          metodo: p.metodo,
+          cuentaId: p.cuentaId,
+          cuentaNombre: p.cuenta.nombre,
+          monto: p.monto.toFixed(2),
+          numeroReferencia: p.numeroReferencia,
+        })),
+        // La pantalla lo usa para no ofrecer cambiar el TOTAL: eso descuadraría
+        // las horas ya consumidas del banco de horas.
+        deBancoHoras: atadoABancoHoras > 0,
         audits: audits.map((a) => ({
           id: a.id,
           accion: a.accion,
@@ -1546,6 +1661,34 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             cuentaDestinoId: z.string().uuid().nullable().optional(),
             categoriaId: z.string().uuid().optional(),
             fechaComputo: z.string().datetime().optional(),
+            // Cómo se reparte el pago entre cuentas. Mandar esto REEMPLAZA el
+            // reparto anterior entero.
+            //
+            // Existe porque un `Movimiento` tiene UNA sola cuenta: un pago que
+            // se hizo 100% en efectivo y que ahora hay que dejar 70% efectivo /
+            // 30% transferencia no se podía arreglar editando el movimiento —
+            // había que anularlo y volver a cargarlo. El reparto real vive en
+            // las filas de `pagos`, y son éstas.
+            lineas: z
+              .array(
+                z.object({
+                  cuentaId: z.string().uuid(),
+                  metodo: z.enum([
+                    'EFECTIVO',
+                    'TRANSFERENCIA',
+                    'DEPOSITO',
+                    'CHEQUE',
+                    'MERCADOPAGO_QR',
+                    'TARJETA_DEBITO',
+                    'TARJETA_CREDITO',
+                    'OTRO',
+                  ]),
+                  monto: z.string().regex(/^\d+(\.\d{1,2})?$/),
+                  numeroReferencia: z.string().max(80).optional(),
+                }),
+              )
+              .min(1)
+              .optional(),
           })
           .refine(
             (d) =>
@@ -1554,7 +1697,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
               d.cuentaOrigenId !== undefined ||
               d.cuentaDestinoId !== undefined ||
               d.categoriaId !== undefined ||
-              d.fechaComputo !== undefined,
+              d.fechaComputo !== undefined ||
+              d.lineas !== undefined,
             { message: 'Hay que enviar al menos un campo' },
           ),
       },
@@ -1568,11 +1712,17 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         cuentaDestinoId?: string | null;
         categoriaId?: string;
         fechaComputo?: string;
+        lineas?: Array<{
+          cuentaId: string;
+          metodo: string;
+          monto: string;
+          numeroReferencia?: string;
+        }>;
       };
 
       const mov = await prisma.movimiento.findUnique({
         where: { id: params.id },
-        include: { categoria: true },
+        include: { categoria: true, pagos: true },
       });
       if (!mov) return reply.code(404).send({ error: 'Movimiento no encontrado' });
       if (mov.estado === EstadoMovimiento.ANULADO) {
@@ -1619,27 +1769,115 @@ export default async function adminRoutes(fastify: FastifyInstance) {
 
       const montoAnterior = Number(mov.monto);
       const montoNuevo = body.monto !== undefined ? Number(body.monto) : montoAnterior;
-      const cuentaOrigenAnterior = mov.cuentaOrigenId;
+
+      // Las líneas nuevas tienen que sumar EXACTO el total del movimiento. Si
+      // no, la plata que sale de las cuentas deja de coincidir con el importe
+      // del movimiento y el arqueo empieza a dar mal sin que nada avise.
+      if (body.lineas) {
+        const suma = body.lineas.reduce((acc, l) => acc + Number(l.monto), 0);
+        if (Math.abs(suma - montoNuevo) > 0.01) {
+          return reply.code(400).send({
+            error: `Las partes suman $${suma.toFixed(2)} y el movimiento es de $${montoNuevo.toFixed(2)}. Tienen que dar igual.`,
+          });
+        }
+        if (body.lineas.some((l) => Number(l.monto) <= 0)) {
+          return reply.code(400).send({ error: 'Cada parte tiene que ser mayor a $0.' });
+        }
+        const cuentasRepetidas = new Set(body.lineas.map((l) => l.cuentaId)).size !== body.lineas.length;
+        if (cuentasRepetidas) {
+          return reply.code(400).send({ error: 'No repitas la misma cuenta en dos partes.' });
+        }
+      }
+
+      // Un pago ya imputado a facturas de proveedor no se puede repartir de
+      // nuevo acá: `PagoFactura` cuelga de `pagoId` con onDelete: Cascade, así
+      // que rehacer las filas de `pagos` borraría la imputación en silencio y
+      // las facturas volverían a figurar impagas sin que nadie se entere.
+      if (body.lineas && mov.pagos.length > 0) {
+        const imputados = await prisma.pagoFactura.count({
+          where: { pagoId: { in: mov.pagos.map((p) => p.id) } },
+        });
+        if (imputados > 0) {
+          return reply.code(400).send({
+            error:
+              'Este pago ya está imputado a facturas del proveedor: repartirlo de nuevo acá borraría esa imputación. Anulalo y volvé a cargarlo con el reparto que corresponde.',
+          });
+        }
+      }
+
+      // Cambiar el TOTAL de un pago del banco de horas descuadraría las horas
+      // que ese pago consumió (`horasAplicadas` quedó calculado con el monto
+      // viejo). Repartirlo entre cuentas no: el total sigue siendo el mismo.
+      if (body.monto !== undefined && Math.abs(montoNuevo - montoAnterior) > 0.01) {
+        const esDeBancoHoras = await prisma.movimientoBancoHoras.count({
+          where: { movimientoId: mov.id },
+        });
+        if (esDeBancoHoras > 0) {
+          return reply.code(400).send({
+            error:
+              'Este pago salió del banco de horas: cambiarle el monto acá dejaría las horas ya cobradas sin cuadrar. Anulalo y volvé a cargar la liquidación con el monto correcto. (Repartirlo entre cuentas sí se puede.)',
+          });
+        }
+      }
+
+      // Cómo afectó este movimiento a las cuentas cuando se creó. NO es
+      // siempre `monto` contra `cuentaOrigenId`: si el pago vino repartido, la
+      // plata se descontó de cada cuenta por su lado y `cuentaOrigenId` guarda
+      // sólo la primera. Revertir contra ella el total entero le devolvía de
+      // más a una cuenta y le dejaba de menos a la otra.
+      const efectoAnterior: Array<{ cuentaId: string; delta: number }> =
+        mov.pagos.length > 0
+          ? mov.pagos.map((p) => ({
+              cuentaId: p.cuentaId,
+              delta: mov.tipo === 'INGRESO' ? Number(p.monto) : -Number(p.monto),
+            }))
+          : [
+              ...(mov.cuentaOrigenId ? [{ cuentaId: mov.cuentaOrigenId, delta: -montoAnterior }] : []),
+              ...(mov.cuentaDestinoId
+                ? [{ cuentaId: mov.cuentaDestinoId, delta: montoAnterior }]
+                : []),
+            ];
+
       const cuentaOrigenNueva =
-        body.cuentaOrigenId !== undefined ? body.cuentaOrigenId : cuentaOrigenAnterior;
-      const cuentaDestinoAnterior = mov.cuentaDestinoId;
+        body.lineas && mov.tipo === 'EGRESO'
+          ? body.lineas[0]!.cuentaId
+          : body.cuentaOrigenId !== undefined
+            ? body.cuentaOrigenId
+            : mov.cuentaOrigenId;
       const cuentaDestinoNueva =
-        body.cuentaDestinoId !== undefined ? body.cuentaDestinoId : cuentaDestinoAnterior;
+        body.lineas && mov.tipo === 'INGRESO'
+          ? body.lineas[0]!.cuentaId
+          : body.cuentaDestinoId !== undefined
+            ? body.cuentaDestinoId
+            : mov.cuentaDestinoId;
+
+      // Efecto nuevo: con líneas, una entrada por línea; sin ellas, el de
+      // siempre contra origen/destino.
+      const efectoNuevo: Array<{ cuentaId: string; delta: number }> = body.lineas
+        ? body.lineas.map((l) => ({
+            cuentaId: l.cuentaId,
+            delta: mov.tipo === 'INGRESO' ? Number(l.monto) : -Number(l.monto),
+          }))
+        : [
+            ...(cuentaOrigenNueva ? [{ cuentaId: cuentaOrigenNueva, delta: -montoNuevo }] : []),
+            ...(cuentaDestinoNueva ? [{ cuentaId: cuentaDestinoNueva, delta: montoNuevo }] : []),
+          ];
 
       const updated = await prisma.$transaction(async (tx) => {
-        // 1. Revertir el efecto del movimiento original
-        if (cuentaOrigenAnterior) {
+        // 1. Revertir el efecto original (signo al revés) y aplicar el nuevo.
+        //    Se acumulan por cuenta antes de escribir: si una cuenta está en
+        //    los dos lados, va un solo UPDATE con la diferencia.
+        const neto = new Map<string, number>();
+        for (const e of efectoAnterior) neto.set(e.cuentaId, (neto.get(e.cuentaId) ?? 0) - e.delta);
+        for (const e of efectoNuevo) neto.set(e.cuentaId, (neto.get(e.cuentaId) ?? 0) + e.delta);
+        for (const [cuentaId, delta] of neto) {
+          if (Math.abs(delta) < 0.005) continue;
           await tx.cuenta.update({
-            where: { id: cuentaOrigenAnterior },
-            data: { saldoActual: { increment: montoAnterior } },
+            where: { id: cuentaId },
+            data: { saldoActual: { increment: delta } },
           });
         }
-        if (cuentaDestinoAnterior) {
-          await tx.cuenta.update({
-            where: { id: cuentaDestinoAnterior },
-            data: { saldoActual: { decrement: montoAnterior } },
-          });
-        }
+
         // 2. Update del movimiento con valores nuevos
         const nuevo = await tx.movimiento.update({
           where: { id: mov.id },
@@ -1654,21 +1892,37 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             }),
             ...(body.categoriaId && { categoriaId: body.categoriaId }),
             ...(body.fechaComputo && { fechaComputo: new Date(body.fechaComputo) }),
+            // Con reparto nuevo, la cuenta del movimiento pasa a ser la de la
+            // primera parte — igual que cuando se crea un pago dividido.
+            ...(body.lineas && mov.tipo === 'EGRESO' && { cuentaOrigenId: cuentaOrigenNueva }),
+            ...(body.lineas && mov.tipo === 'INGRESO' && { cuentaDestinoId: cuentaDestinoNueva }),
           },
         });
-        // 3. Aplicar el efecto nuevo (con cuenta nueva y monto nuevo)
-        if (cuentaOrigenNueva) {
-          await tx.cuenta.update({
-            where: { id: cuentaOrigenNueva },
-            data: { saldoActual: { decrement: montoNuevo } },
-          });
+
+        // 3. Rehacer las filas de `pagos`.
+        //
+        //    Se borran y se recrean en vez de editarlas: el reparto nuevo puede
+        //    tener otra cantidad de partes que el viejo. `PagoFactura` cuelga de
+        //    `pagoId` con onDelete: Cascade, así que un pago ya imputado a
+        //    facturas perdería la imputación — por eso se rechaza antes de
+        //    llegar acá.
+        if (body.lineas) {
+          await tx.pago.deleteMany({ where: { movimientoId: mov.id } });
+          for (const l of body.lineas) {
+            await tx.pago.create({
+              data: {
+                movimientoId: mov.id,
+                metodo: l.metodo as never,
+                cuentaId: l.cuentaId,
+                monto: l.monto,
+                numeroReferencia: l.numeroReferencia ?? null,
+                estado: 'CONFIRMADO',
+                fecha: body.fechaComputo ? new Date(body.fechaComputo) : mov.fechaComputo,
+              },
+            });
+          }
         }
-        if (cuentaDestinoNueva) {
-          await tx.cuenta.update({
-            where: { id: cuentaDestinoNueva },
-            data: { saldoActual: { increment: montoNuevo } },
-          });
-        }
+
         return nuevo;
       });
 
@@ -1684,6 +1938,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           cuentaDestinoId: mov.cuentaDestinoId,
           categoriaId: mov.categoriaId,
           fechaComputo: mov.fechaComputo.toISOString(),
+          // El reparto entre cuentas también es auditable: si mañana el arqueo
+          // de una cuenta no cierra, esto dice cómo estaba repartido antes.
+          ...(body.lineas && {
+            lineas: mov.pagos.map((p) => `${p.metodo} ${p.monto.toString()}`),
+          }),
         },
         valorNuevo: {
           monto: updated.monto.toString(),
@@ -1692,6 +1951,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           cuentaDestinoId: updated.cuentaDestinoId,
           categoriaId: updated.categoriaId,
           fechaComputo: updated.fechaComputo.toISOString(),
+          ...(body.lineas && {
+            lineas: body.lineas.map((l) => `${l.metodo} ${l.monto}`),
+          }),
         },
       });
 
