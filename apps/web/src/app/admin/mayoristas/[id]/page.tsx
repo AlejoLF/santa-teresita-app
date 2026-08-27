@@ -49,6 +49,8 @@ interface Detalle {
   };
   saldo: string;
   totales: { remitado: string; cobrado: string };
+  descalce: { monto: string; remitos: number[] };
+  creditoLibre: string;
   remitos: Remito[];
   cobros: Cobro[];
 }
@@ -228,7 +230,24 @@ export default function MayoristaDetallePage({
 
   // Marca/desmarca el remito como cobrado. NO mueve plata: el dinero entra por
   // "Registrar cobro". Esto sólo dice QUÉ remitos quedaron saldados.
-  async function marcarPagado(remitoId: string, pagado: boolean) {
+  //
+  // Por eso el aviso: usado sobre un remito que NO tiene un cobro detrás, deja
+  // el remito en verde y la plata en ningún lado. Es lo que pasó con La
+  // Juanita. Se puede seguir haciendo —sirve para imputar un cobro cargado "a
+  // cuenta"— pero avisando cuando no hay con qué cubrirlo.
+  async function marcarPagado(remitoId: string, pagado: boolean, totalRemito?: string) {
+    if (pagado && data && Number(totalRemito ?? 0) > Number(data.creditoLibre) + 0.01) {
+      const libre = Number(data.creditoLibre);
+      const ok = window.confirm(
+        (libre > 0
+          ? `Este cliente tiene $${libre.toLocaleString('es-AR')} cobrados sin imputar, y el remito es de $${Number(totalRemito).toLocaleString('es-AR')}.`
+          : 'Este cliente no tiene ningún cobro sin imputar.') +
+          '\n\nMarcarlo cobrado NO registra la plata: no entra a ninguna cuenta ni al cierre del turno, y le baja la deuda igual.' +
+          '\n\nSi el cliente pagó, cancelá y usá "Registrar cobro" (podés imputarle este remito ahí mismo).' +
+          '\n\n¿Marcarlo cobrado igual?',
+      );
+      if (!ok) return;
+    }
     try {
       await api.post(`/admin/mayoristas/remitos/${remitoId}/pagar`, { pagado });
       setVerRemito(null);
@@ -339,6 +358,35 @@ export default function MayoristaDetallePage({
           <MoneyAmount value={data.totales.cobrado} hero fit className="text-lg text-basil-600" />
         </div>
       </section>
+
+      {/* Remitos marcados cobrados sin cobro registrado.
+          El saldo ya NO los cuenta como deuda (si no, la ficha mostraba el
+          remito en verde y el saldo igual al total remitado). Pero esa plata
+          tampoco está en ninguna cuenta, así que el descalce se muestra en vez
+          de quedar escondido en la diferencia entre dos números. */}
+      {Number(data.descalce.monto) > 0 && (
+        <section className="card p-4 border-l-4 border-pomodoro-500">
+          <h2 className="font-display text-md text-ink-900">
+            Hay $
+            {Number(data.descalce.monto).toLocaleString('es-AR', {
+              minimumFractionDigits: 2,
+            })}{' '}
+            marcados como cobrados sin cobro cargado
+          </h2>
+          <p className="text-sm text-ink-600 mt-1">
+            {data.descalce.remitos.length > 0 && (
+              <>
+                Remito{data.descalce.remitos.length > 1 ? 's' : ''}{' '}
+                {data.descalce.remitos.map((n) => `#${n}`).join(', ')}
+                {': '}
+              </>
+            )}
+            alguien usó &ldquo;Marcar cobrado&rdquo; sin registrar la plata, así que no entró a
+            ninguna cuenta ni al cierre del turno. Si el cliente pagó, cargá el cobro con
+            &ldquo;Registrar cobro&rdquo; e imputáselo. Si fue un error, volvé el remito a pendiente.
+          </p>
+        </section>
+      )}
 
       {/* Resumen para facturar */}
       <section className="card p-4">
@@ -608,7 +656,7 @@ export default function MayoristaDetallePage({
           remito={verRemito}
           onClose={() => setVerRemito(null)}
           onImprimir={() => void imprimirRemito(verRemito)}
-          onPagar={(pagado) => void marcarPagado(verRemito.id, pagado)}
+          onPagar={(pagado) => void marcarPagado(verRemito.id, pagado, verRemito.total)}
           onAnular={() => void anularRemito(verRemito.id, verRemito.numero)}
         />
       )}

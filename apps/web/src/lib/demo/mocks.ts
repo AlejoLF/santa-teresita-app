@@ -407,7 +407,6 @@ function buildDashboard(state: DemoState) {
       },
       aportesHoy: { monto: aportesMonto.toString(), cantidad: aportes.length, porCategoria: porCategoria(aportes) },
       egresosHoy: { monto: egresosMonto.toString(), cantidad: egresos.length, porCategoria: porCategoria(egresos) },
-      pedidosAbiertos: state.ventas.filter((v) => v.estado === 'PROCESADA').length,
     },
     proximosDepositos: [
       { fuente: 'RAPPI', cuentaDestino: 'Santander', fecha: addDays(2), monto: '184500', operaciones: 14 },

@@ -10,6 +10,12 @@ import {
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { calcSaldoFactura } from '../services/facturas.js';
+import {
+  facturasPendientesDe,
+  planificarImputacion,
+  aplicarImputacion,
+  aplicarImputacionRepartida,
+} from '../services/imputacion-facturas.js';
 import { normalizarNombre, buscarProveedorParecido } from '../services/proveedor-match.js';
 import {
   volcarSemanaProveedores,
@@ -1759,6 +1765,24 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
               }),
             )
             .min(1),
+          // Contra qué facturas va este pago. Opcional a propósito: sin
+          // selección esto sigue siendo un pago "a cuenta" y no toca ninguna
+          // factura (con varias abiertas, el sistema no sabe cuál se pagó).
+          // Con selección, cada factura recibe lo que se le haya fijado, y las
+          // que no tengan monto propio se llenan de la más vieja a la más
+          // nueva — así las viejas quedan PAGADA y como mucho la última queda
+          // PAGADA_PARCIAL.
+          facturas: z
+            .array(
+              z.object({
+                facturaId: z.string().uuid(),
+                monto: z
+                  .string()
+                  .regex(/^\d+(\.\d{1,2})?$/)
+                  .optional(),
+              }),
+            )
+            .optional(),
           observaciones: z.string().max(500).optional(),
           fechaPago: z.string().datetime().optional(),
         }),
@@ -1767,6 +1791,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
     async (req, reply) => {
       const body = req.body as {
         proveedorId: string;
+        facturas?: Array<{ facturaId: string; monto?: string }>;
         pagos: Array<{
           cuentaId: string;
           metodo:
@@ -1859,12 +1884,40 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           lineasMov.push({ mov, pago });
         }
 
+        // Las facturas elegidas se saldan acá. Dentro de la transacción y
+        // leyendo pendientes con `tx`: entre el plan y la escritura no puede
+        // colarse otro pago contra las mismas facturas.
+        //
+        // Sin selección no se toca ninguna: sigue siendo un pago a cuenta, que
+        // baja el total adeudado del proveedor sin adivinar cuál factura se
+        // pagó. Ése era el agujero — la encargada cargaba el egreso acá y las
+        // facturas quedaban impagas para siempre.
+        let imputacion: ReturnType<typeof planificarImputacion> | null = null;
+        if (body.facturas?.length) {
+          const pendientes = await facturasPendientesDe(tx, body.proveedorId);
+          imputacion = planificarImputacion(pendientes, totalPagos, body.facturas);
+          await aplicarImputacionRepartida(tx, {
+            asignaciones: imputacion.asignaciones,
+            facturas: pendientes,
+            lineas: lineasMov.map((x, k) => ({
+              movimientoId: x.mov.id,
+              pagoId: x.pago.id,
+              monto: Number(body.pagos[k]!.monto),
+            })),
+            fecha,
+          });
+        }
+
         await tx.proveedor.update({
           where: { id: body.proveedorId },
           data: { ultimoMovimientoAt: fecha },
         });
 
-        return { movs: lineasMov.map((x) => x.mov), pagos: lineasMov.map((x) => x.pago) };
+        return {
+          movs: lineasMov.map((x) => x.mov),
+          pagos: lineasMov.map((x) => x.pago),
+          imputacion,
+        };
       });
 
       for (const mov of result.movs) {
@@ -1887,7 +1940,58 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         pagosIds: result.pagos.map((p) => p.id),
         total: totalPagos.toFixed(2),
         observacion: observacionFinal,
+        // Para que la pantalla pueda decir "se saldaron 2 facturas, sobraron
+        // $500 a cuenta" en vez de dejar a la encargada adivinando si el pago
+        // llegó a donde ella quería.
+        imputacion: result.imputacion
+          ? {
+              facturas: result.imputacion.asignaciones.map((a) => ({
+                facturaId: a.facturaId,
+                montoAplicado: a.montoAplicado.toFixed(2),
+              })),
+              excedente: result.imputacion.excedente.toFixed(2),
+            }
+          : null,
       });
+    },
+  );
+
+  // GET /admin/proveedores/:id/facturas-pendientes — las facturas que todavía
+  // deben plata, de la más vieja a la más nueva.
+  //
+  // Alimenta el selector de "Aportes y egresos": al cargar un egreso a un
+  // proveedor, la encargada elige contra qué facturas va ese pago y cuánto a
+  // cada una. Sin esto sólo se podía pagar "en general" y las facturas
+  // quedaban impagas para siempre.
+  fastify.get(
+    '/admin/proveedores/:id/facturas-pendientes',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req) => {
+      const { id } = req.params as { id: string };
+      const facturas = await facturasPendientesDe(prisma, id);
+      return {
+        facturas: facturas
+          .map((f) => ({
+            id: f.id,
+            numero: f.puntoVenta ? `${f.puntoVenta}-${f.numero}` : f.numero,
+            tipoComprobante: f.tipoComprobante,
+            fechaEmision: f.fechaEmision,
+            fechaVencimiento: f.fechaVencimiento,
+            total: f.total.toFixed(2),
+            totalPagado: f.totalPagado.toFixed(2),
+            saldo: calcSaldoFactura(f).toFixed(2),
+            estado: f.estado,
+          }))
+          // Una factura con saldo 0 sigue en PAGADA_PARCIAL hasta que alguien
+          // la cierre; no tiene sentido ofrecerla para imputar.
+          .filter((f) => Number(f.saldo) > 0.01),
+        totalAdeudado: facturas
+          .reduce((acc, f) => acc + Math.max(0, calcSaldoFactura(f)), 0)
+          .toFixed(2),
+      };
     },
   );
 
@@ -1947,28 +2051,12 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         return reply.code(500).send({ error: 'Categoría "Insumos" no existe en el sistema' });
       }
 
-      // Facturas pendientes del proveedor (FIFO por fecha de emisión)
-      const facturasPendientes = await prisma.facturaRecibida.findMany({
-        where: {
-          proveedorId: body.proveedorId,
-          estado: { in: [EstadoFacturaRecibida.PENDIENTE_PAGO, EstadoFacturaRecibida.PAGADA_PARCIAL] },
-        },
-        orderBy: [{ fechaEmision: 'asc' }, { numero: 'asc' }],
-      });
-
-      // Allocar FIFO el monto contra las facturas pendientes
-      type Asignacion = { facturaId: string; montoAplicado: number };
-      const asignaciones: Asignacion[] = [];
-      let restante = montoTotal;
-      for (const f of facturasPendientes) {
-        if (restante <= 0.01) break;
-        const saldoFactura = calcSaldoFactura(f);
-        if (saldoFactura <= 0.01) continue;
-        const aplicar = Math.min(restante, saldoFactura);
-        asignaciones.push({ facturaId: f.id, montoAplicado: Number(aplicar.toFixed(2)) });
-        restante = Number((restante - aplicar).toFixed(2));
-      }
-      const excedente = restante; // queda como "saldo a favor" del proveedor
+      // Facturas pendientes del proveedor, de la más vieja a la más nueva, y el
+      // reparto FIFO del monto contra ellas. Mismo servicio que usa el egreso
+      // cargado desde "Aportes y egresos": dos caminos que imputaran por su
+      // cuenta terminarían imputando distinto.
+      const facturasPendientes = await facturasPendientesDe(prisma, body.proveedorId);
+      const { asignaciones, excedente } = planificarImputacion(facturasPendientes, montoTotal);
 
       const observacionFinal =
         body.observaciones ??
@@ -2030,35 +2118,13 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         });
 
         // 4. PagoFactura + actualizar facturas (sólo si hubo asignaciones)
-        for (const a of asignaciones) {
-          await tx.pagoFactura.create({
-            data: {
-              pagoId: pago.id,
-              facturaId: a.facturaId,
-              movimientoId: movimiento.id,
-              montoAplicado: a.montoAplicado.toFixed(2),
-            },
-          });
-          const f = facturasPendientes.find((x) => x.id === a.facturaId);
-          if (!f) continue;
-          const totalPagadoNuevo = Number(f.totalPagado) + a.montoAplicado;
-          const saldoNuevo = Number(f.total) - totalPagadoNuevo;
-          const nuevoEstado: EstadoFacturaRecibida =
-            saldoNuevo <= 0.01
-              ? EstadoFacturaRecibida.PAGADA
-              : EstadoFacturaRecibida.PAGADA_PARCIAL;
-          await tx.facturaRecibida.update({
-            where: { id: f.id },
-            data: {
-              totalPagado: totalPagadoNuevo.toFixed(2),
-              estado: nuevoEstado,
-              pagadaAt: nuevoEstado === EstadoFacturaRecibida.PAGADA ? new Date() : null,
-            },
-          });
-          await tx.movimientoFactura.create({
-            data: { movimientoId: movimiento.id, facturaId: f.id },
-          });
-        }
+        await aplicarImputacion(tx, {
+          asignaciones,
+          facturas: facturasPendientes,
+          movimientoId: movimiento.id,
+          pagoId: pago.id,
+          fecha,
+        });
 
         // 5. Última actividad del proveedor
         await tx.proveedor.update({

@@ -22,10 +22,45 @@ import {
  * del período (resumen para facturar por fuera) y, cuando el cliente paga, se
  * registra un COBRO (movimiento INGRESO) que baja el saldo.
  *
- * Saldo adeudado = Σ remitos PENDIENTE − Σ cobros confirmados.
+ * Saldo adeudado = Σ remitos PENDIENTE − crédito libre (ver `calcularSaldo`).
  * El cobro se modela como Movimiento INGRESO (entidadId = clienteMayoristaId)
  * para que la plata aterrice en el cashflow recién cuando efectivamente se cobra.
  */
+
+/**
+ * Saldo de la cuenta corriente de un cliente.
+ *
+ * La cuenta tiene dos lados que se pueden mover por separado: los remitos
+ * cambian de estado (PENDIENTE → PAGADO) y los cobros entran plata. Lo natural
+ * sería `remitado − cobrado`, y eso es lo que había: mientras los dos lados se
+ * muevan juntos da bien, porque marcar PAGADO es sólo la MARCA de qué cobro
+ * cubrió qué remito.
+ *
+ * El problema es que el botón "Marcar cobrado" de la ficha marca el remito sin
+ * registrar ningún cobro. Con esa fórmula, ese remito seguía sumando entero a
+ * la deuda: la pantalla mostraba el remito en verde y el saldo idéntico al
+ * total remitado. Incidente real: La Juanita.
+ *
+ * Ésta lo calcula al revés y no se rompe en ese caso:
+ *
+ *   crédito libre = cobros − remitos ya marcados PAGADO   (nunca negativo)
+ *   saldo         = remitos PENDIENTE − crédito libre
+ *
+ * Con los dos lados sanos da EXACTAMENTE lo mismo que antes (el crédito libre
+ * es 0 y la resta se acomoda sola), incluidos los cobros "a cuenta" —plata
+ * recibida sin imputar a ningún remito, que baja la deuda igual— y los pagos de
+ * más, que siguen dando saldo negativo (el cliente queda a favor). La
+ * diferencia aparece sólo cuando un remito quedó PAGADO sin cobro detrás: ahí
+ * deja de contar como deuda, que es lo que la encargada ve en pantalla.
+ *
+ * Eso NO tapa el descalce: la plata sigue sin estar en la caja. Por eso el
+ * detalle del cliente devuelve `descalce` con lo que está marcado cobrado y no
+ * tiene cobro que lo respalde, y la ficha lo muestra.
+ */
+function calcularSaldo(a: { pendiente: number; pagado: number; cobrado: number }) {
+  const creditoLibre = Math.max(0, a.cobrado - a.pagado);
+  return a.pendiente - creditoLibre;
+}
 
 const METODOS = [
   'EFECTIVO',
@@ -316,14 +351,12 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         orderBy: { nombre: 'asc' },
       });
       const ids = clientes.map((c) => c.id);
-      const [remitado, cobrado] = await Promise.all([
+      const [porEstado, cobrado] = await Promise.all([
+        // Agrupado por estado, no sólo `not: ANULADO`: `calcularSaldo` necesita
+        // PENDIENTE y PAGADO por separado.
         prisma.remito.groupBy({
-          by: ['clienteMayoristaId'],
+          by: ['clienteMayoristaId', 'estado'],
           _sum: { total: true },
-          // `not: ANULADO` (no `= PENDIENTE`): un remito PAGADO SIGUE contando
-          // en lo remitado. El saldo es remitado - cobrado, y el cobro ya está
-          // del otro lado de la resta; si los PAGADO salieran del total, el
-          // pago se restaría dos veces y el saldo daría negativo.
           where: { estado: { not: 'ANULADO' }, clienteMayoristaId: { in: ids } },
         }),
         prisma.movimiento.groupBy({
@@ -332,12 +365,21 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           where: { estado: EstadoMovimiento.CONFIRMADO, tipo: 'INGRESO', entidadId: { in: ids } },
         }),
       ]);
-      const remMap = new Map(remitado.map((r) => [r.clienteMayoristaId, Number(r._sum.total ?? 0)]));
+      const pendMap = new Map<string, number>();
+      const pagMap = new Map<string, number>();
+      for (const r of porEstado) {
+        const destino = r.estado === 'PAGADO' ? pagMap : pendMap;
+        destino.set(r.clienteMayoristaId, Number(r._sum.total ?? 0));
+      }
       const cobMap = new Map(cobrado.map((c) => [c.entidadId, Number(c._sum.monto ?? 0)]));
 
       return {
         clientes: clientes.map((c) => {
-          const saldo = (remMap.get(c.id) ?? 0) - (cobMap.get(c.id) ?? 0);
+          const saldo = calcularSaldo({
+            pendiente: pendMap.get(c.id) ?? 0,
+            pagado: pagMap.get(c.id) ?? 0,
+            cobrado: cobMap.get(c.id) ?? 0,
+          });
           return {
             id: c.id,
             nombre: c.nombre,
@@ -483,10 +525,9 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
             usuario: { select: { nombre: true } },
           },
         }),
-        prisma.remito.aggregate({
+        prisma.remito.groupBy({
+          by: ['estado'],
           _sum: { total: true },
-          // Ver la nota del listado: PAGADO es una MARCA de qué cobro saldó el
-          // remito, no una baja del total remitado.
           where: { clienteMayoristaId: id, estado: { not: 'ANULADO' } },
         }),
         prisma.movimiento.aggregate({
@@ -495,8 +536,22 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
         }),
       ]);
 
-      const totalRemitado = Number(remitado._sum.total ?? 0);
+      const sumaPorEstado = (e: string) =>
+        Number(remitado.find((r) => r.estado === e)?._sum.total ?? 0);
+      const totalPendiente = sumaPorEstado('PENDIENTE');
+      const totalPagado = sumaPorEstado('PAGADO');
+      const totalRemitado = totalPendiente + totalPagado;
       const totalCobrado = Number(cobrado._sum.monto ?? 0);
+
+      // Plata que la ficha da por cobrada y que no está en ninguna cuenta:
+      // remitos marcados con "Marcar cobrado" sin registrar el cobro. Es el
+      // espejo del crédito libre — sólo uno de los dos puede ser > 0. Va a la
+      // respuesta para que la ficha lo muestre en vez de que el descalce viva
+      // escondido en la diferencia entre dos números.
+      const descalce = Math.max(0, totalPagado - totalCobrado);
+      const remitosSinRespaldo = remitos
+        .filter((r) => r.estado === 'PAGADO' && !r.pagadoConMovimientoId)
+        .map((r) => r.numero);
 
       return {
         cliente: {
@@ -511,8 +566,20 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           activo: cliente.activo,
           lista: cliente.listaPrecios,
         },
-        saldo: (totalRemitado - totalCobrado).toFixed(2),
+        saldo: calcularSaldo({
+          pendiente: totalPendiente,
+          pagado: totalPagado,
+          cobrado: totalCobrado,
+        }).toFixed(2),
         totales: { remitado: totalRemitado.toFixed(2), cobrado: totalCobrado.toFixed(2) },
+        descalce: {
+          monto: descalce.toFixed(2),
+          remitos: remitosSinRespaldo,
+        },
+        // Plata cobrada que todavía no está imputada a ningún remito. Es lo
+        // único con lo que se puede marcar un remito cobrado sin mover plata:
+        // la ficha avisa cuando alcanza y cuando no.
+        creditoLibre: Math.max(0, totalCobrado - totalPagado).toFixed(2),
         remitos: remitos.map((r) => ({
           id: r.id,
           numero: r.numero,

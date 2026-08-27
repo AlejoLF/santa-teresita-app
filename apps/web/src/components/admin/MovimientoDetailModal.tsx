@@ -32,6 +32,37 @@ interface MovimientoDetalle {
   audits: AuditEntry[];
   modificado: boolean;
   anulado: boolean;
+  /** Cómo quedó repartido el pago entre cuentas (una fila por cuenta). */
+  lineas: LineaPago[];
+  /** Pago que salió del banco de horas: no se le puede tocar el TOTAL. */
+  deBancoHoras: boolean;
+}
+
+const METODOS = [
+  { value: 'EFECTIVO', label: 'Efectivo' },
+  { value: 'TRANSFERENCIA', label: 'Transferencia' },
+  { value: 'DEPOSITO', label: 'Depósito' },
+  { value: 'CHEQUE', label: 'Cheque' },
+  { value: 'MERCADOPAGO_QR', label: 'MercadoPago QR' },
+  { value: 'TARJETA_DEBITO', label: 'Débito' },
+  { value: 'TARJETA_CREDITO', label: 'Crédito' },
+  { value: 'OTRO', label: 'Otro' },
+] as const;
+
+interface LineaPago {
+  id: string;
+  metodo: string;
+  cuentaId: string;
+  cuentaNombre: string;
+  monto: string;
+  numeroReferencia: string | null;
+}
+
+/** Una parte del pago mientras se la edita (todavía sin guardar). */
+interface LineaEdit {
+  cuentaId: string;
+  metodo: string;
+  monto: string;
 }
 
 interface Cuenta {
@@ -94,6 +125,9 @@ export function MovimientoDetailModal({
   const [confirmAnular, setConfirmAnular] = useState(false);
   const [motivoAnular, setMotivoAnular] = useState('');
   const [enviando, setEnviando] = useState(false);
+  // Reparto del pago entre cuentas mientras se edita. `null` = no se tocó, y
+  // entonces el PATCH no manda `lineas` (y el server no rehace nada).
+  const [lineasEdit, setLineasEdit] = useState<LineaEdit[] | null>(null);
 
   async function load() {
     try {
@@ -111,6 +145,7 @@ export function MovimientoDetailModal({
       setCategoriaEdit(r.categoriaId);
       // datetime-local quiere "YYYY-MM-DDTHH:MM" sin segundos ni zona
       setFechaEdit(new Date(r.fechaComputo).toISOString().slice(0, 16));
+      setLineasEdit(null);
       if ('categorias' in cats && cats.categorias.length > 0) {
         setCategorias(cats.categorias);
       }
@@ -144,6 +179,13 @@ export function MovimientoDetailModal({
       if (categoriaEdit !== det.categoriaId) patch.categoriaId = categoriaEdit;
       const fechaIso = new Date(fechaEdit).toISOString();
       if (fechaIso !== det.fechaComputo) patch.fechaComputo = fechaIso;
+      if (lineasEdit) {
+        patch.lineas = lineasEdit.map((l) => ({
+          cuentaId: l.cuentaId,
+          metodo: l.metodo,
+          monto: Number(l.monto).toFixed(2),
+        }));
+      }
       if (Object.keys(patch).length === 0) {
         setEditando(false);
         return;
@@ -319,18 +361,207 @@ export function MovimientoDetailModal({
                 <div>
                   <div className="text-2xs uppercase tracking-wider text-ink-500">Monto</div>
                   {editando ? (
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={montoEdit}
-                      onChange={(e) => setMontoEdit(e.target.value)}
-                      className="input text-sm font-mono"
-                    />
+                    <>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={montoEdit}
+                        onChange={(e) => setMontoEdit(e.target.value)}
+                        disabled={det.deBancoHoras}
+                        className="input text-sm font-mono disabled:opacity-50"
+                      />
+                      {det.deBancoHoras && (
+                        <p className="text-2xs text-ink-400 mt-1">
+                          Salió del banco de horas: el total no se toca acá (dejaría las horas ya
+                          cobradas sin cuadrar). Repartirlo entre cuentas sí se puede.
+                        </p>
+                      )}
+                    </>
                   ) : (
                     <MoneyAmount value={det.monto} className="text-md text-ink-900" />
                   )}
                 </div>
               </div>
+
+              {/* Reparto del pago entre cuentas.
+                  Un movimiento tiene UNA cuenta, así que un pago mitad efectivo
+                  y mitad transferencia vive en las filas de `pagos`. Sin esto,
+                  un pago cargado 100% en efectivo que había que dejar 70/30 no
+                  se podía arreglar: había que anularlo y cargarlo de nuevo. */}
+              {det.tipo !== 'TRANSFERENCIA_INTERNA' && (det.lineas.length > 0 || editando) && (
+                <div>
+                  <div className="flex items-baseline justify-between mb-1">
+                    <div className="text-2xs uppercase tracking-wider text-ink-500">
+                      Repartido en
+                    </div>
+                    {editando && !lineasEdit && (
+                      <button
+                        type="button"
+                        className="text-2xs text-teresita-700 hover:underline"
+                        onClick={() =>
+                          setLineasEdit(
+                            det.lineas.length > 0
+                              ? det.lineas.map((l) => ({
+                                  cuentaId: l.cuentaId,
+                                  metodo: l.metodo,
+                                  monto: l.monto,
+                                }))
+                              : [
+                                  {
+                                    cuentaId:
+                                      det.cuentaOrigenId ?? det.cuentaDestinoId ?? cuentas[0]?.id ?? '',
+                                    metodo: 'EFECTIVO',
+                                    monto: montoEdit,
+                                  },
+                                ],
+                          )
+                        }
+                      >
+                        Dividir entre cuentas
+                      </button>
+                    )}
+                  </div>
+
+                  {!lineasEdit ? (
+                    <ul className="text-sm text-ink-700 space-y-0.5">
+                      {det.lineas.length === 0 ? (
+                        <li className="text-ink-400 text-xs">
+                          Una sola cuenta ({det.cuentaOrigen?.nombre ?? det.cuentaDestino?.nombre ?? '—'})
+                        </li>
+                      ) : (
+                        det.lineas.map((l) => (
+                          <li key={l.id} className="flex justify-between gap-2">
+                            <span>
+                              {l.cuentaNombre}{' '}
+                              <span className="text-ink-400 text-2xs">
+                                ({METODOS.find((m) => m.value === l.metodo)?.label ?? l.metodo})
+                              </span>
+                            </span>
+                            <MoneyAmount value={l.monto} className="font-mono text-sm" />
+                          </li>
+                        ))
+                      )}
+                    </ul>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {lineasEdit.map((l, i) => (
+                        <div key={i} className="flex gap-1.5 items-center">
+                          <select
+                            value={l.cuentaId}
+                            onChange={(e) =>
+                              setLineasEdit((prev) =>
+                                prev!.map((x, k) =>
+                                  k === i ? { ...x, cuentaId: e.target.value } : x,
+                                ),
+                              )
+                            }
+                            className="input text-xs py-1 flex-1 min-w-0"
+                          >
+                            {cuentas.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.nombre}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            value={l.metodo}
+                            onChange={(e) =>
+                              setLineasEdit((prev) =>
+                                prev!.map((x, k) => (k === i ? { ...x, metodo: e.target.value } : x)),
+                              )
+                            }
+                            className="input text-xs py-1 w-28 shrink-0"
+                          >
+                            {METODOS.map((m) => (
+                              <option key={m.value} value={m.value}>
+                                {m.label}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={l.monto}
+                            onChange={(e) =>
+                              setLineasEdit((prev) =>
+                                prev!.map((x, k) => (k === i ? { ...x, monto: e.target.value } : x)),
+                              )
+                            }
+                            className="input text-xs py-1 font-mono w-24 shrink-0"
+                          />
+                          {lineasEdit.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setLineasEdit((prev) => prev!.filter((_, k) => k !== i))
+                              }
+                              className="text-pomodoro-600 text-sm px-1 shrink-0"
+                              title="Sacar esta parte"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+
+                      <div className="flex items-center justify-between gap-2 pt-0.5">
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="text-2xs text-teresita-700 hover:underline"
+                            onClick={() =>
+                              setLineasEdit((prev) => {
+                                // La parte nueva arranca con lo que falta para
+                                // llegar al total: el caso normal (dividir en
+                                // dos) queda listo sin tocar ningún número.
+                                const falta =
+                                  Number(montoEdit || 0) -
+                                  prev!.reduce((a, x) => a + Number(x.monto || 0), 0);
+                                const usadas = new Set(prev!.map((x) => x.cuentaId));
+                                const libre = cuentas.find((c) => !usadas.has(c.id));
+                                return [
+                                  ...prev!,
+                                  {
+                                    cuentaId: libre?.id ?? cuentas[0]?.id ?? '',
+                                    metodo: 'TRANSFERENCIA',
+                                    monto: falta > 0 ? falta.toFixed(2) : '',
+                                  },
+                                ];
+                              })
+                            }
+                          >
+                            + Agregar parte
+                          </button>
+                          <button
+                            type="button"
+                            className="text-2xs text-ink-500 hover:underline"
+                            onClick={() => setLineasEdit(null)}
+                          >
+                            Cancelar reparto
+                          </button>
+                        </div>
+                        {(() => {
+                          const suma = lineasEdit.reduce((a, x) => a + Number(x.monto || 0), 0);
+                          const cuadra = Math.abs(suma - Number(montoEdit || 0)) <= 0.01;
+                          return (
+                            <span
+                              className={cn(
+                                'text-2xs font-mono tabular-nums',
+                                cuadra ? 'text-basil-600' : 'text-pomodoro-600',
+                              )}
+                            >
+                              {suma.toLocaleString('es-AR', { minimumFractionDigits: 2 })} /{' '}
+                              {Number(montoEdit || 0).toLocaleString('es-AR', {
+                                minimumFractionDigits: 2,
+                              })}
+                            </span>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div>
                 <div className="text-2xs uppercase tracking-wider text-ink-500 mb-1">
@@ -442,7 +673,20 @@ export function MovimientoDetailModal({
                 >
                   Cancelar
                 </Button>
-                <Button onClick={guardarEdicion} disabled={enviando}>
+                <Button
+                  onClick={guardarEdicion}
+                  disabled={
+                    enviando ||
+                    // Un reparto que no suma el total dejaría las cuentas
+                    // descuadradas; el server también lo rechaza, pero acá el
+                    // botón ya avisa que falta.
+                    (lineasEdit !== null &&
+                      Math.abs(
+                        lineasEdit.reduce((a, x) => a + Number(x.monto || 0), 0) -
+                          Number(montoEdit || 0),
+                      ) > 0.01)
+                  }
+                >
                   {enviando ? 'Guardando…' : 'Guardar cambios'}
                 </Button>
               </>

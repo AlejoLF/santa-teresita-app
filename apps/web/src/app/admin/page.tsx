@@ -52,7 +52,6 @@ interface Dashboard {
       cantidad: number;
       porCategoria: Array<{ categoria: string; monto: string; cantidad: number }>;
     };
-    pedidosAbiertos: number;
   };
   proximosDepositos: Array<{
     fuente: string;
@@ -355,13 +354,6 @@ export default function AdminDashboard() {
                 icon="⏰"
                 href="/admin/insumos"
                 accent="danger"
-              />
-              <PendienteRow
-                show={data.kpis.pedidosAbiertos > 0}
-                label={`${data.kpis.pedidosAbiertos} pedidos abiertos en el cajero`}
-                icon="📋"
-                href="/cargar-pedido"
-                accent="default"
               />
             </ul>
           )}
