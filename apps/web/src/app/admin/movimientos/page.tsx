@@ -764,6 +764,17 @@ function FormNuevoMovimiento({
     { tipo: 'JORNADA', monto: '' },
   ]);
 
+  // Una factura del proveedor que todavía debe plata.
+  interface FacturaPendiente {
+    id: string;
+    numero: string;
+    tipoComprobante: string;
+    fechaEmision: string;
+    total: string;
+    totalPagado: string;
+    saldo: string;
+  }
+
   // Proveedores (cargado on-demand cuando se elige categoría "Insumos / Pago a proveedor")
   const [proveedores, setProveedores] = useState<ProveedorLite[]>([]);
   const [proveedorId, setProveedorId] = useState<string>('');
@@ -773,6 +784,15 @@ function FormNuevoMovimiento({
   // es por transferencia/depósito, debería tener el nº de operación. Si es
   // efectivo, la encargada pone un código nuestro (ej "EF-20260510-001").
   const [numeroReferencia, setNumeroReferencia] = useState<string>('');
+
+  // Facturas impagas del proveedor elegido + a cuáles se imputa este pago.
+  //
+  // `montos` guarda lo que se le asigna a cada factura tildada. Vacío = "lo que
+  // toque": el server la llena de la más vieja a la más nueva con lo que quede.
+  // Así el caso normal (pagar facturas enteras) es tildar y listo, y el pago
+  // parcial es escribir un número en una.
+  const [facturasProv, setFacturasProv] = useState<FacturaPendiente[]>([]);
+  const [facturasElegidas, setFacturasElegidas] = useState<Record<string, string>>({});
 
   // Categorías disponibles para el tipo elegido
   const categoriasFiltradas = categorias.filter((c) => {
@@ -823,6 +843,26 @@ function FormNuevoMovimiento({
       })();
     }
   }, [esCategoriaProveedor, proveedores.length]);
+
+  // Facturas impagas del proveedor elegido. Se recargan cada vez que cambia el
+  // proveedor y se limpia lo tildado: las facturas de uno no valen para el otro.
+  useEffect(() => {
+    setFacturasElegidas({});
+    if (!esCategoriaProveedor || !proveedorId) {
+      setFacturasProv([]);
+      return;
+    }
+    void (async () => {
+      try {
+        const res = await api.get<{ facturas: FacturaPendiente[] }>(
+          `/admin/proveedores/${proveedorId}/facturas-pendientes`,
+        );
+        setFacturasProv(res.facturas);
+      } catch {
+        setFacturasProv([]);
+      }
+    })();
+  }, [esCategoriaProveedor, proveedorId]);
 
   // Sumatoria de conceptos (cuando aplica) — sobrescribe el monto manual
   const sumaConceptos = conceptos.reduce((acc, c) => acc + Number(c.monto || 0), 0);
@@ -979,18 +1019,32 @@ function FormNuevoMovimiento({
       if (cuentasLineas.length !== 1 || !cuentasLineas[0]?.cuentaId) {
         return setError('Para pago a proveedor elegí una sola cuenta de origen');
       }
+      // Lo escrito a mano no puede pasarse del pago; lo que quedó vacío lo
+      // reparte el server, así que no entra en esta cuenta.
+      const fijado = Object.values(facturasElegidas)
+        .filter((v) => v !== '')
+        .reduce((a, v) => a + Number(v || 0), 0);
+      if (fijado > Number(monto) + 0.01) {
+        return setError(
+          `Estás repartiendo $${fijado.toLocaleString('es-AR')} entre las facturas y el pago es de $${Number(monto).toLocaleString('es-AR')}`,
+        );
+      }
     }
 
     setGuardando(true);
     try {
-      // Pago a proveedor: SIEMPRE como pago a cuenta corriente, sin allocar
-      // FIFO contra facturas. Antes el flujo egreso-a-proveedor asignaba el
-      // monto a la factura más vieja, lo cual era incorrecto cuando hay
-      // múltiples facturas pendientes (no sabemos cuál pagó realmente).
-      // Ahora queda como un evento independiente que descuenta del saldo
-      // adeudado total. La encargada después puede ir a "Pagar facturas"
-      // (en Insumos) y asignar específicamente si quiere cancelar una.
+      // Pago a proveedor. El sistema NO adivina contra qué factura va: con
+      // varias abiertas, alocar FIFO por su cuenta cancelaba la que no era.
+      // Lo elige la encargada tildando facturas (y, si paga sólo una parte,
+      // escribiendo cuánto va a cada una). Sin tildar nada sigue siendo un
+      // pago a cuenta, como antes.
       if (esCategoriaProveedor && proveedorId) {
+        const facturas = Object.entries(facturasElegidas).map(([facturaId, m]) => ({
+          facturaId,
+          // Vacío = "lo que haga falta": lo completa el server de la más vieja
+          // a la más nueva.
+          ...(m.trim() !== '' && { monto: Number(m).toFixed(2) }),
+        }));
         await api.post('/admin/pagos-a-cuenta', {
           proveedorId,
           pagos: [
@@ -1001,6 +1055,7 @@ function FormNuevoMovimiento({
               numeroReferencia: numeroReferencia.trim() || undefined,
             },
           ],
+          ...(facturas.length > 0 && { facturas }),
           observaciones: observacion || undefined,
         });
         onCreated();
@@ -1220,7 +1275,7 @@ function FormNuevoMovimiento({
           {esCategoriaProveedor && (
             <div className="rounded-md border border-saffron-600/40 bg-saffron-100/40 p-3 space-y-3">
               <div className="text-2xs uppercase tracking-wider text-saffron-600 font-semibold">
-                Pago a proveedor · alocación automática
+                Pago a proveedor
               </div>
               <div>
                 <label className="block text-2xs font-medium text-ink-700 mb-1">Proveedor</label>
@@ -1294,13 +1349,113 @@ function FormNuevoMovimiento({
                         })()}
                       </div>
                       <p className="text-2xs text-ink-400 mt-1.5">
-                        Se registra como pago a cuenta corriente (no se asigna
-                        a una factura específica). La encargada puede asignar
-                        después desde "Pagar facturas".
+                        {Object.keys(facturasElegidas).length > 0
+                          ? 'Se descuenta de las facturas tildadas abajo.'
+                          : 'Sin facturas tildadas se registra como pago a cuenta: baja el saldo total del proveedor, pero las facturas siguen figurando impagas.'}
                       </p>
                     </>
                   )}
                 </div>
+              )}
+
+              {/* Contra qué facturas va el pago.
+                  Sin esto, el egreso salía de la caja y las facturas quedaban
+                  impagas: había que ir a marcarlas a mano desde Insumos. Y no
+                  alcanzaba con "tildar y saldar entera", porque muchas veces se
+                  paga sólo una parte — de ahí el casillero de monto por factura. */}
+              {proveedorId && facturasProv.length > 0 && (
+                <div className="bg-white rounded-md border border-cream-300 p-2.5 space-y-2">
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-2xs uppercase tracking-wider text-ink-500 font-semibold">
+                      ¿De qué facturas se descuenta?
+                    </span>
+                    <button
+                      type="button"
+                      className="text-2xs text-teresita-700 hover:underline"
+                      onClick={() => {
+                        // "Las más viejas primero": tilda de arriba hacia abajo
+                        // hasta cubrir el monto, y a la última le pone lo que
+                        // sobra. Es lo que la encargada hace a mano casi siempre.
+                        let resto = Number(monto || 0);
+                        const next: Record<string, string> = {};
+                        for (const f of facturasProv) {
+                          if (resto <= 0.01) break;
+                          const saldo = Number(f.saldo);
+                          const aplica = Math.min(resto, saldo);
+                          next[f.id] = aplica >= saldo - 0.01 ? '' : aplica.toFixed(2);
+                          resto = Number((resto - aplica).toFixed(2));
+                        }
+                        setFacturasElegidas(next);
+                      }}
+                    >
+                      Las más viejas primero
+                    </button>
+                  </div>
+
+                  <ul className="space-y-1 max-h-44 overflow-y-auto">
+                    {facturasProv.map((f) => {
+                      const tildada = f.id in facturasElegidas;
+                      return (
+                        <li key={f.id} className="flex items-center gap-2 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={tildada}
+                            onChange={(e) =>
+                              setFacturasElegidas((prev) => {
+                                const next = { ...prev };
+                                if (e.target.checked) next[f.id] = '';
+                                else delete next[f.id];
+                                return next;
+                              })
+                            }
+                            className="shrink-0"
+                          />
+                          <span className="font-mono text-2xs shrink-0">{f.numero}</span>
+                          <span className="text-ink-400 text-2xs shrink-0">
+                            {new Date(f.fechaEmision).toLocaleDateString('es-AR')}
+                          </span>
+                          <span className="text-ink-500 ml-auto shrink-0">
+                            debe <MoneyAmount value={f.saldo} />
+                          </span>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            step="0.01"
+                            disabled={!tildada}
+                            value={facturasElegidas[f.id] ?? ''}
+                            onChange={(e) =>
+                              setFacturasElegidas((prev) => ({ ...prev, [f.id]: e.target.value }))
+                            }
+                            placeholder="todo"
+                            title="Cuánto de este pago va a esta factura. Vacío = lo que haga falta para saldarla."
+                            className="input text-2xs font-mono w-20 shrink-0 disabled:opacity-40"
+                          />
+                        </li>
+                      );
+                    })}
+                  </ul>
+
+                  {(() => {
+                    // Sólo cuenta lo escrito a mano: lo que quedó vacío lo
+                    // reparte el server, así que acá no se puede anticipar.
+                    const fijado = Object.values(facturasElegidas)
+                      .filter((v) => v !== '')
+                      .reduce((a, v) => a + Number(v || 0), 0);
+                    if (fijado <= Number(monto || 0) + 0.01) return null;
+                    return (
+                      <p className="text-2xs text-pomodoro-600">
+                        Estás repartiendo ${fijado.toLocaleString('es-AR')} entre las facturas y el
+                        pago es de ${Number(monto || 0).toLocaleString('es-AR')}.
+                      </p>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {proveedorId && facturasProv.length === 0 && (
+                <p className="text-2xs text-ink-400">
+                  Este proveedor no tiene facturas impagas cargadas. El pago queda a cuenta.
+                </p>
               )}
 
               <div className="grid grid-cols-2 gap-2">

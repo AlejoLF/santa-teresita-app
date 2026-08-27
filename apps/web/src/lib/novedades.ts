@@ -34,17 +34,23 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
-    version: '2.0.0-alpha.62',
-    fecha: '13 de agosto',
-    titulo: 'El descuento ahora se puede poner en un medio de pago y en el otro no',
+    version: '2.0.0-alpha.67',
+    fecha: '26 de agosto',
+    titulo: 'Se arreglaron las cuentas de mayoristas y de proveedores',
     cambios: [
-      'Cuando el cliente paga una parte en efectivo y otra con tarjeta, ya podés hacerle el descuento solo en una de las dos.',
-      'En Pago dividido, al tildar "Aplicar descuento" arranca con el mismo % en todos los métodos, como hasta ahora.',
-      'Debajo de cada método aparece una casilla "Descuento en Efectivo" (o Débito, Crédito, etc.). Si la destildás, esa parte la paga a precio de lista.',
-      'Al lado de la casilla podés poner un % distinto para ese método: por ejemplo 10% en efectivo y 5% en débito.',
-      'Cada método te muestra cuánto cubre del pedido y cuánto ahorra el cliente, así se ve que el pedido cierra.',
-      'El total a cobrar y el vuelto se recalculan solos cada vez que tocás un %.',
-      'Vale igual para los pedidos del día y para los encargos.',
+      'Mayoristas: el saldo que debía cada empresa estaba mal. Cuando un remito se marcaba con "Marcar cobrado", el sistema lo dejaba en verde pero seguía contándolo entero como deuda — por eso en La Juanita el saldo daba igual que el total remitado. Ahora el saldo baja como corresponde.',
+      'Y si algún remito quedó marcado cobrado sin que se haya cargado el cobro, la ficha de esa empresa te lo avisa arriba con el monto y el número de remito: esa plata no está en ninguna cuenta. Si el cliente pagó, cargás el cobro; si fue un error, volvés el remito a pendiente.',
+      'Al usar "Marcar cobrado" sin tener un cobro cargado que lo cubra, ahora avisa antes de hacerlo. Se puede seguir haciendo, pero ya no pasa de largo sin que nadie se entere.',
+      'Proveedores: cuando pagabas desde Aportes y egresos, la plata salía de la caja pero las facturas seguían figurando impagas. Había que ir a marcarlas a mano desde Insumos.',
+      'Ahora, al cargar un egreso a un proveedor, aparece la lista de sus facturas impagas y tildás de cuáles se descuenta. Si le pagás sólo una parte a una, escribís cuánto en el casillero de al lado y esa factura queda como pago parcial, con lo que falta a la vista.',
+      'Podés tildar varias de una: el botón "Las más viejas primero" las llena solo, dejando las viejas saldadas del todo y la última como parcial si el monto no alcanza.',
+      'Si no tildás ninguna sigue funcionando como antes: pago a cuenta, que baja el total que se le debe al proveedor sin tocar ninguna factura en particular.',
+      'Las facturas y los saldos de proveedores quedaron puestos al día con todos los pagos que ya estaban cargados.',
+      'Aportes y egresos: un pago que se cargó todo en una cuenta ahora se puede repartir después. Abrís el movimiento, "Editar", y con "Dividir entre cuentas" lo dejás por ejemplo 70% en efectivo y 30% por transferencia. Antes había que anularlo y cargarlo de nuevo.',
+      'Se sacó del panel de Julio el cartel de "pedidos abiertos en el cajero": contaba todos los pedidos sin terminar desde que arrancó el sistema, no los del turno, así que el número no quería decir nada.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.65',
     fecha: '24 de agosto',
     titulo: 'Cargar las horas y pagarlas en el mismo paso',
