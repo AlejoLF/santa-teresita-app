@@ -19,10 +19,15 @@
  * imputado — el TOTAL adeudado del proveedor queda bien igual, porque es la
  * misma plata repartida distinto.
  *
- * Uso:
- *   node scripts/cloud/imputar-pagos-proveedores.mjs            # informe, no toca nada
- *   node scripts/cloud/imputar-pagos-proveedores.mjs --aplicar  # escribe
- *   node scripts/cloud/imputar-pagos-proveedores.mjs --local    # contra la DB local
+ * Uso. Necesita las credenciales de Supabase en el `.env`, las mismas que
+ * `cloud:migrate` y `cloud:status` (SUPABASE_PROJECT_REF + SUPABASE_DB_PASSWORD,
+ * o SUPABASE_DB_URL_POOLED):
+ *
+ *   pnpm cloud:imputar-pagos                # informe: no toca nada
+ *   pnpm cloud:imputar-pagos -- --aplicar   # escribe
+ *
+ * Contra una base local, agregando --local (con DATABASE_URL seteada):
+ *   node scripts/cloud/imputar-pagos-proveedores.mjs --local
  *
  * Es idempotente: correrlo dos veces no imputa dos veces (la segunda vez ya no
  * quedan pagos sin imputar).
@@ -187,8 +192,12 @@ async function main() {
     console.log('───────────────────────────────────────────────\n');
 
     if (!APLICAR) {
-      console.log('Esto fue sólo el informe. Para escribirlo:');
-      console.log(`  node scripts/cloud/imputar-pagos-proveedores.mjs --aplicar${LOCAL ? ' --local' : ''}\n`);
+      console.log('Esto fue sólo el informe. Revisalo, y si está bien, para escribirlo:');
+      console.log(
+        LOCAL
+          ? '  node scripts/cloud/imputar-pagos-proveedores.mjs --aplicar --local\n'
+          : '  pnpm cloud:imputar-pagos -- --aplicar\n',
+      );
       return;
     }
 
