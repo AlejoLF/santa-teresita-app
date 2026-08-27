@@ -6,6 +6,7 @@ import { prisma } from '@sta/db/client';
 import { config } from '../config.js';
 import { recordAudit } from '../services/audit.js';
 import { buscarProveedorParecido, normalizarNombre } from '../services/proveedor-match.js';
+import { getProveedorSinIdentificar } from '../services/proveedor-sin-identificar.js';
 
 /**
  * Ingesta de máquina — facturas leídas por OCR (n8n local en el server +
@@ -34,11 +35,18 @@ const BodySchema = z.object({
   adjunto: z
     .object({ hash: z.string().min(8).max(80).optional(), url: z.string().url().max(1000).optional() })
     .default({}),
-  proveedor: z.object({
-    nombre: z.string().min(1).max(120),
-    cuit: z.string().max(20).optional(),
-    razonSocial: z.string().max(160).optional(),
-  }),
+  // El nombre es OPCIONAL a propósito. En muchas facturas el proveedor está
+  // impreso como logo estilizado y ningún OCR lo lee como texto; exigirlo hacía
+  // que la factura rebotara con 400 y se perdiera entera. Mismo criterio que ya
+  // se usa con el número de comprobante: entra igual, marcada como faltante,
+  // y la encargada le asigna el proveedor de la lista al revisarla.
+  proveedor: z
+    .object({
+      nombre: z.string().max(120).optional(),
+      cuit: z.string().max(20).optional(),
+      razonSocial: z.string().max(160).optional(),
+    })
+    .default({}),
   comprobante: z.object({
     tipo: z
       .enum([
@@ -116,15 +124,24 @@ async function resolverProveedor(p: Body['proveedor']): Promise<string> {
     const porCuit = await prisma.proveedor.findFirst({ where: { cuit: p.cuit }, select: { id: true } });
     if (porCuit) return porCuit.id;
   }
+
+  // Sin nombre legible no hay nada que resolver: ni buscar, ni parecer, ni
+  // crear. Va al proveedor de espera y la encargada le asigna el de verdad.
+  //
+  // OJO con crear uno nuevo acá: sin nombre, el `create` de más abajo haría un
+  // proveedor por cada factura ilegible y la lista se llenaría de basura.
+  const nombre = p.nombre?.trim();
+  if (!nombre) return getProveedorSinIdentificar();
+
   const porNombre = await prisma.proveedor.findFirst({
-    where: { nombre: { equals: p.nombre, mode: 'insensitive' } },
+    where: { nombre: { equals: nombre, mode: 'insensitive' } },
     select: { id: true },
   });
   if (porNombre) return porNombre.id;
 
   // 3. Alias confirmado por un humano. Gana sobre el parecido automático:
   //    es una decisión explícita, no una heurística.
-  const normalizado = normalizarNombre(p.nombre);
+  const normalizado = normalizarNombre(nombre);
   if (normalizado) {
     const alias = await prisma.proveedorAlias.findUnique({
       where: { nombreNormalizado: normalizado },
@@ -138,12 +155,12 @@ async function resolverProveedor(p: Body['proveedor']): Promise<string> {
     where: { activo: true },
     select: { id: true, nombre: true, razonSocial: true },
   });
-  const parecido = buscarProveedorParecido(p.nombre, activos);
+  const parecido = buscarProveedorParecido(nombre, activos);
   if (parecido) return parecido.id;
   try {
     const nuevo = await prisma.proveedor.create({
       data: {
-        nombre: p.nombre,
+        nombre,
         cuit: p.cuit ?? null,
         razonSocial: p.razonSocial ?? null,
         activo: true,
@@ -165,7 +182,7 @@ async function resolverProveedor(p: Body['proveedor']): Promise<string> {
       registroId: nuevo.id,
       accion: 'INSERT',
       usuarioId: null,
-      valorNuevo: { nombre: p.nombre, cuit: p.cuit ?? null },
+      valorNuevo: { nombre, cuit: p.cuit ?? null },
       contexto: { fuente: 'ingest-ocr', motivo: 'proveedor nuevo detectado por OCR' },
     });
     return nuevo.id;
@@ -173,7 +190,7 @@ async function resolverProveedor(p: Body['proveedor']): Promise<string> {
     // Carrera: otro request creó el mismo nombre (unique). Re-buscamos.
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
       const again = await prisma.proveedor.findFirst({
-        where: { nombre: { equals: p.nombre, mode: 'insensitive' } },
+        where: { nombre: { equals: nombre, mode: 'insensitive' } },
         select: { id: true },
       });
       if (again) return again.id;
@@ -215,6 +232,22 @@ export default async function ingestRoutes(fastify: FastifyInstance) {
       const proveedorId = await resolverProveedor(body.proveedor);
       const fechaEm = new Date(body.comprobante.fechaEmision);
 
+      // Sin proveedor legible la factura entra igual, pero tiene que gritar que
+      // le falta: si entrara callada, quedaría colgada del casillero de espera
+      // sumando deuda de nadie y nadie se enteraría. La observación es lo que
+      // lee la encargada al abrirla, y la confianza baja la ordena arriba en la
+      // pantalla de pendientes.
+      const sinProveedor = proveedorId === (await getProveedorSinIdentificar());
+      const observaciones = [
+        sinProveedor ? '⚠ FALTA EL PROVEEDOR: el OCR no pudo leer de quién es esta factura. Asignáselo con "no es este" antes de aprobarla.' : null,
+        body.observaciones ?? null,
+      ]
+        .filter(Boolean)
+        .join(' · ') || null;
+      const confianza = sinProveedor
+        ? Math.min(body.ocr.confianza ?? 0.5, 0.5)
+        : body.ocr.confianza;
+
       try {
         const factura = await prisma.$transaction(async (tx) => {
           const f = await tx.facturaRecibida.create({
@@ -239,8 +272,8 @@ export default async function ingestRoutes(fastify: FastifyInstance) {
               adjuntoUrl: body.adjunto.url ?? null,
               adjuntoHash: hash,
               ocrPayload: (body.ocr.payload as never) ?? undefined,
-              ocrConfianza: body.ocr.confianza != null ? body.ocr.confianza.toFixed(4) : null,
-              observaciones: body.observaciones ?? null,
+              ocrConfianza: confianza != null ? confianza.toFixed(4) : null,
+              observaciones,
               // usuarioCargaId NULL → carga de máquina. El origen ya lo marca.
               items: {
                 create: body.items.map((it, idx) => ({

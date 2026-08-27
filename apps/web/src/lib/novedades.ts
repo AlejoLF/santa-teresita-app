@@ -34,6 +34,18 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.68',
+    fecha: '27 de agosto',
+    titulo: 'Las facturas que el sistema no puede leer ya no se pierden',
+    cambios: [
+      'Cuando mandás por Telegram una factura donde el nombre del proveedor está como logo (no como letra), el sistema no lo puede leer. Hasta ahora te contestaba "no pude leer la factura" y había que cargarla entera a mano.',
+      'Ahora entra igual. Queda guardada con todo lo demás —el monto, la fecha, los productos— y en Facturas aparece en rojo con el cartel "no pude leer de quién es".',
+      'Le tocás "asignar proveedor", lo elegís de la lista y listo. Recién ahí se le suma la deuda a ese proveedor.',
+      'Mientras no le asignes el proveedor, esa factura no aparece para pagar en ningún lado. Así no se paga por error una factura de la que todavía no se sabe de quién es.',
+      'Si en la factura se llega a leer el CUIT, no hace falta hacer nada: va sola al proveedor correcto.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.67',
     fecha: '26 de agosto',
     titulo: 'Se arreglaron las cuentas de mayoristas y de proveedores',

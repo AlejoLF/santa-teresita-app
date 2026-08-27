@@ -35,6 +35,8 @@ interface PagoFactura {
 interface FacturaDetalle {
   id: string;
   proveedor: { id: string; nombre: string };
+  /** El OCR no pudo leer de quién es: está en el casillero de espera. */
+  proveedorSinIdentificar?: boolean;
   tipoComprobante: string;
   puntoVenta: string | null;
   numero: string;
@@ -617,22 +619,45 @@ function SelectorProveedor({
     <div className="text-sm text-ink-500">
       <div className="flex items-center gap-2 flex-wrap">
         <span>
-          Proveedor: <span className="text-ink-900 font-medium">{factura.proveedor.nombre}</span>
+          Proveedor:{' '}
+          <span
+            className={cn(
+              'font-medium',
+              factura.proveedorSinIdentificar ? 'text-pomodoro-600' : 'text-ink-900',
+            )}
+          >
+            {factura.proveedor.nombre}
+          </span>
         </span>
         <button
           type="button"
           onClick={() => setAbierto((v) => !v)}
           className="text-2xs text-teresita-700 hover:underline"
         >
-          {abierto ? 'cancelar' : 'no es este'}
+          {abierto ? 'cancelar' : factura.proveedorSinIdentificar ? 'asignar proveedor' : 'no es este'}
         </button>
       </div>
+
+      {/* Sin esto la factura queda colgada del casillero de espera sumando
+          deuda de nadie, y en la pantalla no se distingue de una normal. */}
+      {factura.proveedorSinIdentificar && !abierto && (
+        <p className="mt-1 text-2xs text-pomodoro-600">
+          El sistema no pudo leer de quién es esta factura. Asignale el proveedor antes de
+          aprobarla: hasta que lo hagas, no se le suma la deuda a nadie.
+        </p>
+      )}
 
       {abierto && (
         <div className="mt-2 bg-surface-sunken rounded-md p-3 space-y-2">
           <p className="text-2xs text-ink-500">
-            Elegí el proveedor que ya tenés cargado. El nombre que trajo la factura fue{' '}
-            <span className="font-medium text-ink-700">{factura.proveedor.nombre}</span>.
+            {factura.proveedorSinIdentificar ? (
+              <>Elegí de quién es esta factura. El sistema no pudo leer el nombre del papel.</>
+            ) : (
+              <>
+                Elegí el proveedor que ya tenés cargado. El nombre que trajo la factura fue{' '}
+                <span className="font-medium text-ink-700">{factura.proveedor.nombre}</span>.
+              </>
+            )}
           </p>
           <select
             value={elegido}
@@ -648,7 +673,15 @@ function SelectorProveedor({
                 </option>
               ))}
           </select>
-          <label className="flex items-start gap-2 cursor-pointer text-2xs text-ink-700">
+          {/* Sin nombre leído no hay nada que recordar: el que tiene es el del
+              casillero del sistema. Guardarlo mandaría TODAS las facturas
+              ilegibles a este proveedor. El server también lo bloquea. */}
+          <label
+            className={cn(
+              'flex items-start gap-2 cursor-pointer text-2xs text-ink-700',
+              factura.proveedorSinIdentificar && 'hidden',
+            )}
+          >
             <input
               type="checkbox"
               checked={recordar}
