@@ -649,7 +649,17 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       // de productos. El total final = (subtotal - descuento) + recargoCanal.
       const recargoCanal = Number(venta.recargoCanal ?? 0);
       let total = Number(venta.total);
-      if (body.aplicarDescuentoEfectivo && venta.canal === 'MOSTRADOR') {
+
+      // ¿El cliente manda el % POR LÍNEA? Ese es el modo nuevo: el cliente
+      // paga una parte en efectivo y otra con tarjeta, y la promo va sólo en
+      // una de las dos (o distinta en cada una). Si ninguna línea lo trae,
+      // caemos al modo viejo del % global — un cliente sin actualizar sigue
+      // cobrando igual durante la ventana entre el deploy de web y el de API.
+      const hayPctPorLinea = body.pagos.some((p) => p.descuentoPct !== undefined);
+      const aplicaDescuento =
+        venta.canal === 'MOSTRADOR' && (hayPctPorLinea || body.aplicarDescuentoEfectivo);
+
+      if (aplicaDescuento) {
         // Seguridad: el cajero puede elegir el % por venta, pero capeamos al
         // MÁXIMO configurado (`descuento_manual_max_vendedor_pct`, default 30%)
         // para que no venda a cualquier precio. OJO: este es el TOPE, NO el
@@ -661,18 +671,46 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           select: { valor: true },
         });
         const pctMax = Math.min(100, Math.max(0, Number(pctConfig?.valor ?? 30) || 30));
-        const pct = Math.min(body.descuentoPctEfectivo, pctMax);
-        if (pct <= 0 || pct >= 100) {
-          return reply
-            .code(400)
-            .send({ error: `Porcentaje de descuento inválido: ${pct}%` });
+
+        // El % de cada línea: el propio si vino, si no el global. Se capea
+        // línea por línea — un % alto en una sola línea no puede colarse.
+        const pctDeLinea = (p: { descuentoPct?: number }) =>
+          Math.min(p.descuentoPct ?? body.descuentoPctEfectivo, pctMax);
+
+        const invalida = body.pagos.find((p) => {
+          const pct = pctDeLinea(p);
+          return pct < 0 || pct >= 100;
+        });
+        if (invalida) {
+          return reply.code(400).send({
+            error: `Porcentaje de descuento inválido: ${pctDeLinea(invalida)}%`,
+          });
         }
-        // TODOS los pagos, no sólo los de efectivo. Filtrar por EFECTIVO hacía
-        // que un cobro con tarjeta calculara descuento 0 y el total quedara sin
-        // descontar, aunque el cajero lo hubiera aplicado en pantalla.
-        const netoCobrado = body.pagos.reduce((acc, p) => acc + Number(p.monto), 0);
-        descuento = Math.round(((netoCobrado * pct) / (100 - pct)) * 100) / 100;
-        total = Number(venta.subtotal) - descuento + recargoCanal;
+        // Con el % global viejo, un 0 significaba "no hay descuento" y era un
+        // error mandarlo con el flag activo. Con % por línea, 0 es legítimo:
+        // es justamente la línea que NO lleva descuento.
+        if (!hayPctPorLinea && pctDeLinea(body.pagos[0]!) <= 0) {
+          return reply.code(400).send({ error: 'Porcentaje de descuento inválido: 0%' });
+        }
+
+        // El frontend manda cada pago con el monto NETO (lo que el cliente
+        // entrega por esa línea). Conociendo el % de la línea:
+        //   bruto     = neto / (1 - pct/100)      ← lo que cubre del pedido
+        //   descuento = bruto - neto = neto * pct / (100 - pct)
+        // El descuento de la venta es la suma de los de cada línea.
+        descuento = body.pagos.reduce((acc, p) => {
+          const pct = pctDeLinea(p);
+          if (pct <= 0) return acc;
+          return acc + (Number(p.monto) * pct) / (100 - pct);
+        }, 0);
+        descuento = Math.round(descuento * 100) / 100;
+        // Sólo recalculamos el total si REALMENTE hay descuento. Con % por
+        // línea es normal que todas vengan en 0 (el cajero abrió el panel y no
+        // descontó nada): en ese caso el total tiene que quedar exactamente el
+        // que ya tenía la venta, no uno reconstruido.
+        if (descuento > 0) {
+          total = Number(venta.subtotal) - descuento + recargoCanal;
+        }
       }
 
       const totalPagado = body.pagos.reduce((acc, p) => acc + Number(p.monto), 0);
@@ -732,7 +770,11 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
             descuentoTotal: descuento.toFixed(2),
             total: total.toFixed(2),
             totalPagado: totalPagado.toFixed(2),
-            descuentoEfectivoAplicado: body.aplicarDescuentoEfectivo,
+            // Se deriva del descuento REAL calculado, no del flag que mandó el
+            // cliente: con % por línea el flag viejo puede venir en false y
+            // aun así haber descuento (y al revés, venir en true con todas
+            // las líneas al 0%).
+            descuentoEfectivoAplicado: descuento > 0,
             estado: EstadoVenta.FINALIZADA,
             fechaFinalizacion: new Date(),
             usuarioCierreId: req.usuario!.id,
