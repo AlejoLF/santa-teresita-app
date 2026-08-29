@@ -10,6 +10,7 @@ import {
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { calcSaldoFactura } from '../services/facturas.js';
+import { PROVEEDOR_SIN_IDENTIFICAR } from '../services/proveedor-sin-identificar.js';
 import {
   facturasPendientesDe,
   planificarImputacion,
@@ -486,6 +487,11 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       return {
         ...factura,
         saldo: (calcSaldoFactura(factura)).toFixed(2),
+        // La factura entró sin que el OCR pudiera leer de quién es: está en el
+        // casillero de espera hasta que alguien le asigne el proveedor real.
+        // Va como flag y no comparando el nombre en el front, para que el día
+        // que cambie el texto no haya que tocar dos lados.
+        proveedorSinIdentificar: factura.proveedor.nombre === PROVEEDOR_SIN_IDENTIFICAR,
       };
     },
   );
@@ -546,9 +552,22 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
 
       // El nombre a recordar: el que vino en la factura. Casi siempre es el
       // del proveedor que el OCR creó de más y que estamos abandonando.
-      const nombreAlias =
-        body.aliasNombre ?? factura.proveedor?.nombre ?? factura.razonSocialEmisor ?? null;
-      const normalizado = nombreAlias ? normalizarNombre(nombreAlias) : '';
+      //
+      // EXCEPCIÓN: si la factura venía del casillero de espera, NO se recuerda
+      // nada. Ahí el OCR no leyó ningún nombre — el proveedor que tenía es un
+      // casillero del sistema, no algo impreso en el papel. Guardarlo como
+      // alias enseñaría "Sin identificar = este proveedor", y a partir de ahí
+      // TODAS las facturas ilegibles se irían solas a ese proveedor, calladas
+      // y equivocadas. Es el peor error posible acá: plata imputada a quien no
+      // corresponde, sin que nadie se entere.
+      const veniaSinIdentificar = factura.proveedor?.nombre === PROVEEDOR_SIN_IDENTIFICAR;
+      const nombreAlias = veniaSinIdentificar
+        ? // La razón social sí sirve si el OCR llegó a leerla: es texto real
+          // del comprobante. El nombre del casillero, nunca.
+          (body.aliasNombre ?? factura.razonSocialEmisor ?? null)
+        : (body.aliasNombre ?? factura.proveedor?.nombre ?? factura.razonSocialEmisor ?? null);
+      const normalizado =
+        nombreAlias && nombreAlias !== PROVEEDOR_SIN_IDENTIFICAR ? normalizarNombre(nombreAlias) : '';
 
       let aliasGuardado: string | null = null;
       let aliasConflicto: string | null = null;
@@ -777,7 +796,16 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         });
         return reply
           .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('facturas')}"`)
+          .header(
+            'Content-Disposition',
+            `attachment; filename="${nombreArchivoExport('facturas', {
+              periodo: q.periodo,
+              desde: ft.desde,
+              hasta: ft.hasta,
+              texto,
+              extra: q.estado ? `estado ${q.estado}` : undefined,
+            })}"`,
+          )
           .send(buf);
       }
 

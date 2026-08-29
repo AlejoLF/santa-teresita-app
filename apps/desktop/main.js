@@ -10,7 +10,7 @@
 if (process.env.ELECTRON_RUN_AS_NODE === '1') {
   delete process.env.ELECTRON_RUN_AS_NODE;
 }
-const { app, BrowserWindow, Menu, shell, dialog, screen } = require('electron');
+const { app, BrowserWindow, Menu, shell, dialog, screen, ipcMain, session } = require('electron');
 
 // Nombre de la app (controla %APPDATA%/<name>/) — antes de cualquier otra cosa
 app.setName('Santa Teresita');
@@ -827,6 +827,101 @@ function calcularZoomFactor() {
   }
 }
 
+// ─── Carpeta donde se guardan los Excels que se exportan ────────────────
+//
+// La encargada exporta varias tablas por semana y cada archivo caía donde
+// Chromium quisiera, con lo cual después no los encontraba. Ahora se puede fijar
+// una carpeta: el diálogo de guardar de Windows SIGUE apareciendo (se pidió
+// expresamente que no se saque — es la última chance de cambiar el nombre o
+// cancelar), pero se abre ya parado en esa carpeta y con el nombre correcto.
+//
+// Vive en config.json, al lado del resto de la config de la máquina, y NO en la
+// base: es una ruta de ESTA PC. Cada caja puede tener la suya y la nube no tiene
+// nada que opinar sobre las carpetas de Windows.
+
+function leerCarpetaExports() {
+  const userConfigPath = path.join(app.getPath('userData'), 'config.json');
+  if (fs.existsSync(userConfigPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(userConfigPath, 'utf8'));
+      if (typeof cfg.carpetaExports === 'string' && cfg.carpetaExports) {
+        return cfg.carpetaExports;
+      }
+    } catch (e) {
+      log('Error leyendo carpetaExports de config.json: ' + (e?.message ?? e));
+    }
+  }
+  return null;
+}
+
+function guardarCarpetaExports(carpeta) {
+  const userConfigPath = path.join(app.getPath('userData'), 'config.json');
+  let cfg = {};
+  if (fs.existsSync(userConfigPath)) {
+    try {
+      cfg = JSON.parse(fs.readFileSync(userConfigPath, 'utf8'));
+    } catch (e) {
+      log('config.json ilegible al guardar carpetaExports, se reescribe: ' + (e?.message ?? e));
+      cfg = {};
+    }
+  }
+  // null/'' = volver al default de Windows (Descargas).
+  if (carpeta) cfg.carpetaExports = carpeta;
+  else delete cfg.carpetaExports;
+  fs.mkdirSync(path.dirname(userConfigPath), { recursive: true });
+  fs.writeFileSync(userConfigPath, JSON.stringify(cfg, null, 2), 'utf8');
+  log('carpetaExports = ' + (carpeta ?? '(default de Windows)'));
+}
+
+function configurarDescargas() {
+  session.defaultSession.on('will-download', (_event, item) => {
+    const carpeta = leerCarpetaExports();
+    if (!carpeta) return; // sin configurar: Electron hace lo de siempre
+
+    // OJO: `setSavePath()` NO — eso SALTEA el diálogo y guarda derecho.
+    // `setSaveDialogOptions` deja el diálogo y sólo elige dónde se para.
+    try {
+      if (!fs.existsSync(carpeta)) fs.mkdirSync(carpeta, { recursive: true });
+      item.setSaveDialogOptions({
+        defaultPath: path.join(carpeta, item.getFilename()),
+        title: 'Guardar exportación',
+      });
+    } catch (e) {
+      // Carpeta borrada, en un pendrive que no está, o sin permisos: que el
+      // diálogo salga como siempre en vez de romper la descarga.
+      log('No se pudo usar carpetaExports (' + carpeta + '): ' + (e?.message ?? e));
+    }
+  });
+}
+
+// Puente para la pantalla de Configuración → Exportación. `esDesktop` es lo que
+// le permite a la web saber que está adentro del .exe: en un navegador común
+// esta config no existe (la carpeta la decide el navegador).
+function registrarIpcExports() {
+  ipcMain.handle('exports:getCarpeta', () => leerCarpetaExports());
+  ipcMain.handle('exports:setCarpeta', (_e, carpeta) => {
+    guardarCarpetaExports(typeof carpeta === 'string' ? carpeta : null);
+    return leerCarpetaExports();
+  });
+  ipcMain.handle('exports:elegirCarpeta', async () => {
+    const actual = leerCarpetaExports();
+    const r = await dialog.showOpenDialog(mainWindow, {
+      title: 'Dónde guardar los Excels que exportás',
+      defaultPath: actual ?? app.getPath('downloads'),
+      properties: ['openDirectory', 'createDirectory'],
+      buttonLabel: 'Usar esta carpeta',
+    });
+    if (r.canceled || r.filePaths.length === 0) return actual;
+    guardarCarpetaExports(r.filePaths[0]);
+    return r.filePaths[0];
+  });
+  ipcMain.handle('exports:abrirCarpeta', () => {
+    const carpeta = leerCarpetaExports() ?? app.getPath('downloads');
+    shell.openPath(carpeta);
+    return carpeta;
+  });
+}
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -1083,7 +1178,9 @@ async function bootstrap() {
     startAgent();
 
     setSplashStatus('Listo. Cargando interfaz...');
-    createMainWindow();
+    configurarDescargas();
+  registrarIpcExports();
+  createMainWindow();
 
     // Auto-update desde GitHub Releases. Solo en builds packageados (en dev
     // electron-updater devuelve error). Si hay update disponible, se descarga

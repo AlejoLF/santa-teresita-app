@@ -120,6 +120,12 @@ export async function buildServer() {
       cb(new Error(`Origin no permitido: ${origin}`), false);
     },
     credentials: true,
+    // Sin esto el navegador NO deja leer `Content-Disposition` en un fetch
+    // cross-origin: `res.headers.get('Content-Disposition')` devuelve null aunque
+    // el server lo mandó. Los exports caían al nombre por defecto del cliente
+    // (de ahí los archivos llamados "Excel" / "movimientos.xlsx" sin fecha).
+    // Sólo pasa en la web (Vercel → Railway); en el .exe, mismo origen, andaba.
+    exposedHeaders: ['Content-Disposition'],
     // Cachear el preflight CORS 24h. Sin esto, cada request cross-origin
     // dispara un OPTIONS adicional. Con maxAge, una vez aceptado el preflight
     // el browser reusa el resultado para todos los requests del mismo origen

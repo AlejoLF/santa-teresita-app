@@ -91,6 +91,76 @@ function ascii(s: unknown): string {
     .replace(/[^\x20-\x7e]/g, (c) => ASCII_MAP[c] ?? ''); // resto no-ASCII → mapa o se descarta
 }
 
+/**
+ * La impresora no contestó: NO se imprimió nada, reintentar es seguro.
+ *
+ * Es el caso del corte de luz mientras la comandera está apagada.
+ */
+export class ImpresoraOffline extends Error {
+  readonly reintentable = true;
+  constructor(destino: string, host: string, port: number) {
+    super(`La comandera ${destino} no responde en ${host}:${port} (¿apagada o sin red?)`);
+    this.name = 'ImpresoraOffline';
+  }
+}
+
+/**
+ * Se conectó y falló DESPUÉS de empezar a mandar los bytes: no sabemos si el
+ * papel salió. NO se reintenta.
+ *
+ * ─── Por qué esto importa ────────────────────────────────────────────────
+ *
+ * La cola reintenta hasta 5 veces y el agente polea cada 3 segundos. Una
+ * comandera que imprime el ticket y después corta la conexión —exactamente lo
+ * que pasa cuando vuelve la luz y la impresora se resetea a mitad de un
+ * trabajo— hacía que `execute()` rechazara DESPUÉS de que el papel ya había
+ * salido. El agente lo reportaba como ERROR, la API lo devolvía a PENDIENTE, y
+ * el mismo pedido salía de nuevo. Cinco intentos en quince segundos: el mismo
+ * pedido impreso hasta 5 veces.
+ *
+ * Incidente real: corte de luz del 28/08/2026, pedidos duplicados y
+ * triplicados en la comandera de cocina.
+ *
+ * Ante la duda preferimos NO imprimir de más: un ticket que falta se ve (queda
+ * en ERROR en el panel y se re-imprime con un click desde la venta), uno
+ * duplicado se cuela a la cocina y se cocina dos veces.
+ */
+export class ImpresionIncierta extends Error {
+  readonly reintentable = false;
+  constructor(destino: string, causa: string) {
+    super(
+      `La comandera ${destino} cortó la conexión durante la impresión (${causa}). ` +
+        `Puede haber salido el ticket o no — no se reintenta solo para no duplicarlo. ` +
+        `Fijate el papel y, si no salió, re-imprimí desde la venta.`,
+    );
+    this.name = 'ImpresionIncierta';
+  }
+}
+
+/**
+ * Manda el trabajo a la comandera distinguiendo los dos tipos de falla.
+ *
+ * El chequeo de conexión previo es lo que permite separarlas: si la impresora
+ * no está, sabemos que no se imprimió nada y el reintento es gratis. Si estaba
+ * y falló, ya le mandamos bytes y no podemos saber qué pasó con el papel.
+ */
+async function ejecutar(printer: ThermalPrinter, destino: DestinoImpresora): Promise<void> {
+  const cfg = runtimeConfig[destino];
+  let conectada = false;
+  try {
+    conectada = await printer.isPrinterConnected();
+  } catch {
+    conectada = false;
+  }
+  if (!conectada) throw new ImpresoraOffline(destino, cfg.host, cfg.port);
+
+  try {
+    await printer.execute();
+  } catch (e) {
+    throw new ImpresionIncierta(destino, e instanceof Error ? e.message : String(e));
+  }
+}
+
 export function makePrinter(destino: DestinoImpresora): ThermalPrinter {
   const cfg = runtimeConfig[destino];
   return new ThermalPrinter({
@@ -386,7 +456,7 @@ export async function imprimirComanda(
   printer.newLine();
   printer.cut();
 
-  await printer.execute();
+  await ejecutar(printer, destino);
 }
 
 export interface TicketClientePayload {
@@ -563,7 +633,7 @@ export async function imprimirTicketCliente(payload: TicketClientePayload): Prom
   printer.drawLine();
   printer.cut();
 
-  await printer.execute();
+  await ejecutar(printer, 'MOSTRADOR');
 }
 
 // ─── Ticket de delivery ───────────────────────────────────────────────
@@ -757,7 +827,7 @@ export async function imprimirTicketDelivery(payload: TicketDeliveryPayload): Pr
   PL(`Venta #${payload.numeroVenta} en el programa`);
   printer.cut();
 
-  await printer.execute();
+  await ejecutar(printer, 'DELIVERY');
 }
 
 // ─── Comanda de ENCARGO (pedido para un día futuro) ───────────────────
@@ -1012,7 +1082,7 @@ export async function imprimirComandaEncargo(
   printer.newLine();
   printer.cut();
 
-  await printer.execute();
+  await ejecutar(printer, destino);
 }
 
 /**
@@ -1020,14 +1090,14 @@ export async function imprimirComandaEncargo(
  */
 export async function testPrinter(destino: PrinterConfig['destino']): Promise<boolean> {
   const printer = makePrinter(destino);
-  const isConnected = await printer.isPrinterConnected();
-  if (!isConnected) return false;
+  // `ejecutar` ya chequea la conexión antes de mandar nada; el chequeo suelto
+  // que había acá quedaba de más.
   printer.alignCenter();
   printer.println('=== TEST OK ===');
   printer.println(new Date().toLocaleString('es-AR'));
   printer.println(`Destino: ${destino}`);
   printer.cut();
-  await printer.execute();
+  await ejecutar(printer, destino);
   return true;
 }
 
@@ -1150,5 +1220,5 @@ export async function imprimirTicketRemito(
   printer.drawLine();
   printer.cut();
 
-  await printer.execute();
+  await ejecutar(printer, destino);
 }

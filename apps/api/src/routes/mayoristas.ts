@@ -1238,11 +1238,27 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
             clienteMayoristaId: cliente.id,
             estado: { not: 'ANULADO' },
           },
-          select: { id: true },
+          select: { id: true, total: true },
         });
         if (validos.length !== b.remitoIds.length) {
           return reply.code(400).send({
             error: 'Hay remitos que no son de este cliente o están anulados',
+          });
+        }
+        // Un cobro no puede dar por saldados remitos que suman MÁS que la plata
+        // que entró: quedarían marcados PAGADO sin nada detrás y la deuda del
+        // cliente bajaría sola. Al revés sí se permite — cobrar de más deja
+        // saldo a favor, que es un caso real.
+        //
+        // Esto es lo que dejó pasar el incidente de La Juanita al revés: el
+        // monto se auto-sumaba al tildar y terminó imputado al remito
+        // equivocado. Acá cerramos el lado que sí es aritméticamente imposible.
+        const sumaRemitos = validos.reduce((a, r) => a + Number(r.total), 0);
+        if (sumaRemitos > Number(b.monto) + 0.01) {
+          return reply.code(400).send({
+            error:
+              `Los remitos seleccionados suman $${sumaRemitos.toFixed(2)} y el cobro es de ` +
+              `$${Number(b.monto).toFixed(2)}. Destildá alguno, o cargá el cobro por el total.`,
           });
         }
         aImputar = validos.map((r) => r.id);

@@ -64,9 +64,9 @@ no tiene `INGEST_API_TOKEN` seteado → responde **503** (ingesta deshabilitada)
     "hash": "<sha256 del archivo>",   // idempotencia fuerte — MANDALO
     "url":  "https://.../archivo.jpg"  // opcional, para guardar el original
   },
-  "proveedor": {
-    "nombre": "Distribuidora La Plata SA",  // requerido
-    "cuit":   "30-12345678-9",              // opcional (mejora el match)
+  "proveedor": {                            // el objeto entero es opcional
+    "nombre": "Distribuidora La Plata SA",  // OPCIONAL: sin esto va a "Sin identificar"
+    "cuit":   "30-12345678-9",              // opcional (si está, gana sobre el nombre)
     "razonSocial": "..."                     // opcional
   },
   "comprobante": {
@@ -437,12 +437,44 @@ pena mientras Extract funcione.
 
 ### Qué se exige para cargar una factura
 
-Solo dos cosas: **de quién es** (proveedor) y **cuánto es** (total). Nada más
-bloquea.
+Una sola cosa: **cuánto es** (`total`). Nada más bloquea.
 
 Buena parte de lo que entra al local no es comprobante fiscal en regla —
 remitos, tickets, papeles sin numerar—. Exigir el número de comprobante
 rebotaba justamente esas, que son la mitad del trabajo que se quería ahorrar.
+
+> **El proveedor dejó de bloquear** (antes sí lo hacía). En muchas facturas el
+> nombre está impreso como **logo estilizado**, no como texto — ningún OCR lo
+> lee. Esas facturas rebotaban con 400 y se perdían enteras: la encargada
+> mandaba la foto, el bot le decía "no pude leerla", y había que cargarla a
+> mano. Caso real: Sazón Gourmet, 21/8/2026.
+>
+> Ahora entran igual, colgadas del proveedor **"Sin identificar"** — un
+> casillero del sistema (`services/proveedor-sin-identificar.ts`) — con la
+> observación `⚠ FALTA EL PROVEEDOR`, la confianza capada a 0.5 y el estado
+> `PENDIENTE_VALIDACION`. En la ficha de la factura sale en rojo con el botón
+> **"asignar proveedor"**, y ahí se elige el de verdad de la lista.
+>
+> Tres cosas que hacen que esto no se vuelva en contra:
+>
+> 1. **El casillero es `activo: false`.** No aparece para elegir al cargar un
+>    pago a mano, y `buscarProveedorParecido` (que filtra por activos) nunca lo
+>    propone.
+> 2. **No se puede pagar por accidente.** Como la factura entra sin validar,
+>    `facturasPendientesDe` —que sólo mira `PENDIENTE_PAGO` y
+>    `PAGADA_PARCIAL`— no la ofrece nunca. No se paga una factura de la que
+>    todavía no se sabe de quién es.
+> 3. **Al reasignar NO se aprende el alias.** Es la trampa importante: el
+>    checkbox "Recordar para la próxima" viene tildado por default, y guardar
+>    ahí el alias enseñaría *"Sin identificar = ese proveedor"*. A partir de
+>    ahí **todas** las facturas ilegibles se irían solas a ese proveedor,
+>    calladas y equivocadas. El server lo bloquea (`PATCH
+>    /admin/facturas/:id/proveedor`) y la pantalla directamente esconde el
+>    checkbox en ese caso. Si el OCR llegó a leer la *razón social*, esa sí se
+>    puede recordar: es texto real del papel.
+>
+> Si el OCR lee el **CUIT** pero no el nombre, gana el CUIT: la factura va
+> derecho al proveedor correcto y ni pasa por el casillero.
 
 Todo lo demás (número, fecha, tipo, CUIT, detalle de productos) entra como
 **faltante**: la factura se carga igual **sin validar**, la observación dice
@@ -464,7 +496,11 @@ que salta siempre no lo lee nadie.
 
 ### Parse + validación
 - **Code node**: asegurate de tener el JSON del contrato. Sanity checks:
-  - `total > 0`, `numero` no vacío, `proveedor.nombre` no vacío.
+  - `total > 0` y `numero` no vacío. **`proveedor.nombre` ya NO se exige**: si el
+    OCR no lo leyó, mandá el campo vacío o directamente no lo mandes — el
+    programa la carga igual en "Sin identificar" (ver *Qué se exige* arriba).
+    Si el nodo lo sigue validando, la factura se pierde **antes** de salir de
+    n8n y el fix del programa no sirve de nada.
   - Avisá si `abs(total - sum(items.subtotal)) > total*0.05` (descuadre) bajando la
     `confianza` o agregando `observaciones: "revisar: items no suman el total"`.
   - Agregá `adjunto.hash`, `ocr.payload` (la salida cruda de LlamaCloud), `ocr.confianza`.
@@ -480,6 +516,8 @@ que salta siempre no lo lee nadie.
 ### Responder en Telegram
 - **Telegram → Send Message** según la respuesta:
   - `201` → `✅ Factura de {proveedor} por ${total} cargada. Revisala y aceptala en el sistema.`
+    - Si `proveedor` vino vacío, mejor: `✅ Factura por ${total} cargada, pero no
+      pude leer de quién es. Entrá al sistema y asignale el proveedor.`
   - `200 duplicate` → `ℹ️ Esa factura ya estaba cargada.`
   - error/4xx → `⚠️ No pude leer la factura. Mandá una foto más nítida y derecha, o cargala a mano.`
 

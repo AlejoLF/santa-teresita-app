@@ -34,6 +34,22 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.68',
+    fecha: '29 de agosto',
+    titulo: 'Arreglos en cobros de mayoristas, cierre de caja y comandas',
+    cambios: [
+      'COBROS DE MAYORISTAS: al tildar el remito que se está pagando, ya NO se te suma solo el monto arriba del que escribiste. Escribís lo que te pagaron y ese número no se mueve más. Abajo del listado te avisa si lo que tildaste no coincide con el monto.',
+      'Si tildás remitos que suman MÁS de lo que te pagaron, ahora no te deja: antes los marcaba cobrados igual y la deuda bajaba sola.',
+      'CIERRE DE CAJA: los cobros a mayoristas ahora aparecen arriba, junto con las ventas de mostrador, y no al final entre los aportes y egresos. Igual en el mail del cierre.',
+      'PAGOS DIVIDIDOS: cuando a una empleada le pagás una parte en efectivo y otra por transferencia, la parte en efectivo ahora SÍ se descuenta de la caja. Antes no se descontaba y la caja te daba mal al cerrar.',
+      'En la lista de movimientos ahora se ve cómo se repartió el pago ("$40.000 Caja física + $60.000 Santander") sin tener que entrar al detalle.',
+      'BANCO DE HORAS: las horas que cargás aparecen en el día que las cargaste. Antes se veían un día antes.',
+      'COMANDAS: si se corta la luz o la comandera se resetea a mitad de un pedido, ya no salen el mismo pedido dos o tres veces. Si la comandera está apagada, el pedido espera y sale cuando vuelve.',
+      'EXCELS: ahora los archivos salen con nombre de verdad ("movimientos-2026-08-01-a-2026-08-29") en vez de "Excel", así no se pisan y se entienden sin abrirlos. Y en Configuración → Exportación podés elegir la carpeta donde se guardan siempre.',
+      'FACTURAS POR TELEGRAM: las facturas donde el nombre del proveedor está como logo (y el sistema no lo puede leer) ya no se pierden. Entran igual, aparecen en rojo con "no pude leer de quién es", y le asignás el proveedor de la lista. Hasta que no se lo asignes no se puede pagar por error.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.67',
     fecha: '26 de agosto',
     titulo: 'Se arreglaron las cuentas de mayoristas y de proveedores',

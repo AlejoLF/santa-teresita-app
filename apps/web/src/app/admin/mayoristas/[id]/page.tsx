@@ -740,23 +740,28 @@ function ModalCobro({
     .filter((r) => imputados.has(r.id))
     .reduce((acc, r) => acc + Number(r.total), 0);
 
-  function toggleRemito(remitoId: string, total: string) {
-    // El cálculo va FUERA de los updaters: React puede ejecutarlos dos veces
-    // (StrictMode) y sumar el total del remito por duplicado.
-    const estaba = imputados.has(remitoId);
+  // Tildar un remito SÓLO lo marca como saldado por este cobro. NO toca el
+  // monto.
+  //
+  // Antes se lo sumaba/restaba, con la idea de que "se cobra lo que suman los
+  // remitos elegidos". En la práctica hacía lo contrario de ayudar: la
+  // encargada primero tipea el monto que le pagaron (lo tiene en la mano) y
+  // recién después busca a qué remito corresponde — así que al tildarlo el
+  // número que acababa de escribir se DUPLICABA solo, sin forma obvia de
+  // deshacerlo salvo destildar.
+  //
+  // Incidente real (La Juanita, 28/08/2026): cobro de $58.410, se le duplicó
+  // al tildar, lo corrigió tipeando de nuevo el monto en vez de destildar, y
+  // el cobro quedó imputado al remito equivocado — uno de $42.000 marcado
+  // cobrado y el de $58.410 todavía pendiente.
+  //
+  // El monto lo escribe la persona y no se mueve. Si la selección no coincide,
+  // se avisa abajo del listado, pero no se corrige sola.
+  function toggleRemito(remitoId: string) {
     const next = new Set(imputados);
-    if (estaba) next.delete(remitoId);
+    if (next.has(remitoId)) next.delete(remitoId);
     else next.add(remitoId);
     setImputados(next);
-    // El monto sigue a la selección: en la práctica se cobra lo que suman los
-    // remitos elegidos, y tipearlo aparte es una fuente de errores. Sigue
-    // siendo editable a mano para pagos parciales o con descuento.
-    const delta = estaba ? -Number(total) : Number(total);
-    const nuevoMonto = Math.max(0, Number(monto || 0) + delta).toFixed(2);
-    setMonto(nuevoMonto);
-    // Con un solo método, el monto de la línea sigue al total: obligar a
-    // re-tipearlo sería pedir dos veces el mismo número.
-    setPagos((prev) => (prev.length === 1 ? [{ ...prev[0]!, monto: nuevoMonto }] : prev));
   }
 
   return (
@@ -804,7 +809,7 @@ function ModalCobro({
                     <input
                       type="checkbox"
                       checked={imputados.has(r.id)}
-                      onChange={() => toggleRemito(r.id, r.total)}
+                      onChange={() => toggleRemito(r.id)}
                     />
                     <span className="font-mono text-xs text-ink-700">#{r.numero}</span>
                     <span className="text-2xs text-ink-500">
@@ -819,14 +824,37 @@ function ModalCobro({
                 ))}
               </div>
               {imputados.size > 0 && (
-                <p className="text-2xs text-ink-500 mt-1">
-                  {imputados.size} remito{imputados.size > 1 ? 's' : ''} · $
-                  {totalImputado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-                  {Math.abs(totalImputado - Number(monto || 0)) > 0.009 && (
-                    <span className="text-saffron-600">
+                <p className="text-2xs mt-1">
+                  <span className="text-ink-500">
+                    {imputados.size} remito{imputados.size > 1 ? 's' : ''} seleccionado
+                    {imputados.size > 1 ? 's' : ''} · $
+                    {totalImputado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                  </span>
+                  {/* El monto ya no sigue a la selección (ver `toggleRemito`),
+                      así que este aviso es la única señal de que se está
+                      imputando un cobro a un remito que no le corresponde.
+                      Distinguimos los dos casos: seleccionar DE MÁS es un error
+                      (no alcanza la plata), de menos es válido (queda saldo a
+                      favor). */}
+                  {totalImputado > Number(monto || 0) + 0.009 ? (
+                    <span className="text-pomodoro-600">
                       {' '}
-                      · el monto cobrado no coincide con lo seleccionado
+                      · el cobro no alcanza a cubrirlos: faltan $
+                      {(totalImputado - Number(monto || 0)).toLocaleString('es-AR', {
+                        minimumFractionDigits: 2,
+                      })}
                     </span>
+                  ) : (
+                    totalImputado < Number(monto || 0) - 0.009 && (
+                      <span className="text-saffron-600">
+                        {' '}
+                        · quedan $
+                        {(Number(monto || 0) - totalImputado).toLocaleString('es-AR', {
+                          minimumFractionDigits: 2,
+                        })}{' '}
+                        a favor del cliente
+                      </span>
+                    )
                   )}
                 </p>
               )}

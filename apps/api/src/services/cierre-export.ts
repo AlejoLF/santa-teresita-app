@@ -11,6 +11,12 @@
 import ExcelJS from 'exceljs';
 import { prisma } from '@sta/db/client';
 import { esVentaDeliverate } from './clasificar-pago.js';
+import {
+  esCajaSesion,
+  efectoEnCaja,
+  detalleReparto,
+  esCobroCuentaCorriente,
+} from './efecto-caja.js';
 
 interface SesionConTodo {
   id: string;
@@ -58,6 +64,18 @@ export interface CategoriaCobros {
     efectivo: number; // suma a caja
     debito: number;
     creditoOtros: number; // crédito + MP/QR + transfer + naranja
+    /**
+     * Cobros de cuenta corriente de mayoristas del turno.
+     *
+     * Va acá y no entre los aportes y egresos del final porque NO es un ajuste
+     * de caja: es mercadería que ya se entregó y se cobra ahora — una venta con
+     * la plata llegando más tarde. Pedido de la encargada, 28/08/2026.
+     *
+     * Línea propia y no sumado a `efectivo`/`debito` a propósito: así el
+     * subtotal de mostrador incluye el cobro (que es lo que se pidió) pero los
+     * números de venta del turno siguen siendo comparables contra el POS.
+     */
+    cuentaCorriente: number;
   };
   delivery: {
     efectivoDamian: number; // suma a caja
@@ -82,9 +100,11 @@ export interface CategoriaCobros {
 
 export function categorizarCobros(opts: {
   pagos: Array<{ metodo: string; canal: string; modalidad: string; monto: number }>;
+  /** Cobros de cuenta corriente del turno (mayoristas). Ver `mostrador.cuentaCorriente`. */
+  cobrosCuentaCorriente?: number;
 }): CategoriaCobros {
   const c: CategoriaCobros = {
-    mostrador: { efectivo: 0, debito: 0, creditoOtros: 0 },
+    mostrador: { efectivo: 0, debito: 0, creditoOtros: 0, cuentaCorriente: 0 },
     delivery: { efectivoDamian: 0, online: 0, efectivoDeliverate: 0 },
     plataformas: { app: 0, efectivo: 0 },
     efectivoFromVentas: 0,
@@ -127,7 +147,12 @@ export function categorizarCobros(opts: {
       else c.mostrador.creditoOtros += p.monto;
     }
   }
-  c.totalMostrador = c.mostrador.efectivo + c.mostrador.debito + c.mostrador.creditoOtros;
+  c.mostrador.cuentaCorriente = opts.cobrosCuentaCorriente ?? 0;
+  c.totalMostrador =
+    c.mostrador.efectivo +
+    c.mostrador.debito +
+    c.mostrador.creditoOtros +
+    c.mostrador.cuentaCorriente;
   c.totalDelivery =
     c.delivery.efectivoDamian + c.delivery.online + c.delivery.efectivoDeliverate;
   c.totalPlataformas = c.plataformas.app + c.plataformas.efectivo;
@@ -154,8 +179,17 @@ interface LineaMovimiento {
   /** true si el movimiento entró o salió del efectivo físico del turno
    *  (cuenta tipo EFECTIVO no excluida del cierre). */
   afectaCaja: boolean;
-  /** Efecto neto sobre la caja física: +1 entra, -1 sale, 0 no toca. */
-  signoCaja: number;
+  /**
+   * Cuánta plata movió del CAJÓN, con signo (+ entra, − sale, 0 no lo tocó).
+   *
+   * Antes era `signoCaja: ±1` y el neto se calculaba `signo × monto`. Con un
+   * pago repartido entre dos cuentas eso está mal por definición: de un pago
+   * de $100.000 dividido 40/60 sólo $40.000 salieron del cajón, no los
+   * $100.000. Ahora es el monto en sí. Ver services/efecto-caja.ts.
+   */
+  efectoCaja: number;
+  /** "$40.000 Caja física + $60.000 Santander". null si fue de una sola cuenta. */
+  reparto: string | null;
 }
 
 export interface CierreData {
@@ -170,7 +204,16 @@ export interface CierreData {
     existenciaInicial: number;
     /** Ventas cobradas en efectivo a la Caja física (no DELIVERATE). */
     cobradoEfectivo: number;
-    /** Neto de movimientos sobre la caja física (ingresos − egresos). */
+    /**
+     * Lo que entró al cajón por cobros de cuenta corriente de mayoristas.
+     *
+     * Tiene línea propia porque esos cobros ya NO están en `movimientos` (se
+     * muestran arriba, con las ventas). Sin este renglón el efectivo esperado
+     * no cerraría contra la tabla de aportes y egresos, que es exactamente el
+     * tipo de diferencia sin explicación que hace desconfiar del cierre.
+     */
+    cobrosCuentaCorriente: number;
+    /** Neto de los movimientos de AJUSTE sobre la caja física (ingresos − egresos). */
     movimientosNeto: number;
     esperada: number;
     contada: number;
@@ -234,14 +277,18 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
       cuentaOrigen: { select: { nombre: true, tipo: true, excluidaDeCierreCaja: true } },
       cuentaDestino: { select: { nombre: true, tipo: true, excluidaDeCierreCaja: true } },
       usuario: { select: { nombre: true } },
+      // El REPARTO real: un pago dividido entre dos cuentas tiene UNA
+      // `cuentaOrigen` pero salió de las dos. Ver services/efecto-caja.ts.
+      pagos: {
+        select: {
+          monto: true,
+          metodo: true,
+          cuenta: { select: { nombre: true, tipo: true, excluidaDeCierreCaja: true } },
+        },
+      },
     },
   });
 
-  // Efectivo del CAJÓN del turno: cuenta tipo EFECTIVO NO excluida (descarta
-  // "Efectivo acumulado" del dueño). Mismo criterio que el cierre en admin.ts.
-  const esCajaSesion = (
-    c: { tipo: string; excluidaDeCierreCaja: boolean } | null | undefined,
-  ): boolean => !!c && c.tipo === 'EFECTIVO' && c.excluidaDeCierreCaja !== true;
 
   // Pagos agregados por (metodo, cuenta)
   const pagAgg = new Map<string, LineaPago>();
@@ -312,9 +359,17 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
     for (const p of proveedores) entidadPorId.set(p.id, p.nombre);
   }
 
-  const movimientos: LineaMovimiento[] = movimientosRaw.map((m) => {
-    const entra = esCajaSesion(m.cuentaDestino); // ingreso/transfer hacia la caja
-    const sale = esCajaSesion(m.cuentaOrigen); // egreso/transfer desde la caja
+  // Los cobros de cuenta corriente salen de la lista de aportes y egresos: se
+  // muestran arriba, con las ventas del turno (`categorias.mostrador`). Su
+  // efecto en el cajón se sigue contando, en su propio renglón del cuadre.
+  const cobrosCtaCteRaw = movimientosRaw.filter(esCobroCuentaCorriente);
+  const cobrosCtaCteTotal = cobrosCtaCteRaw.reduce((acc, m) => acc + Number(m.monto), 0);
+  const cobrosCtaCteCaja = cobrosCtaCteRaw.reduce((acc, m) => acc + efectoEnCaja(m), 0);
+
+  const movimientos: LineaMovimiento[] = movimientosRaw
+    .filter((m) => !esCobroCuentaCorriente(m))
+    .map((m) => {
+    const efecto = efectoEnCaja(m);
     return {
       hora: m.fechaComputo,
       tipo: m.tipo,
@@ -327,10 +382,11 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
       monto: m.monto.toString(),
       observacion: m.observacion,
       usuario: m.usuario.nombre,
-      afectaCaja: entra || sale,
-      signoCaja: entra ? 1 : sale ? -1 : 0,
+      afectaCaja: Math.abs(efecto) > 0.0001,
+      efectoCaja: efecto,
+      reparto: detalleReparto(m),
     };
-  });
+    });
 
   const ventasFinalizadas = ventasRaw.filter((v) => v.estado === 'FINALIZADA');
   const ventasAnuladas = ventasRaw.filter((v) => v.estado === 'ANULADA');
@@ -346,7 +402,10 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
         monto: Number(p.monto),
       })),
   );
-  const categorias = categorizarCobros({ pagos: pagosParaCategorizar });
+  const categorias = categorizarCobros({
+    pagos: pagosParaCategorizar,
+    cobrosCuentaCorriente: cobrosCtaCteTotal,
+  });
 
   const totalCobrado = ventasFinalizadas.reduce((acc, v) => acc + Number(v.total), 0);
   // Efectivo que entró al CAJÓN del turno: pagos a cuenta tipo EFECTIVO no
@@ -373,10 +432,9 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
   // Solo movimientos que tocaron la caja (afectaCaja), con su signo. Esto es
   // lo que la encargada espera ver, sin mezclar transferencias de banco/wallet.
   const existenciaInicialNum = Number(sesion.existenciaInicial);
-  const movimientosCajaNeto = movimientos
-    .filter((m) => m.afectaCaja)
-    .reduce((acc, m) => acc + m.signoCaja * Number(m.monto), 0);
-  const esperadaCaja = existenciaInicialNum + totalEfectivo + movimientosCajaNeto;
+  const movimientosCajaNeto = movimientos.reduce((acc, m) => acc + m.efectoCaja, 0);
+  const esperadaCaja =
+    existenciaInicialNum + totalEfectivo + cobrosCtaCteCaja + movimientosCajaNeto;
   const contadaCaja = sesion.existenciaFinal != null ? Number(sesion.existenciaFinal) : 0;
   const diferenciaCaja = contadaCaja - esperadaCaja;
 
@@ -422,6 +480,7 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
     caja: {
       existenciaInicial: existenciaInicialNum,
       cobradoEfectivo: totalEfectivo,
+      cobrosCuentaCorriente: cobrosCtaCteCaja,
       movimientosNeto: movimientosCajaNeto,
       esperada: esperadaCaja,
       contada: contadaCaja,
@@ -522,6 +581,12 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
   seccionLabel('Recaudación');
   wsResumen.addRow(['Existencia inicial', fmtMoney(data.sesion.existenciaInicial)]);
   wsResumen.addRow(['Cobrado en efectivo', fmtMoney(data.resumen.totalEfectivo)]);
+  if (data.caja.cobrosCuentaCorriente !== 0) {
+    wsResumen.addRow([
+      'Cobros de cuenta corriente en efectivo',
+      fmtMoney(data.caja.cobrosCuentaCorriente),
+    ]);
+  }
   wsResumen.addRow(['Egresos en efectivo', fmtMoney(-data.resumen.egresos)]);
   wsResumen.addRow(['Ingresos en efectivo', fmtMoney(data.resumen.ingresos)]);
   wsResumen.addRow([
@@ -598,6 +663,9 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
   linea('', 'Efectivo', cat.mostrador.efectivo);
   linea('', 'Débito', cat.mostrador.debito);
   linea('', 'Crédito / MP / Transfer', cat.mostrador.creditoOtros);
+  if (cat.mostrador.cuentaCorriente !== 0) {
+    linea('', 'Cobros de cuenta corriente (mayoristas)', cat.mostrador.cuentaCorriente);
+  }
   subtotal('Subtotal mostrador', cat.totalMostrador);
 
   seccion('DELIVERY (local + WSP + web)', 'FFB7791F');
@@ -840,6 +908,13 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
       ${filaSimple('Efectivo', c.mostrador.efectivo, { sub: 'suma a caja' })}
       ${filaSimple('Débito', c.mostrador.debito)}
       ${filaSimple('Crédito / MP / Transfer', c.mostrador.creditoOtros)}
+      ${
+        c.mostrador.cuentaCorriente !== 0
+          ? filaSimple('Cuenta corriente (mayoristas)', c.mostrador.cuentaCorriente, {
+              sub: 'mercadería ya entregada, cobrada hoy',
+            })
+          : ''
+      }
       ${filaSubtotal('Subtotal mostrador', c.totalMostrador)}
 
       ${seccionHeader('Delivery (local + WSP + web)', '#B7791F')}
@@ -866,13 +941,25 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
     <tbody>
       <tr><td style="padding:4px 10px;color:#777">Existencia inicial</td><td style="padding:4px 10px;text-align:right;font-family:monospace">${fmtMoney(caja.existenciaInicial)}</td></tr>
       <tr><td style="padding:4px 10px;color:#2C8C5A">+ Ventas cobradas en efectivo</td><td style="padding:4px 10px;text-align:right;font-family:monospace;color:#2C8C5A">+${fmtMoney(caja.cobradoEfectivo)}</td></tr>
+      ${
+        caja.cobrosCuentaCorriente !== 0
+          ? `<tr><td style="padding:4px 10px;color:#2C8C5A">+ Cobros de cuenta corriente (en efectivo)</td><td style="padding:4px 10px;text-align:right;font-family:monospace;color:#2C8C5A">+${fmtMoney(caja.cobrosCuentaCorriente)}</td></tr>`
+          : ''
+      }
       ${movsCaja
         .map((m) => {
-          const pos = m.signoCaja > 0;
+          const pos = m.efectoCaja > 0;
           const col = pos ? '#2C8C5A' : '#' + ROJO.slice(2);
+          // El monto que se muestra es lo que tocó el CAJÓN, no el total del
+          // movimiento: de un pago repartido 40/60 acá va sólo la parte en
+          // efectivo. Si no, la columna no sumaría a la esperada.
           return `<tr>
-            <td style="padding:4px 10px"><span style="color:${col};font-weight:500">${pos ? '+' : '−'}</span> ${etiquetaMov(m)}</td>
-            <td style="padding:4px 10px;text-align:right;font-family:monospace;color:${col}">${pos ? '+' : '−'}${fmtMoney(Number(m.monto))}</td>
+            <td style="padding:4px 10px"><span style="color:${col};font-weight:500">${pos ? '+' : '−'}</span> ${etiquetaMov(m)}${
+              m.reparto
+                ? `<br><span style="font-size:11px;color:#999">de ${fmtMoney(Number(m.monto))} en total · ${m.reparto}</span>`
+                : ''
+            }</td>
+            <td style="padding:4px 10px;text-align:right;font-family:monospace;color:${col}">${pos ? '+' : '−'}${fmtMoney(Math.abs(m.efectoCaja))}</td>
           </tr>`;
         })
         .join('')}
