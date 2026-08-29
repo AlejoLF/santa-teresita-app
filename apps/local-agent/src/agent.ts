@@ -154,16 +154,23 @@ async function fetchConfig(): Promise<void> {
   }
 }
 
+/**
+ * @param reintentable  Sólo se manda en los ERROR. `false` = ya le mandamos
+ *   bytes a la comandera y el ticket puede haber salido, así que la API NO
+ *   debe devolverlo a PENDIENTE: reimprimirlo lo duplicaría. Ver
+ *   `ImpresionIncierta` en printers.ts.
+ */
 async function reportarEstado(
   id: string,
   estado: 'IMPRESO' | 'ERROR',
   error?: string,
+  reintentable?: boolean,
 ): Promise<void> {
   try {
     await fetch(`${API_URL}/api/v1/impresion/${id}/estado`, {
       method: 'POST',
       headers: { ...baseHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ estado, error }),
+      body: JSON.stringify({ estado, error, reintentable }),
     });
   } catch (e) {
     logger.error({ err: e instanceof Error ? e.message : e, id, estado }, 'No se pudo reportar estado');
@@ -180,6 +187,8 @@ async function procesar(t: TrabajoImpresion): Promise<void> {
       t.id,
       'ERROR',
       `Impresora ${t.destino} desactivada en config. Activala desde Admin → Configuración → Impresoras.`,
+      // Reintentable: no se mandó nada a ninguna impresora. Si la activan, sale.
+      true,
     );
     return;
   }
@@ -233,8 +242,13 @@ async function procesar(t: TrabajoImpresion): Promise<void> {
     logger.info({ id: t.id }, '✓ Impreso');
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    logger.error({ id: t.id, err: msg }, '✕ Falló impresión');
-    await reportarEstado(t.id, 'ERROR', msg);
+    // `reintentable` lo marcan `ImpresoraOffline` (no se imprimió nada, se
+    // puede reintentar) e `ImpresionIncierta` (ya salieron bytes, NO). Un
+    // error sin la marca se trata como reintentable, que es como venía
+    // funcionando.
+    const reintentable = (e as { reintentable?: boolean })?.reintentable ?? true;
+    logger.error({ id: t.id, err: msg, reintentable }, '✕ Falló impresión');
+    await reportarEstado(t.id, 'ERROR', msg, reintentable);
   }
 }
 

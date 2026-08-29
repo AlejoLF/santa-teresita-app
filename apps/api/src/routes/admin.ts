@@ -32,6 +32,12 @@ import {
 } from '../services/excel-sync.js';
 import { cargarCierre, generarExcelCierre, generarHtmlCierre } from '../services/cierre-export.js';
 import {
+  esCajaSesion,
+  efectoEnCaja,
+  detalleReparto,
+  esCobroCuentaCorriente,
+} from '../services/efecto-caja.js';
+import {
   construirExcelBusqueda,
   descripcionFiltros,
   nombreArchivoExport,
@@ -1186,7 +1192,16 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         });
         return reply
           .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('movimientos')}"`)
+          .header(
+            'Content-Disposition',
+            `attachment; filename="${nombreArchivoExport('movimientos', {
+              periodo: periodoEfectivo,
+              desde: ft.desde,
+              hasta: ft.hasta,
+              texto,
+              extra: q.tipo ? `tipo ${q.tipo}` : undefined,
+            })}"`,
+          )
           .send(buf);
       }
 
@@ -1198,6 +1213,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             cuentaDestino: { select: { id: true, nombre: true } },
             categoria: { select: { id: true, nombre: true, tipo: true } },
             usuario: { select: { id: true, nombre: true } },
+            // El reparto por cuenta. La fila mostraba sólo `cuentaOrigen`, así
+            // que un pago dividido 40% efectivo / 60% transferencia se leía como
+            // 100% transferencia y había que abrir el detalle para enterarse.
+            pagos: {
+              select: { monto: true, metodo: true, cuenta: { select: { nombre: true } } },
+            },
           },
           orderBy: { fechaComputo: 'desc' },
           skip: (q.page - 1) * q.pageSize,
@@ -1270,6 +1291,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       return {
         movimientos: movimientos.map((m) => ({
           ...m,
+          // "$40.000 Caja física + $60.000 Santander", o null si fue de una sola.
+          reparto: detalleReparto(m),
           modificado: modificadoMap.has(m.id),
           modificadoAt: modificadoMap.get(m.id) ?? null,
           entidadNombre:
@@ -2295,6 +2318,17 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           categoria: { select: { nombre: true } },
           cuentaOrigen: { select: { tipo: true, nombre: true, excluidaDeCierreCaja: true } },
           cuentaDestino: { select: { tipo: true, nombre: true, excluidaDeCierreCaja: true } },
+          // El REPARTO real del movimiento. Sin esto, un pago dividido entre
+          // dos cuentas (40% efectivo / 60% transferencia) se calculaba mirando
+          // sólo `cuentaOrigen` y el monto entero — y la parte en efectivo no
+          // se restaba del cajón. Ver services/efecto-caja.ts.
+          pagos: {
+            select: {
+              monto: true,
+              metodo: true,
+              cuenta: { select: { tipo: true, nombre: true, excluidaDeCierreCaja: true } },
+            },
+          },
         },
       });
 
@@ -2313,13 +2347,35 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         where: { sesionCajaId: sesion.id, estado: EstadoVenta.PROCESADA, esEncargo: true },
       });
 
+      // ── Cobros de cuenta corriente (mayoristas) ──
+      //
+      // NO son "aportes y egresos": es mercadería ya entregada que se cobra
+      // más tarde — una venta con la plata llegando después. Van con las
+      // ventas del turno y NO en el listado de ajustes del final (pedido de la
+      // encargada; si no, el turno donde cobra medio millón de mayoristas
+      // parece tener un ingreso extraordinario en vez de haber vendido).
+      //
+      // Ojo: se separan sólo para MOSTRARLOS. Siguen contando igual en el
+      // efectivo esperado, que se calcula abajo sobre `movimientos` COMPLETO.
+      const cobrosCtaCte = movimientos.filter(esCobroCuentaCorriente);
+      const movimientosAjuste = movimientos.filter((m) => !esCobroCuentaCorriente(m));
+
       // Cobros por método — informativo, no afecta el cálculo de caja.
+      // Incluye los de cuenta corriente: para la encargada son plata cobrada
+      // igual que un pago de mostrador, y quiere verlos juntos.
       const cobrosByMetodo = new Map<string, { monto: number; cantidad: number }>();
-      for (const p of pagosRaw) {
-        const cur = cobrosByMetodo.get(p.metodo) ?? { monto: 0, cantidad: 0 };
-        cur.monto += Number(p.monto);
+      const sumarAlMetodo = (metodo: string, monto: unknown) => {
+        const cur = cobrosByMetodo.get(metodo) ?? { monto: 0, cantidad: 0 };
+        cur.monto += Number(monto);
         cur.cantidad += 1;
-        cobrosByMetodo.set(p.metodo, cur);
+        cobrosByMetodo.set(metodo, cur);
+      };
+      for (const p of pagosRaw) sumarAlMetodo(p.metodo, p.monto);
+      for (const m of cobrosCtaCte) {
+        // El método sale de las líneas del cobro. `registrarCobro` siempre las
+        // escribe, pero un cobro viejo sin `pagos` cae al monto del movimiento.
+        if (m.pagos.length > 0) for (const p of m.pagos) sumarAlMetodo(p.metodo, p.monto);
+        else sumarAlMetodo('OTRO', m.monto);
       }
       const cobrosPorMetodo = [...cobrosByMetodo.entries()].map(([metodo, v]) => ({
         metodo,
@@ -2330,9 +2386,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       // Plata que ENTRÓ a caja física por ventas. `excluidaDeCierreCaja`
       // descarta cuentas como "Efectivo acumulado" (efectivo del dueño que
       // no entra al turno actual).
-      const esEfectivoCierre = (
-        c: { tipo: string; excluidaDeCierreCaja?: boolean } | null | undefined,
-      ): boolean => !!c && c.tipo === 'EFECTIVO' && c.excluidaDeCierreCaja !== true;
+      const esEfectivoCierre = esCajaSesion;
 
       const totalEfectivo = pagosRaw
         .filter(
@@ -2344,23 +2398,23 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         )
         .reduce((acc, p) => acc + Number(p.monto), 0);
 
-      // Plata que SALIÓ de caja física por movimientos (egresos + transferencias internas saliendo).
-      const totalEgresosCaja = movimientos
-        .filter(
-          (m) =>
-            (m.tipo === 'EGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
-            esEfectivoCierre(m.cuentaOrigen),
-        )
-        .reduce((acc, m) => acc + Number(m.monto), 0);
+      // Plata que salió / entró al cajón por movimientos.
+      //
+      // `efectoEnCaja` mira el REPARTO (`pagos`) cuando lo hay, en vez de
+      // asumir que todo el monto salió de `cuentaOrigen`. Un pago de sueldo
+      // dividido 40% efectivo / 60% transferencia antes contaba cero acá
+      // (porque `cuentaOrigen` era el banco) y la caja cerraba de más.
+      // Ver services/efecto-caja.ts.
+      const efectos = movimientos.map((m) => ({ id: m.id, efecto: efectoEnCaja(m) }));
+      const porId = new Map(efectos.map((e) => [e.id, e.efecto]));
 
-      // Plata que ENTRÓ a caja física por movimientos (ingresos + transferencias internas entrando).
-      const totalIngresosCaja = movimientos
-        .filter(
-          (m) =>
-            (m.tipo === 'INGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
-            esEfectivoCierre(m.cuentaDestino),
-        )
-        .reduce((acc, m) => acc + Number(m.monto), 0);
+      const totalEgresosCaja = efectos
+        .filter((e) => e.efecto < 0)
+        .reduce((acc, e) => acc - e.efecto, 0);
+
+      const totalIngresosCaja = efectos
+        .filter((e) => e.efecto > 0)
+        .reduce((acc, e) => acc + e.efecto, 0);
 
       const recaudacionEsperadaEfectivo =
         Number(sesion.existenciaInicial) +
@@ -2384,12 +2438,27 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           usuarioCierre: sesion.usuarioCierre?.nombre ?? null,
         },
         cobrosPorMetodo,
-        // Listado completo de movimientos del turno (sin filtrar por cuenta —
-        // la encargada quiere verlos todos; el filtro es sólo en el cálculo).
-        // Cada item incluye `afectaCaja` para que la UI pueda destacarlos.
-        movimientos: movimientos.map((m) => {
-          const sale = esEfectivoCierre(m.cuentaOrigen);
-          const entra = esEfectivoCierre(m.cuentaDestino);
+        // Los cobros de cuenta corriente van APARTE de los ajustes: la UI los
+        // muestra con las ventas del turno, no al final entre aportes y
+        // egresos. Siguen contando en el efectivo esperado (se calculó arriba
+        // sobre `movimientos` completo).
+        cobrosCuentaCorriente: cobrosCtaCte.map((m) => ({
+          id: m.id,
+          monto: m.monto.toString(),
+          cliente: (m.observacion ?? '').replace(/^Cobro\s+/, '') || '—',
+          metodos: m.pagos.map((p) => p.metodo),
+          cuenta: m.pagos[0]?.cuenta?.nombre ?? m.cuentaDestino?.nombre ?? null,
+          efectoCaja: (porId.get(m.id) ?? 0).toFixed(2),
+        })),
+        totalCobrosCuentaCorriente: cobrosCtaCte
+          .reduce((acc, m) => acc + Number(m.monto), 0)
+          .toFixed(2),
+        // Listado de los movimientos de AJUSTE del turno (aportes y egresos),
+        // sin filtrar por cuenta — la encargada quiere verlos todos; el filtro
+        // es sólo en el cálculo. Cada item incluye `afectaCaja` para que la UI
+        // pueda destacarlos, y `reparto` cuando salió de más de una cuenta.
+        movimientos: movimientosAjuste.map((m) => {
+          const efecto = porId.get(m.id) ?? 0;
           return {
             id: m.id,
             tipo: m.tipo,
@@ -2401,7 +2470,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             // dos egresos de la misma categoría se ven idénticos en la tabla
             // del turno y no hay forma de distinguirlos al cerrar caja.
             observacion: m.observacion,
-            afectaCaja: sale || entra,
+            afectaCaja: Math.abs(efecto) > 0.0001,
+            // Cuánto de este movimiento tocó el cajón. Con un pago repartido
+            // NO es el monto entero, y esa diferencia es justamente lo que
+            // hacía que la caja no cerrara.
+            efectoCaja: efecto.toFixed(2),
+            // "$40.000 Caja física + $60.000 Santander" — null si fue de una
+            // sola cuenta.
+            reparto: detalleReparto(m),
           };
         }),
         ventasCount,
@@ -3402,7 +3478,16 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         });
         return reply
           .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('ventas')}"`)
+          .header(
+            'Content-Disposition',
+            `attachment; filename="${nombreArchivoExport('ventas', {
+              periodo: q.periodo,
+              desde: ft.desde,
+              hasta: ft.hasta,
+              texto,
+              extra: q.canal ? `canal ${q.canal}` : undefined,
+            })}"`,
+          )
           .send(buf);
       }
 

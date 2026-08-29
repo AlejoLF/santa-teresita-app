@@ -31,12 +31,31 @@ interface SesionData {
     usuarioCierre: string | null;
   } | null;
   cobrosPorMetodo: Array<{ metodo: string; monto: string; cantidad: number }>;
+  /**
+   * Cobros de cuenta corriente de mayoristas del turno.
+   *
+   * Vienen aparte de `movimientos` a propósito: no son aportes ni egresos, son
+   * mercadería ya entregada que se cobra ahora. Se muestran arriba, con las
+   * ventas (pedido de la encargada).
+   */
+  cobrosCuentaCorriente?: Array<{
+    id: string;
+    monto: string;
+    cliente: string;
+    metodos: string[];
+    cuenta: string | null;
+  }>;
+  totalCobrosCuentaCorriente?: string;
   movimientos: Array<{
     id: string;
     tipo: string;
     monto: string;
     categoria: string;
     observacion?: string | null;
+    /** Cuánto de este movimiento tocó el cajón (con un pago repartido NO es el total). */
+    efectoCaja?: string;
+    /** "$40.000 Caja física + $60.000 Santander" cuando salió de varias cuentas. */
+    reparto?: string | null;
   }>;
   ventasCount: number;
   ventasAbiertas: number;
@@ -340,6 +359,48 @@ export default function SesionActualPage() {
         )}
       </section>
 
+      {/* Cobros de cuenta corriente — van acá arriba, con las ventas, y NO
+          abajo entre los aportes y egresos: es mercadería ya entregada que se
+          cobra hoy, no un ajuste de caja. */}
+      {(data.cobrosCuentaCorriente?.length ?? 0) > 0 && (
+        <section className="card p-5">
+          <h2 className="font-display text-md text-ink-900 mb-1">
+            Cobros de cuenta corriente
+          </h2>
+          <p className="text-2xs text-ink-500 mb-3">
+            Mayoristas que pagaron mercadería ya entregada. Ya están incluidos en el total
+            cobrado de arriba.
+          </p>
+          <table className="w-full text-sm">
+            <tbody className="divide-y divide-cream-200">
+              {data.cobrosCuentaCorriente!.map((c) => (
+                <tr key={c.id}>
+                  <td className="py-2 text-ink-700">
+                    {c.cliente}
+                    <div className="text-2xs text-ink-500">
+                      {c.metodos.map((m) => METODO_LABEL[m] ?? m).join(' + ') || '—'}
+                      {c.cuenta && ` · ${c.cuenta}`}
+                    </div>
+                  </td>
+                  <td className="py-2 text-right align-top">
+                    <MoneyAmount value={c.monto} className="text-teresita-700" />
+                  </td>
+                </tr>
+              ))}
+              <tr className="font-medium">
+                <td className="py-2">Total</td>
+                <td className="py-2 text-right">
+                  <MoneyAmount
+                    value={data.totalCobrosCuentaCorriente ?? '0'}
+                    className="text-teresita-700"
+                  />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      )}
+
       {/* Egresos del turno */}
       {data.movimientos.length > 0 && (
         <section className="card p-5">
@@ -360,9 +421,22 @@ export default function SesionActualPage() {
                           {m.observacion}
                         </div>
                       )}
+                      {/* Un pago repartido entre cuentas se veía como si hubiera
+                          salido entero de una sola. Mostrarlo evita la sorpresa
+                          de que la caja no cierre por la parte en efectivo. */}
+                      {m.reparto && (
+                        <div className="text-2xs text-saffron-700">{m.reparto}</div>
+                      )}
                     </td>
                     <td className="py-2 text-right align-top">
                       <MoneyAmount value={m.monto} className="text-pomodoro-600" />
+                      {m.reparto && (
+                        <div className="text-2xs text-ink-500">
+                          {Number(m.efectoCaja ?? 0) === 0
+                            ? 'no toca la caja'
+                            : `del cajón: $${Math.abs(Number(m.efectoCaja)).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

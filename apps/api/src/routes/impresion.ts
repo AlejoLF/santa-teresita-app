@@ -113,12 +113,21 @@ export default async function impresionRoutes(fastify: FastifyInstance) {
         body: z.object({
           estado: z.enum(['IMPRESO', 'ERROR']),
           error: z.string().max(500).optional(),
+          // ¿Es seguro volver a mandarlo? Lo decide el agente: sabe si llegó a
+          // mandarle bytes a la comandera o no. Default true = como venía
+          // funcionando (un agente viejo que no manda el campo no cambia de
+          // comportamiento). Ver ImpresionIncierta en local-agent/printers.ts.
+          reintentable: z.boolean().default(true),
         }),
       },
     },
     async (req, reply) => {
       const params = req.params as { id: string };
-      const body = req.body as { estado: 'IMPRESO' | 'ERROR'; error?: string };
+      const body = req.body as {
+        estado: 'IMPRESO' | 'ERROR';
+        error?: string;
+        reintentable?: boolean;
+      };
 
       const trabajo = await prisma.trabajoImpresion.findUnique({
         where: { id: params.id },
@@ -137,18 +146,53 @@ export default async function impresionRoutes(fastify: FastifyInstance) {
         return { ok: true };
       }
 
-      // ERROR: incrementar intentos, decidir si retry o final
+      // ERROR: decidir si vuelve a la cola o queda muerto.
+      //
+      // ── Por qué no se reintenta todo ──
+      //
+      // Reintentar a ciegas es lo que DUPLICABA comandas. Una comandera que
+      // imprime y después corta la conexión —lo que hace cuando vuelve la luz
+      // y se resetea a mitad de trabajo— hacía que el agente reportara ERROR
+      // con el papel YA impreso. El trabajo volvía a PENDIENTE, el agente lo
+      // tomaba en el siguiente poll (3 s) y salía otra vez. Cinco intentos en
+      // quince segundos: el mismo pedido impreso hasta cinco veces.
+      // Incidente real: corte de luz del 28/08/2026.
+      //
+      // Ahora el agente distingue "la impresora no contestó" (no salió nada,
+      // se reintenta) de "se cortó a mitad" (puede haber salido, NO se
+      // reintenta). Ante la duda no imprimimos: un ticket que falta se ve en el
+      // panel y se re-imprime con un click; uno duplicado se cuela a la cocina.
+      const reintentable = body.reintentable ?? true;
+
+      // ── Por qué el corte de luz no gasta los intentos ──
+      //
+      // Si la comandera está apagada, cada poll suma un intento y a los 15
+      // segundos el trabajo queda muerto — un corte de luz de dos minutos
+      // perdía TODAS las comandas del turno sin que nadie se enterara. Cuando
+      // la falla es "no contesta" (reintentable) el trabajo espera sin gastar
+      // intentos: apenas vuelve la impresora, sale. El límite pasa a ser el
+      // TIEMPO, no la cantidad de intentos.
+      const HORAS_DE_GRACIA = 6;
+      const antiguedadHs = (Date.now() - trabajo.encoladoAt.getTime()) / 3_600_000;
+      const vencido = antiguedadHs > HORAS_DE_GRACIA;
+
       const nuevoIntentos = trabajo.intentos + 1;
-      const final = nuevoIntentos >= MAX_INTENTOS;
+      const final = !reintentable || vencido || nuevoIntentos >= MAX_INTENTOS;
+
       await prisma.trabajoImpresion.update({
         where: { id: params.id },
         data: {
           estado: final ? EstadoTrabajoImpresion.ERROR : EstadoTrabajoImpresion.PENDIENTE,
-          intentos: nuevoIntentos,
-          ultimoError: body.error ?? 'Error sin mensaje',
+          // Una impresora que no contesta no gasta intentos: es una espera, no
+          // un fracaso. El resto sí, para que un payload roto no gire para
+          // siempre.
+          intentos: reintentable && !vencido ? trabajo.intentos : nuevoIntentos,
+          ultimoError: vencido
+            ? `${body.error ?? 'Error sin mensaje'} · sin imprimir después de ${HORAS_DE_GRACIA} h`
+            : body.error ?? 'Error sin mensaje',
         },
       });
-      return { ok: true, retried: !final, intentos: nuevoIntentos };
+      return { ok: true, retried: !final, intentos: nuevoIntentos, reintentable };
     },
   );
 

@@ -215,6 +215,12 @@ export default function BancoHorasEmpleadoPage() {
                 <td className="px-3 py-2 text-xs font-mono text-ink-500 whitespace-nowrap">
                   {m.liquidado && '✅ '}
                   {new Date(m.fecha).toLocaleDateString('es-AR', {
+                    // `fecha` es @db.Date: llega como medianoche UTC
+                    // ("2026-08-28T00:00:00Z"). Sin forzar UTC, el navegador la
+                    // muestra en TZ AR (−3) y da el 27 — el día ANTERIOR al que
+                    // se cargó. Incidente real: la encargada cargó horas el 28
+                    // y en la tabla figuraban el 27.
+                    timeZone: 'UTC',
                     day: '2-digit',
                     month: '2-digit',
                   })}

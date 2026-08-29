@@ -269,7 +269,13 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
           )
           .header(
             'Content-Disposition',
-            `attachment; filename="${nombreArchivoExport('empleados')}"`,
+            `attachment; filename="${nombreArchivoExport('empleados', {
+              periodo: q.periodo,
+              desde: ft.desde,
+              hasta: ft.hasta,
+              texto,
+              extra: q.incluirInactivos ? 'con-inactivos' : undefined,
+            })}"`,
           )
           .send(buf);
       }

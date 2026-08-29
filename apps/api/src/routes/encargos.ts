@@ -201,7 +201,16 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
         });
         return reply
           .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('encargos')}"`)
+          .header(
+            'Content-Disposition',
+            `attachment; filename="${nombreArchivoExport('encargos', {
+              periodo: q.periodo,
+              desde: filtroTemporal.desde,
+              hasta: filtroTemporal.hasta,
+              texto: q.q,
+              extra: q.entrega && q.entrega !== 'todos' ? `entrega ${q.entrega}` : undefined,
+            })}"`,
+          )
           .send(buf);
       }
 

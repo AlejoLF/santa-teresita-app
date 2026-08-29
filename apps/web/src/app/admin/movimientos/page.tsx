@@ -31,6 +31,15 @@ interface Movimiento {
   observacion: string | null;
   cuentaOrigen?: { nombre: string } | null;
   cuentaDestino?: { nombre: string } | null;
+  /**
+   * "$40.000 Caja física + $60.000 Santander" cuando el pago salió de varias
+   * cuentas; null si fue de una sola.
+   *
+   * La fila mostraba sólo `cuentaOrigen`, así que un pago dividido 40% efectivo
+   * / 60% transferencia se leía como 100% transferencia y había que abrir el
+   * detalle para enterarse de la parte en efectivo.
+   */
+  reparto?: string | null;
   categoria: { nombre: string };
   usuario: { nombre: string };
   modificado?: boolean;
@@ -423,7 +432,7 @@ export default function AdminMovimientosPage() {
               const cuenta =
                 m.tipo === 'TRANSFERENCIA_INTERNA'
                   ? `${m.cuentaOrigen?.nombre ?? '—'} → ${m.cuentaDestino?.nombre ?? '—'}`
-                  : m.cuentaOrigen?.nombre ?? m.cuentaDestino?.nombre ?? '—';
+                  : m.reparto ?? m.cuentaOrigen?.nombre ?? m.cuentaDestino?.nombre ?? '—';
               return (
                 <tr
                   key={m.id}
@@ -548,7 +557,7 @@ export default function AdminMovimientosPage() {
             const cuenta =
               m.tipo === 'TRANSFERENCIA_INTERNA'
                 ? `${m.cuentaOrigen?.nombre ?? '—'} → ${m.cuentaDestino?.nombre ?? '—'}`
-                : m.cuentaOrigen?.nombre ?? m.cuentaDestino?.nombre ?? '—';
+                : m.reparto ?? m.cuentaOrigen?.nombre ?? m.cuentaDestino?.nombre ?? '—';
             return (
               <div
                 key={m.id}
@@ -1412,7 +1421,10 @@ function FormNuevoMovimiento({
                           />
                           <span className="font-mono text-2xs shrink-0">{f.numero}</span>
                           <span className="text-ink-400 text-2xs shrink-0">
-                            {new Date(f.fechaEmision).toLocaleDateString('es-AR')}
+                            {/* @db.Date → medianoche UTC; sin esto corre 1 día atrás */}
+                            {new Date(f.fechaEmision).toLocaleDateString('es-AR', {
+                              timeZone: 'UTC',
+                            })}
                           </span>
                           <span className="text-ink-500 ml-auto shrink-0">
                             debe <MoneyAmount value={f.saldo} />

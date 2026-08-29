@@ -796,7 +796,16 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         });
         return reply
           .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-          .header('Content-Disposition', `attachment; filename="${nombreArchivoExport('facturas')}"`)
+          .header(
+            'Content-Disposition',
+            `attachment; filename="${nombreArchivoExport('facturas', {
+              periodo: q.periodo,
+              desde: ft.desde,
+              hasta: ft.hasta,
+              texto,
+              extra: q.estado ? `estado ${q.estado}` : undefined,
+            })}"`,
+          )
           .send(buf);
       }
 

@@ -211,13 +211,70 @@ export function descripcionFiltros(args: {
   return partes.join(' · ');
 }
 
-/** Nombre de archivo seguro y con fecha, para que no se pisen en Descargas. */
-export function nombreArchivoExport(base: string): string {
-  const hoy = new Date()
-    .toLocaleDateString('es-AR')
-    .split('/')
-    .reverse()
-    .map((p) => p.padStart(2, '0'))
-    .join('-');
-  return `${base.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${hoy}.xlsx`;
+/** "2026-08-28" en TZ AR, que es el orden que ordena bien alfabéticamente. */
+function isoAr(d: Date): string {
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+}
+
+/** Saca acentos, espacios y cualquier cosa que Windows no quiera en un nombre. */
+function slug(s: string): string {
+  return s
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Nombre del Excel que se baja.
+ *
+ * Antes era `<base>-<hoy>.xlsx` y no decía NADA del contenido: tres exports de
+ * movimientos de tres períodos distintos se llamaban igual y se pisaban en la
+ * carpeta de Descargas. Ahora el nombre lleva el período que se exportó, así
+ * el archivo se entiende solo tres semanas después sin abrirlo:
+ *
+ *   movimientos-2026-08-01-a-2026-08-29.xlsx
+ *   facturas-2026-08-29-pendiente-pago.xlsx
+ *   ventas-2026-08-29-busqueda-empanadas.xlsx
+ *
+ * La fecha de emisión va al final sólo si no hay rango — con rango sería ruido.
+ *
+ * OJO: para que el navegador pueda LEER este nombre hace falta
+ * `exposedHeaders: ['Content-Disposition']` en el CORS del server. Sin eso el
+ * fetch cross-origin no ve el header y el archivo cae al nombre por defecto del
+ * cliente (que es de dónde salían los archivos llamados "Excel").
+ */
+export function nombreArchivoExport(
+  base: string,
+  args?: {
+    periodo?: string;
+    desde?: Date | null;
+    hasta?: Date | null;
+    texto?: string;
+    extra?: string;
+  },
+): string {
+  const partes = [slug(base)];
+
+  if (args?.desde && args?.hasta) {
+    const d = isoAr(args.desde);
+    const h = isoAr(args.hasta);
+    // Un solo día no necesita "de X a X".
+    partes.push(d === h ? d : `${d}-a-${h}`);
+  } else if (args?.desde) {
+    partes.push(`desde-${isoAr(args.desde)}`);
+  } else if (args?.hasta) {
+    partes.push(`hasta-${isoAr(args.hasta)}`);
+  } else {
+    // Sin rango: al menos la fecha en que se bajó, para que no se pisen.
+    partes.push(isoAr(new Date()));
+    if (args?.periodo && args.periodo !== 'todo') partes.push(slug(args.periodo));
+  }
+
+  if (args?.texto) partes.push(`busqueda-${slug(args.texto).slice(0, 30)}`);
+  if (args?.extra) partes.push(slug(args.extra).slice(0, 40));
+
+  // Windows corta en 255, pero un nombre larguísimo tampoco se lee. 120 alcanza.
+  return `${partes.filter(Boolean).join('-').slice(0, 120)}.xlsx`;
 }
