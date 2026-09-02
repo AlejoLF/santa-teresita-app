@@ -1933,3 +1933,65 @@ model LiquidacionEmpleado {
   @@index([empleadoId, fecha])
   @@map("liquidaciones_empleado")
 }
+
+// ════════════════════════════════════════════════════════════════════════
+//   BUZÓN DE CANAL (diagnóstico de la ingesta de plataformas)
+// ════════════════════════════════════════════════════════════════════════
+
+/// Todo lo que golpea `/channel/*`, se haya aceptado o no.
+///
+/// POR QUÉ EXISTE: la ingesta de plataformas tenía cinco formas distintas de
+/// rechazar un pedido —token ausente (503), token equivocado (401), body que no
+/// matchea el contrato (400), SKU sin mapear (422) y fuera de horario (423)— y
+/// TODAS eran invisibles desde el local. La plataforma recibía su código de
+/// error y del lado de acá no quedaba nada: ni la venta, ni el ticket, ni un
+/// renglón que dijera que alguien había golpeado la puerta.
+///
+/// Incidente real (29/08/2026): se configuró el integrador de RAPPI apuntando a
+/// Railway, se generó y aceptó un pedido de prueba, y no apareció nada en el
+/// programa. Sin este registro no hay manera de saber si el pedido llegó y se
+/// rechazó, o si nunca salió de RAPPI — que son problemas opuestos.
+///
+/// Se graba ANTES de validar el token, a propósito: si sólo guardáramos lo
+/// autenticado, el caso "la plataforma no manda el token que esperamos" —el más
+/// probable al conectar un integrador nuevo— seguiría siendo invisible.
+///
+/// El body se guarda CRUDO. Es la única forma de escribir el adaptador de una
+/// plataforma sin adivinar su formato: se mira lo que mandó de verdad.
+model RecepcionCanal {
+  id         String   @id @default(uuid()) @db.Uuid
+  recibidoAt DateTime @default(now()) @map("recibido_at")
+  ruta       String   @db.VarChar(160)
+  metodo     String   @db.VarChar(10)
+  /// IP de origen (puede venir de X-Forwarded-For detrás de Railway).
+  ip         String?  @db.VarChar(60)
+
+  /// Headers, con los de autorización REDACTADOS: se guarda la longitud y las
+  /// puntas, nunca el valor. Alcanza para distinguir "no mandó token" de "mandó
+  /// uno distinto" sin dejar un secreto guardado —y replicado a la nube— en una
+  /// tabla de diagnóstico.
+  headers    Json     @db.JsonB
+  /// Body crudo parseado como JSON. Null si no era JSON válido.
+  body       Json?    @db.JsonB
+  /// El body tal cual llegó, cuando no se pudo parsear (o vino vacío).
+  bodyTexto  String?  @map("body_texto")
+  /// Cuánto pesaba el body original. Si superó el tope, `body`/`bodyTexto` van
+  /// recortados y esto dice cuánto era en realidad.
+  bytes      Int      @default(0)
+
+  status    Int
+  /// OK · SIN_TOKEN_CONFIGURADO · TOKEN_INVALIDO · BODY_INVALIDO ·
+  /// SKU_FALTANTE · FUERA_DE_HORARIO · SIN_ADAPTADOR · ERROR
+  resultado String  @db.VarChar(40)
+  /// En criollo, para leerlo desde el panel sin abrir el JSON.
+  detalle   String?
+
+  /// Cuando se pudo determinar. `ventaId` sólo si terminó creando la venta.
+  canal          String? @db.VarChar(30)
+  idExternoCanal String? @map("id_externo_canal") @db.VarChar(120)
+  ventaId        String? @map("venta_id") @db.Uuid
+
+  @@index([recibidoAt])
+  @@index([resultado, recibidoAt])
+  @@map("recepciones_canal")
+}
