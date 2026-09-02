@@ -36,6 +36,7 @@ import {
   efectoEnCaja,
   detalleReparto,
   esCobroCuentaCorriente,
+  tramosNoCaja,
 } from '../services/efecto-caja.js';
 import {
   construirExcelBusqueda,
@@ -3032,6 +3033,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       });
 
       // 2. Movimientos con detalle de cuentas para identificar afecta-caja.
+      //    `pagos` es imprescindible: con un pago repartido entre cuentas, la
+      //    `cuentaOrigen` nombra sólo a UNA de ellas y el `monto` es el total.
+      //    Ver services/efecto-caja.ts.
       const movs = await prisma.movimiento.findMany({
         where: { sesionCajaId: sesion.id, estado: EstadoMovimiento.CONFIRMADO },
         select: {
@@ -3043,6 +3047,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           categoria: { select: { nombre: true } },
           cuentaOrigen: { select: { nombre: true, tipo: true, excluidaDeCierreCaja: true } },
           cuentaDestino: { select: { nombre: true, tipo: true, excluidaDeCierreCaja: true } },
+          pagos: {
+            select: {
+              monto: true,
+              cuenta: { select: { nombre: true, tipo: true, excluidaDeCierreCaja: true } },
+            },
+          },
           usuario: { select: { nombre: true } },
         },
         orderBy: { fechaComputo: 'asc' },
@@ -3078,18 +3088,15 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         (p) => afectaCierre(p.cuenta) && !esVentaDeliverate(p.venta?.canal, p.venta?.modalidad),
       );
       const totalCobrosEfectivo = cobrosEfectivo.reduce((acc, p) => acc + Number(p.monto), 0);
-      const ingresosCaja = movs.filter(
-        (m) =>
-          (m.tipo === 'INGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
-          afectaCierre(m.cuentaDestino),
-      );
-      const totalIngresosCaja = ingresosCaja.reduce((acc, m) => acc + Number(m.monto), 0);
-      const egresosCaja = movs.filter(
-        (m) =>
-          (m.tipo === 'EGRESO' || m.tipo === 'TRANSFERENCIA_INTERNA') &&
-          afectaCierre(m.cuentaOrigen),
-      );
-      const totalEgresosCaja = egresosCaja.reduce((acc, m) => acc + Number(m.monto), 0);
+      // El efecto en el cajón sale de `efectoEnCaja`, NO de mirar cuentaOrigen
+      // con el monto total: de un sueldo de $100.000 pagado 40% en efectivo y
+      // 60% por banco, al cajón le salieron $40.000. Esta pantalla calculaba
+      // por su cuenta y contaba los $100.000 enteros — el mismo bug que
+      // efecto-caja.ts arregló en el mail, vivo en una segunda copia.
+      const ingresosCaja = movs.filter((m) => efectoEnCaja(m) > 0.0001);
+      const totalIngresosCaja = ingresosCaja.reduce((acc, m) => acc + efectoEnCaja(m), 0);
+      const egresosCaja = movs.filter((m) => efectoEnCaja(m) < -0.0001);
+      const totalEgresosCaja = egresosCaja.reduce((acc, m) => acc - efectoEnCaja(m), 0);
 
       const existenciaInicial = Number(sesion.existenciaInicial);
       const esperadaCalculada =
@@ -3100,9 +3107,13 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const pagosNoEfectivo = pagos.filter(
         (p) => !afectaCierre(p.cuenta) || esVentaDeliverate(p.venta?.canal, p.venta?.modalidad),
       );
-      // Movimientos que NO afectan caja (egresos/ingresos contra banco o cuenta excluida).
-      const movsNoAfectanCaja = movs.filter(
-        (m) => !afectaCierre(m.cuentaOrigen) && !afectaCierre(m.cuentaDestino),
+      // Lo que se movió por banco/wallet, una línea por cuenta. Un pago
+      // repartido aporta acá su parte transferida Y arriba su parte en
+      // efectivo: antes caía entero de un lado solo y del otro no figuraba,
+      // así que esta lista se leía como "todo lo pagado por transferencia"
+      // siendo que le faltaban justo los pagos mixtos.
+      const movsNoAfectanCaja = movs.flatMap((m) =>
+        tramosNoCaja(m).map((t) => ({ mov: m, tramo: t, parcial: Math.abs(efectoEnCaja(m)) > 0.0001 })),
       );
 
       // Agrupar pagos efectivo por método (info breakdown).
@@ -3180,7 +3191,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         ingresosCaja: ingresosCaja.map((m) => ({
           id: m.id,
           tipo: m.tipo,
-          monto: m.monto.toString(),
+          // Lo que tocó el CAJÓN. En un pago repartido es sólo su parte en
+          // efectivo; `montoTotal` guarda el total del movimiento.
+          monto: Math.abs(efectoEnCaja(m)).toFixed(2),
+          montoTotal: m.monto.toString(),
+          parcial: Math.abs(Math.abs(efectoEnCaja(m)) - Number(m.monto)) > 0.01,
+          reparto: detalleReparto(m),
           categoria: m.categoria.nombre,
           cuentaOrigen: m.cuentaOrigen?.nombre ?? null,
           cuentaDestino: m.cuentaDestino?.nombre ?? null,
@@ -3191,7 +3207,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         egresosCaja: egresosCaja.map((m) => ({
           id: m.id,
           tipo: m.tipo,
-          monto: m.monto.toString(),
+          // Lo que tocó el CAJÓN. En un pago repartido es sólo su parte en
+          // efectivo; `montoTotal` guarda el total del movimiento.
+          monto: Math.abs(efectoEnCaja(m)).toFixed(2),
+          montoTotal: m.monto.toString(),
+          parcial: Math.abs(Math.abs(efectoEnCaja(m)) - Number(m.monto)) > 0.01,
+          reparto: detalleReparto(m),
           categoria: m.categoria.nombre,
           cuentaOrigen: m.cuentaOrigen?.nombre ?? null,
           cuentaDestino: m.cuentaDestino?.nombre ?? null,
@@ -3199,10 +3220,17 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           fecha: m.fechaComputo,
           usuario: m.usuario.nombre,
         })),
-        movsNoAfectanCaja: movsNoAfectanCaja.map((m) => ({
+        movsNoAfectanCaja: movsNoAfectanCaja.map(({ mov: m, tramo, parcial }) => ({
           id: m.id,
           tipo: m.tipo,
-          monto: m.monto.toString(),
+          // El monto de la fila es la porción de ESTA cuenta, no el total del
+          // movimiento. `montoTotal` + `parcial` dejan reconocerlo contra el
+          // pago original.
+          monto: tramo.monto.toFixed(2),
+          montoTotal: m.monto.toString(),
+          parcial,
+          cuenta: tramo.cuenta,
+          reparto: detalleReparto(m),
           categoria: m.categoria.nombre,
           cuentaOrigen: m.cuentaOrigen?.nombre ?? null,
           cuentaDestino: m.cuentaDestino?.nombre ?? null,

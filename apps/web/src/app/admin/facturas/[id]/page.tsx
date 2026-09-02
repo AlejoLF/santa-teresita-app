@@ -71,6 +71,7 @@ export default function FacturaDetallePage({ params }: { params: Promise<{ id: s
   const { prompt, promptModal } = usePrompt();
   const [factura, setFactura] = useState<FacturaDetalle | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editando, setEditando] = useState(false);
 
   useEffect(() => {
     void cargar();
@@ -119,17 +120,41 @@ export default function FacturaDetallePage({ params }: { params: Promise<{ id: s
         </div>
       </header>
 
-      {esValidacion ? (
-        <ValidacionForm factura={factura} onDone={() => router.push('/admin/facturas')} onReload={cargar} prompt={prompt} />
+      {esValidacion || editando ? (
+        <ValidacionForm
+          key={editando ? 'edicion' : 'validacion'}
+          factura={factura}
+          modo={esValidacion ? 'validacion' : 'edicion'}
+          onDone={
+            editando
+              ? () => {
+                  setEditando(false);
+                  void cargar();
+                }
+              : () => router.push('/admin/facturas')
+          }
+          onEliminada={() => router.push('/admin/facturas')}
+          onReload={cargar}
+          prompt={prompt}
+        />
       ) : (
-        <ReadOnlyView factura={factura} />
+        <ReadOnlyView factura={factura} onEditar={() => setEditando(true)} />
       )}
     </div>
   );
 }
 
 // ────────────────────────────────────────────────────────────────────────
-//   Modo validación (OCR sin validar) — editable + Aceptar / Rechazar
+//   Formulario editable de la factura.
+//
+//   Dos modos, mismo formulario. `validacion` es el paso del OCR (la factura
+//   todavía no fue aceptada): abajo van Rechazar / Guardar / Aceptar. `edicion`
+//   es corregir una factura YA cargada —el total mal tipeado, un concepto que
+//   va a otro insumo, o la factura entera cargada al proveedor equivocado—:
+//   abajo van Eliminar / Guardar.
+//
+//   Se reusa en vez de duplicarse porque los campos son exactamente los mismos
+//   y el selector de proveedor —lo que más se corrige— ya vive acá.
 // ────────────────────────────────────────────────────────────────────────
 
 interface ItemEdit {
@@ -146,11 +171,22 @@ function ValidacionForm({
   onDone,
   onReload,
   prompt,
+  modo = 'validacion',
+  onEliminada,
 }: {
   factura: FacturaDetalle;
+  /** Salir del formulario sin borrar nada (Cancelar, o factura aceptada). */
   onDone: () => void;
   onReload: () => Promise<void>;
   prompt: ReturnType<typeof usePrompt>['prompt'];
+  modo?: 'validacion' | 'edicion';
+  /**
+   * La factura dejó de existir. Va aparte de `onDone` porque el destino es
+   * otro: cancelar vuelve a la ficha, borrar tiene que salir del detalle —
+   * si volviera a la ficha, la pantalla intentaría cargar un id que ya no
+   * está y mostraría "no se pudo cargar" como si algo hubiera fallado.
+   */
+  onEliminada?: () => void;
 }) {
   const router = useRouter();
   const [tipo, setTipo] = useState(factura.tipoComprobante);
@@ -172,7 +208,7 @@ function ValidacionForm({
       subtotal: it.subtotal,
     })),
   );
-  const [busy, setBusy] = useState<null | 'guardar' | 'aceptar' | 'rechazar'>(null);
+  const [busy, setBusy] = useState<null | 'guardar' | 'aceptar' | 'rechazar' | 'eliminar'>(null);
   const [msg, setMsg] = useState<string | null>(null);
   // Aumentos que detectó el sistema al aceptar esta factura. Se muestran acá
   // y no se navega: es el único momento en que quien acepta tiene la factura
@@ -293,11 +329,38 @@ function ValidacionForm({
     }
   }
 
+  // Borrar de verdad, no anular: es para la fila que nunca debió existir —la
+  // misma factura cargada dos veces, una foto de otra cosa—. Anularla la
+  // dejaría en el listado para siempre. El backend igual guarda la factura
+  // entera en el audit log antes de borrarla, y rechaza el pedido si tiene
+  // pagos imputados.
+  async function onEliminar() {
+    const motivo = await prompt({
+      title: `Eliminar la factura ${factura.numero}`,
+      message:
+        'Se borra del sistema. Sólo se puede si no tiene pagos imputados. ' +
+        '¿Por qué la borrás? (opcional)',
+      placeholder: 'Cargada dos veces, no era una factura…',
+      confirmLabel: 'Eliminar',
+    });
+    if (motivo === null) return;
+    setBusy('eliminar');
+    try {
+      const qs = motivo ? `?motivo=${encodeURIComponent(motivo)}` : '';
+      await api.delete(`/admin/facturas/${factura.id}${qs}`);
+      (onEliminada ?? onDone)();
+    } catch (e) {
+      setMsg(e instanceof ApiError ? e.message : 'No pude eliminar la factura.');
+      setBusy(null);
+    }
+  }
+
   const inputSm = 'input py-1 text-sm';
 
   return (
     <div className="space-y-4">
-      {/* Banner OCR */}
+      {/* Banner OCR — sólo mientras la factura está sin aceptar. */}
+      {modo === 'validacion' && (
       <div className="card p-4 bg-saffron-50 border border-saffron-200 flex items-start gap-3">
         <span className="text-xl">🧾</span>
         <div className="text-sm text-ink-700">
@@ -310,6 +373,7 @@ function ValidacionForm({
           </p>
         </div>
       </div>
+      )}
 
       {/* Cabecera editable */}
       <section className="card p-5 space-y-3">
@@ -534,17 +598,35 @@ function ValidacionForm({
 
       {/* Acciones */}
       <div className="flex items-center justify-between gap-3 sticky bottom-0 bg-cream-50/80 backdrop-blur py-3">
-        <Button variant="destructive" onClick={onRechazar} disabled={busy !== null} type="button">
-          {busy === 'rechazar' ? 'Rechazando…' : 'Rechazar'}
-        </Button>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={onGuardar} disabled={busy !== null} type="button">
-            {busy === 'guardar' ? 'Guardando…' : 'Guardar borrador'}
-          </Button>
-          <Button variant="primary" onClick={onAceptar} disabled={busy !== null} type="button">
-            {busy === 'aceptar' ? 'Aceptando…' : 'Aceptar factura'}
-          </Button>
-        </div>
+        {modo === 'validacion' ? (
+          <>
+            <Button variant="destructive" onClick={onRechazar} disabled={busy !== null} type="button">
+              {busy === 'rechazar' ? 'Rechazando…' : 'Rechazar'}
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={onGuardar} disabled={busy !== null} type="button">
+                {busy === 'guardar' ? 'Guardando…' : 'Guardar borrador'}
+              </Button>
+              <Button variant="primary" onClick={onAceptar} disabled={busy !== null} type="button">
+                {busy === 'aceptar' ? 'Aceptando…' : 'Aceptar factura'}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <Button variant="destructive" onClick={onEliminar} disabled={busy !== null} type="button">
+              {busy === 'eliminar' ? 'Eliminando…' : 'Eliminar factura'}
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={onDone} disabled={busy !== null} type="button">
+                Cancelar
+              </Button>
+              <Button variant="primary" onClick={onGuardar} disabled={busy !== null} type="button">
+                {busy === 'guardar' ? 'Guardando…' : 'Guardar cambios'}
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -711,9 +793,29 @@ function SelectorProveedor({
 //   Vista read-only (estados ya validados)
 // ────────────────────────────────────────────────────────────────────────
 
-function ReadOnlyView({ factura }: { factura: FacturaDetalle }) {
+function ReadOnlyView({
+  factura,
+  onEditar,
+}: {
+  factura: FacturaDetalle;
+  onEditar: () => void;
+}) {
+  // Con plata ya imputada, editar dejaría el saldo del proveedor mintiendo
+  // (pagado > total, o una deuda que no existe). El backend lo rechaza igual;
+  // acá se explica antes de que la encargada toque el botón.
+  const imputada = Number(factura.totalPagado) > 0.01;
   return (
     <>
+      <div className="flex items-center justify-end gap-3">
+        {imputada && (
+          <span className="text-2xs text-ink-500">
+            Tiene pagos imputados: para corregirla, desimputá los pagos primero.
+          </span>
+        )}
+        <Button variant="secondary" size="sm" onClick={onEditar} disabled={imputada} type="button">
+          Editar factura
+        </Button>
+      </div>
       {factura.items.length > 0 ? (
         <section className="card overflow-hidden">
           <header className="px-4 py-3 border-b border-cream-300 bg-surface-sunken">

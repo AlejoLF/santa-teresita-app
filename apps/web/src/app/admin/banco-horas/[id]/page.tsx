@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
+import { usePrompt } from '@/components/ui/usePrompt';
 import { cn } from '@/lib/cn';
 
 /** El libro de una persona + cargar horas, dar un adelanto y liquidar. */
@@ -18,6 +19,10 @@ interface Movimiento {
   fecha: string;
   observacion: string | null;
   liquidado: boolean;
+  /** Se puede corregir o borrar: son horas que todavía no se cobraron. */
+  editable: boolean;
+  tipoHoraId: string | null;
+  categoriaLaboralId: string | null;
   tipoHora: string | null;
   /** Sólo viene cuando ese día fue una excepción (se trabajó en otra). */
   categoria: string | null;
@@ -68,6 +73,7 @@ export default function BancoHorasEmpleadoPage() {
     null,
   );
   const [editandoTarifa, setEditandoTarifa] = useState(false);
+  const [editandoHoras, setEditandoHoras] = useState<Movimiento | null>(null);
   const [tipos, setTipos] = useState<Array<{ id: string; nombre: string }>>([]);
   const [categorias, setCategorias] = useState<Array<{ id: string; nombre: string }>>([]);
   const [cuentas, setCuentas] = useState<Array<{ id: string; nombre: string }>>([]);
@@ -200,12 +206,13 @@ export default function BancoHorasEmpleadoPage() {
               <th className="text-left px-3 py-2">Detalle</th>
               <th className="text-right px-3 py-2">Horas</th>
               <th className="text-right px-3 py-2">Pesos</th>
+              <th className="px-3 py-2 w-px" />
             </tr>
           </thead>
           <tbody className="divide-y divide-cream-200">
             {d.movimientos.length === 0 && (
               <tr>
-                <td colSpan={4} className="text-center text-ink-500 py-8 italic">
+                <td colSpan={5} className="text-center text-ink-500 py-8 italic">
                   Todavía no hay movimientos.
                 </td>
               </tr>
@@ -260,6 +267,22 @@ export default function BancoHorasEmpleadoPage() {
                     <span className="text-ink-300">—</span>
                   )}
                 </td>
+                {/* Corregir sólo aparece en las horas que todavía no se
+                    cobraron: una vez liquidadas son parte de un pago hecho.
+                    Lo decide el servidor (`editable`), no esta pantalla. */}
+                <td className="px-3 py-2 text-right whitespace-nowrap">
+                  {m.editable ? (
+                    <button
+                      type="button"
+                      onClick={() => setEditandoHoras(m)}
+                      className="text-2xs text-teresita-700 hover:underline"
+                    >
+                      corregir
+                    </button>
+                  ) : (
+                    <span className="text-2xs text-ink-300">—</span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -267,9 +290,24 @@ export default function BancoHorasEmpleadoPage() {
       </section>
 
       <p className="text-2xs text-ink-500 px-1">
-        Nada de esto se edita. Si hay un error, se corrige con un movimiento nuevo — así queda
-        registrado qué pasó y quién lo hizo.
+        Las horas que todavía no se cobraron se pueden corregir o borrar (“corregir”, al final de
+        la fila). Una vez liquidadas ya no: son parte de un pago hecho, con su valor hora
+        estampado — ahí el error se arregla con un movimiento nuevo. Todo queda registrado, con
+        quién lo hizo.
       </p>
+
+      {editandoHoras && (
+        <ModalCorregirHoras
+          mov={editandoHoras}
+          tipos={tipos}
+          categorias={categorias}
+          onClose={() => setEditandoHoras(null)}
+          onDone={async () => {
+            setEditandoHoras(null);
+            await cargar();
+          }}
+        />
+      )}
 
       {editandoTarifa && (
         <ModalTarifa
@@ -1105,6 +1143,190 @@ function ModalAccion({
 // Hasta ahora esto sólo se podía cambiar por el API: la pantalla mostraba "sin
 // categoría" y no daba forma de arreglarlo. Vive acá, en el banco de horas,
 // porque es el único lugar donde ese número significa algo.
+
+/**
+ * Corregir o borrar una carga de horas que todavía no se cobró.
+ *
+ * El error típico no es sutil: 8 horas en vez de 6, el día equivocado, o la
+ * misma jornada cargada dos veces. Hasta ahora la única salida era cargar
+ * otra fila en sentido contrario, y el legajo terminaba con dos apuntes
+ * falsos donde tenía que haber uno correcto.
+ *
+ * Borrar sólo se ofrece acá porque el guard es el mismo que el de editar: si
+ * la fila no se puede tocar, tampoco tiene sentido ofrecer eliminarla.
+ */
+function ModalCorregirHoras({
+  mov,
+  tipos,
+  categorias,
+  onClose,
+  onDone,
+}: {
+  mov: Movimiento;
+  tipos: Array<{ id: string; nombre: string }>;
+  categorias: Array<{ id: string; nombre: string }>;
+  onClose: () => void;
+  onDone: () => void | Promise<void>;
+}) {
+  const { prompt, promptModal } = usePrompt();
+  // `fecha` es @db.Date y llega como medianoche UTC: cortar el ISO da el día
+  // correcto. Construir un Date y leerlo en TZ AR daría el día anterior — el
+  // mismo error que ya se arregló en la tabla.
+  const [fecha, setFecha] = useState(mov.fecha.slice(0, 10));
+  const [horas, setHoras] = useState(mov.horas ?? '');
+  const [tipoHoraId, setTipoHoraId] = useState(mov.tipoHoraId ?? '');
+  const [categoriaId, setCategoriaId] = useState(mov.categoriaLaboralId ?? '');
+  const [observacion, setObservacion] = useState(mov.observacion ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState<null | 'guardar' | 'borrar'>(null);
+
+  const horasNum = Number(horas);
+  const horasValidas = horasNum > 0 && horasNum <= 24;
+
+  async function guardar() {
+    setEnviando('guardar');
+    setError(null);
+    try {
+      await api.patch(`/admin/banco-horas/movimientos/${mov.id}`, {
+        fecha: new Date(`${fecha}T00:00:00.000Z`).toISOString(),
+        horas: horasNum,
+        tipoHoraId: tipoHoraId || null,
+        categoriaLaboralId: categoriaId || null,
+        observacion: observacion.trim() || null,
+      });
+      await onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo guardar');
+      setEnviando(null);
+    }
+  }
+
+  async function borrar() {
+    const dia = new Date(mov.fecha).toLocaleDateString('es-AR', { timeZone: 'UTC' });
+    const motivo = await prompt({
+      title: 'Borrar estas horas',
+      message: `Se van a borrar las ${mov.horas} horas del ${dia}. ¿Por qué? (opcional)`,
+      placeholder: 'cargadas dos veces, era otro empleado…',
+      confirmLabel: 'Borrar',
+    });
+    if (motivo === null) return;
+    setEnviando('borrar');
+    setError(null);
+    try {
+      const qs = motivo ? `?motivo=${encodeURIComponent(motivo)}` : '';
+      await api.delete(`/admin/banco-horas/movimientos/${mov.id}${qs}`);
+      await onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo borrar');
+      setEnviando(null);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-ink-900/40 flex items-center justify-center p-4 z-50">
+      {promptModal}
+      <div className="card p-4 w-full max-w-sm space-y-3">
+        <h2 className="font-display text-lg text-ink-900">Corregir horas cargadas</h2>
+        <p className="text-2xs text-ink-500">
+          Estas horas todavía no se cobraron, así que se pueden cambiar. Queda registrado quién
+          las corrigió.
+        </p>
+
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block text-2xs text-ink-500">
+            Día
+            <input
+              type="date"
+              value={fecha}
+              onChange={(e) => setFecha(e.target.value)}
+              className="input w-full mt-1 text-sm"
+            />
+          </label>
+          <label className="block text-2xs text-ink-500">
+            Horas
+            <input
+              type="number"
+              step="0.25"
+              min="0.25"
+              max="24"
+              value={horas}
+              onChange={(e) => setHoras(e.target.value)}
+              className="input w-full mt-1 text-sm"
+            />
+          </label>
+        </div>
+
+        <label className="block text-2xs text-ink-500">
+          Tipo de hora
+          <select
+            value={tipoHoraId}
+            onChange={(e) => setTipoHoraId(e.target.value)}
+            className="input w-full mt-1 text-sm"
+          >
+            <option value="">Normal</option>
+            {tipos.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.nombre}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block text-2xs text-ink-500">
+          Categoría de ese día
+          <select
+            value={categoriaId}
+            onChange={(e) => setCategoriaId(e.target.value)}
+            className="input w-full mt-1 text-sm"
+          >
+            <option value="">La de siempre</option>
+            {categorias.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.nombre}
+              </option>
+            ))}
+          </select>
+          <span className="block mt-1">
+            Sólo si ese día trabajó en otra cosa que la habitual.
+          </span>
+        </label>
+
+        <label className="block text-2xs text-ink-500">
+          Observación
+          <input
+            value={observacion}
+            onChange={(e) => setObservacion(e.target.value)}
+            className="input w-full mt-1 text-sm"
+            placeholder="turno partido, feriado…"
+          />
+        </label>
+
+        {!horasValidas && horas !== '' && (
+          <p className="text-2xs text-pomodoro-600">Las horas tienen que estar entre 0,25 y 24.</p>
+        )}
+        {error && <p className="text-2xs text-pomodoro-600">{error}</p>}
+
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <Button size="sm" variant="destructive" onClick={borrar} disabled={enviando !== null}>
+            {enviando === 'borrar' ? 'Borrando…' : 'Borrar'}
+          </Button>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={onClose} disabled={enviando !== null}>
+              Cancelar
+            </Button>
+            <Button
+              size="sm"
+              onClick={guardar}
+              disabled={enviando !== null || !horasValidas || !fecha}
+            >
+              {enviando === 'guardar' ? 'Guardando…' : 'Guardar'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ModalTarifa({
   empleadoId,

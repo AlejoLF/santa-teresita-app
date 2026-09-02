@@ -63,7 +63,16 @@ interface DetalleCierre {
 interface MovItem {
   id: string;
   tipo: string;
+  /** La porción de ESTA cuenta. En un pago repartido no es el total. */
   monto: string;
+  /** El total del movimiento. Difiere de `monto` cuando el pago fue repartido. */
+  montoTotal?: string;
+  /** true si esta fila es sólo una parte: el resto fue por otra cuenta. */
+  parcial?: boolean;
+  /** Nombre de la cuenta del tramo (sólo en la lista de otras cuentas). */
+  cuenta?: string | null;
+  /** "$40.000 Caja física + $60.000 Santander" cuando el pago se repartió. */
+  reparto?: string | null;
   categoria: string;
   cuentaOrigen: string | null;
   cuentaDestino: string | null;
@@ -367,11 +376,12 @@ export default function CierreDetallePage() {
         <section className="card p-4">
           <details>
             <summary className="cursor-pointer font-display text-md text-ink-900">
-              Otros movimientos del turno (no afectan caja) ({data.movsNoAfectanCaja.length})
+              Movimientos por banco y billeteras ({data.movsNoAfectanCaja.length})
             </summary>
             <p className="text-2xs text-ink-500 mt-2 mb-3">
-              Movimientos que pasaron por bancos/wallets — se ven acá para auditoría pero no
-              suman ni restan al efectivo esperado.
+              Todo lo que se pagó o cobró fuera del cajón. No suma ni resta al efectivo
+              esperado. Un pago repartido figura acá por su parte transferida y arriba por
+              su parte en efectivo — las dos juntas dan el total del pago.
             </p>
             <MovList items={data.movsNoAfectanCaja} kind="neutral" />
           </details>
@@ -496,6 +506,28 @@ function DesgloseRow({
 }
 
 function MovList({ items, kind }: { items: MovItem[]; kind: 'ingreso' | 'egreso' | 'neutral' }) {
+  // El nombre de cuenta de la fila. En "otras cuentas" un mismo movimiento
+  // repartido aporta DOS filas —una por cuenta— y `cuenta` dice cuál es esta;
+  // sin eso las dos mostrarían la cuentaOrigen, que nombra a una sola.
+  const nombreCuenta = (m: MovItem) =>
+    m.cuenta ??
+    (m.tipo === 'TRANSFERENCIA_INTERNA'
+      ? `${m.cuentaOrigen ?? '—'} → ${m.cuentaDestino ?? '—'}`
+      : m.cuentaOrigen ?? m.cuentaDestino ?? '—');
+
+  // Un movimiento repartido genera dos filas con el mismo id.
+  const claveFila = (m: MovItem, i: number) => `${m.id}-${m.cuenta ?? i}`;
+
+  // "parte de $100.000 — el resto fue por otra cuenta". Sin esto la encargada
+  // ve "$60.000 Sueldos" y no lo reconoce contra el pago que autorizó.
+  const aclaracion = (m: MovItem) =>
+    m.parcial && m.montoTotal ? (
+      <div className="text-2xs text-saffron-600" title={m.reparto ?? undefined}>
+        parte de ${Number(m.montoTotal).toLocaleString('es-AR', { minimumFractionDigits: 2 })} ·{' '}
+        {kind === 'neutral' ? 'el resto salió del cajón' : 'el resto fue por otra cuenta'}
+      </div>
+    ) : null;
+
   return (
     <>
       <table className="w-full text-xs hidden md:table">
@@ -509,15 +541,14 @@ function MovList({ items, kind }: { items: MovItem[]; kind: 'ingreso' | 'egreso'
           </tr>
         </thead>
         <tbody>
-          {items.map((m) => (
-            <tr key={m.id} className="border-b border-cream-200">
+          {items.map((m, i) => (
+            <tr key={claveFila(m, i)} className="border-b border-cream-200">
               <td className="py-1 text-ink-500">{fmtTime(m.fecha)}</td>
-              <td className="py-1">{m.categoria}</td>
-              <td className="py-1 text-ink-500">
-                {m.tipo === 'TRANSFERENCIA_INTERNA'
-                  ? `${m.cuentaOrigen ?? '—'} → ${m.cuentaDestino ?? '—'}`
-                  : m.cuentaOrigen ?? m.cuentaDestino ?? '—'}
+              <td className="py-1">
+                {m.categoria}
+                {aclaracion(m)}
               </td>
+              <td className="py-1 text-ink-500">{nombreCuenta(m)}</td>
               <td className="py-1 text-ink-500 max-w-xs truncate" title={m.observacion ?? ''}>
                 {m.observacion ?? '—'}
               </td>
@@ -538,16 +569,14 @@ function MovList({ items, kind }: { items: MovItem[]; kind: 'ingreso' | 'egreso'
 
       {/* Tarjetas (mobile) */}
       <div className="md:hidden divide-y divide-cream-200">
-        {items.map((m) => (
-          <div key={m.id} className="py-2 flex items-start justify-between gap-2">
+        {items.map((m, i) => (
+          <div key={claveFila(m, i)} className="py-2 flex items-start justify-between gap-2">
             <div className="min-w-0">
               <div className="font-medium text-ink-900 truncate">{m.categoria}</div>
               <div className="text-2xs font-mono text-ink-500 truncate">
-                {fmtTime(m.fecha)} ·{' '}
-                {m.tipo === 'TRANSFERENCIA_INTERNA'
-                  ? `${m.cuentaOrigen ?? '—'} → ${m.cuentaDestino ?? '—'}`
-                  : m.cuentaOrigen ?? m.cuentaDestino ?? '—'}
+                {fmtTime(m.fecha)} · {nombreCuenta(m)}
               </div>
+              {aclaracion(m)}
               {m.observacion && (
                 <div className="text-2xs text-ink-500 truncate" title={m.observacion}>
                   {m.observacion}

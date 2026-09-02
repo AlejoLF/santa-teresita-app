@@ -34,6 +34,19 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.70',
+    fecha: '2 de septiembre',
+    titulo: 'Corregir facturas y horas ya cargadas, y el cierre más claro',
+    cambios: [
+      'CIERRE DE CAJA: cuando a alguien le pagás una parte en efectivo y otra por transferencia, la parte transferida ahora aparece ABAJO, junto con los demás pagos por banco. Antes sólo figuraba en la letra chica arriba y había que buscarla. Los totales no cambian: lo que cambia es que se ve dónde estaba.',
+      'FACTURAS: ahora se pueden CORREGIR y BORRAR las facturas ya cargadas — el total mal tipeado, un concepto equivocado, o la factura entera pasada a otro proveedor. Entrás a la factura y tocás "Editar factura".',
+      'Si la factura ya tiene pagos imputados no se deja tocar, y te explica por qué: cambiarla dejaría mal el saldo de ese proveedor. Primero hay que desimputar el pago.',
+      'BANCO DE HORAS: las horas que cargaste y todavía no se cobraron se pueden corregir o borrar. Al final de cada fila aparece "corregir". Sirve para las 8 horas que eran 6, el día equivocado, o la jornada cargada dos veces.',
+      'Las horas YA cobradas no se tocan: son parte de un pago hecho. Ahí el error se sigue arreglando con un movimiento nuevo.',
+      'Todo lo que se corrige o se borra queda registrado, con quién lo hizo y cuándo.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.68',
     fecha: '29 de agosto',
     titulo: 'Arreglos en cobros de mayoristas, cierre de caja y comandas',
