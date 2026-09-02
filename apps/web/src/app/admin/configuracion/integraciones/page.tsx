@@ -25,6 +25,8 @@ interface Estado {
   catalogo: { publicables: number; sinCodigo: number; advertencia: string | null };
   horario: { hayTurnoAbierto: boolean; advertencia: string | null };
   ultimaRecepcion: { recibidoAt: string; resultado: string; detalle: string | null } | null;
+  /** false = falta correr Cloud Migrate: la tabla del buzón todavía no existe. */
+  buzonListo?: boolean;
 }
 
 interface Recepcion {
@@ -47,21 +49,21 @@ interface Recepcion {
 
 /** Qué significa cada resultado, en criollo, y de qué color se ve. */
 const RESULTADOS: Record<string, { texto: string; tono: string }> = {
-  OK: { texto: 'Entró y salió la comanda', tono: 'bg-teresita-100 text-teresita-800' },
+  OK: { texto: 'Entró y salió la comanda', tono: 'bg-teresita-100 text-teresita-900' },
   DUPLICADO: { texto: 'Repetido — ya estaba cargado', tono: 'bg-cream-200 text-ink-700' },
   SIN_TOKEN_CONFIGURADO: {
     texto: 'La ingesta está apagada en el server',
-    tono: 'bg-pomodoro-100 text-pomodoro-700',
+    tono: 'bg-pomodoro-100 text-pomodoro-600',
   },
-  TOKEN_INVALIDO: { texto: 'Token equivocado', tono: 'bg-pomodoro-100 text-pomodoro-700' },
-  BODY_INVALIDO: { texto: 'Formato que no entendemos', tono: 'bg-saffron-100 text-saffron-800' },
+  TOKEN_INVALIDO: { texto: 'Token equivocado', tono: 'bg-pomodoro-100 text-pomodoro-600' },
+  BODY_INVALIDO: { texto: 'Formato que no entendemos', tono: 'bg-saffron-100 text-saffron-600' },
   SIN_ADAPTADOR: {
     texto: 'Llegó bien, falta traducir su formato',
-    tono: 'bg-saffron-100 text-saffron-800',
+    tono: 'bg-saffron-100 text-saffron-600',
   },
-  SKU_FALTANTE: { texto: 'Producto sin código', tono: 'bg-saffron-100 text-saffron-800' },
-  FUERA_DE_HORARIO: { texto: 'Fuera de horario', tono: 'bg-saffron-100 text-saffron-800' },
-  ERROR: { texto: 'Error del sistema', tono: 'bg-pomodoro-100 text-pomodoro-700' },
+  SKU_FALTANTE: { texto: 'Producto sin código', tono: 'bg-saffron-100 text-saffron-600' },
+  FUERA_DE_HORARIO: { texto: 'Fuera de horario', tono: 'bg-saffron-100 text-saffron-600' },
+  ERROR: { texto: 'Error del sistema', tono: 'bg-pomodoro-100 text-pomodoro-600' },
 };
 
 function hora(iso: string): string {
@@ -106,23 +108,31 @@ export default function IntegracionesPage() {
   const [error, setError] = useState<string | null>(null);
   const [cargando, setCargando] = useState(false);
 
+  // Las dos consultas van por separado a propósito. Estaban en un Promise.all
+  // y cuando una fallaba —la del buzón, con la tabla todavía sin crear— la
+  // pantalla entera quedaba en blanco con un "la base de datos rechazó la
+  // operación", tapando la URL que es justo lo que hace falta en ese momento.
+  // Una pantalla de diagnóstico tiene que mostrar lo que SÍ pudo averiguar.
   const cargar = useCallback(async () => {
     setCargando(true);
     setError(null);
-    try {
-      const [e, r] = await Promise.all([
-        api.get<Estado>('/admin/channel/estado'),
-        api.get<{ recepciones: Recepcion[] }>(
-          `/admin/channel/recepciones?limite=40${soloErrores ? '&soloErrores=true' : ''}`,
-        ),
-      ]);
-      setEstado(e);
-      setRecepciones(r.recepciones);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo cargar');
-    } finally {
-      setCargando(false);
-    }
+    const [e, r] = await Promise.allSettled([
+      api.get<Estado>('/admin/channel/estado'),
+      api.get<{ recepciones: Recepcion[] }>(
+        `/admin/channel/recepciones?limite=40${soloErrores ? '&soloErrores=true' : ''}`,
+      ),
+    ]);
+    if (e.status === 'fulfilled') setEstado(e.value);
+    if (r.status === 'fulfilled') setRecepciones(r.value.recepciones);
+    const falla = [e, r].find((x) => x.status === 'rejected');
+    setError(
+      falla && falla.status === 'rejected'
+        ? falla.reason instanceof Error
+          ? falla.reason.message
+          : 'No se pudo cargar'
+        : null,
+    );
+    setCargando(false);
   }, [soloErrores]);
 
   useEffect(() => {
@@ -143,13 +153,28 @@ export default function IntegracionesPage() {
           listos para recibirlos y muestra todo lo que llegó.
         </p>
 
+        {estado?.buzonListo === false && (
+          <div className="rounded-lg border border-saffron-600/30 bg-saffron-100 p-4 mb-3">
+            <p className="font-medium text-ink-900 mb-1">Falta terminar de instalar el buzón.</p>
+            <p className="text-sm text-ink-700">
+              El código ya está, pero la tabla donde se guarda lo que llega todavía no se creó en
+              la base. Corré <strong>Cloud Migrate</strong> desde GitHub (Actions → Cloud Migrate →
+              Run workflow) y volvé a esta pantalla — no hace falta volver a publicar nada.
+            </p>
+            <p className="text-2xs text-ink-500 mt-2">
+              Mientras tanto los pedidos que lleguen se procesan igual; lo único que no queda es el
+              registro de abajo.
+            </p>
+          </div>
+        )}
+
         {error && <p className="text-sm text-pomodoro-600 mb-3">{error}</p>}
 
         {estado && (
           <div className="space-y-3">
             {!estado.tokenConfigurado ? (
-              <div className="rounded-lg border border-pomodoro-300 bg-pomodoro-100 p-4">
-                <p className="font-medium text-pomodoro-700 mb-1">La ingesta está apagada.</p>
+              <div className="rounded-lg border border-pomodoro-600/30 bg-pomodoro-100 p-4">
+                <p className="font-medium text-pomodoro-600 mb-1">La ingesta está apagada.</p>
                 <p className="text-sm text-ink-700">
                   Falta la variable <code className="font-mono">CHANNEL_INGEST_TOKEN</code> en el
                   server. Mientras no esté, cualquier pedido que mande una plataforma se rechaza,
@@ -159,7 +184,7 @@ export default function IntegracionesPage() {
             ) : (
               <>
                 <div className="rounded-lg border border-teresita-700/20 bg-teresita-50 p-3">
-                  <p className="text-sm text-teresita-800">
+                  <p className="text-sm text-teresita-900">
                     ✓ La ingesta está prendida y esperando pedidos.
                   </p>
                 </div>
@@ -176,7 +201,7 @@ export default function IntegracionesPage() {
                 )}
 
                 {estado.urlEsLocal && (
-                  <div className="rounded-lg border border-saffron-300 bg-saffron-100 p-3 text-sm text-ink-700">
+                  <div className="rounded-lg border border-saffron-600/30 bg-saffron-100 p-3 text-sm text-ink-700">
                     <strong>Ojo:</strong> estás viendo esto desde la app instalada, así que la
                     dirección de arriba es la de esta computadora y RAPPI no la puede alcanzar.
                     Abrí esta misma pantalla desde el navegador (la versión en la nube) para sacar
@@ -193,7 +218,7 @@ export default function IntegracionesPage() {
                   {estado.catalogo.publicables} productos con código
                 </p>
                 {estado.catalogo.advertencia && (
-                  <p className="text-2xs text-saffron-700 mt-1">{estado.catalogo.advertencia}</p>
+                  <p className="text-2xs text-saffron-600 mt-1">{estado.catalogo.advertencia}</p>
                 )}
               </div>
               <div className="rounded-lg border border-cream-300 p-3">
@@ -202,7 +227,7 @@ export default function IntegracionesPage() {
                   {estado.horario.hayTurnoAbierto ? 'Hay caja abierta' : 'Sin caja abierta'}
                 </p>
                 {estado.horario.advertencia && (
-                  <p className="text-2xs text-saffron-700 mt-1">{estado.horario.advertencia}</p>
+                  <p className="text-2xs text-saffron-600 mt-1">{estado.horario.advertencia}</p>
                 )}
               </div>
             </div>

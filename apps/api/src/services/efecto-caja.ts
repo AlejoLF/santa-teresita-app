@@ -156,3 +156,49 @@ export function esCobroCuentaCorriente(m: {
 }): boolean {
   return m.tipo === 'INGRESO' && m.categoria?.nombre === CATEGORIA_COBRO_CTA_CTE;
 }
+
+/** Una porción del movimiento, atribuida a la cuenta de la que salió/entró. */
+export interface TramoCuenta {
+  cuenta: string;
+  monto: number;
+}
+
+/**
+ * Las porciones del movimiento que NO pasaron por el cajón, una por cuenta.
+ *
+ * Existe porque el cierre partía los movimientos en dos listas con un solo
+ * booleano —"tocó la caja" / "no la tocó"— y un pago repartido no es ni una
+ * cosa ni la otra. Un sueldo de $100.000 pagado 40% en efectivo y 60% por
+ * Mercado Pago caía ENTERO en la lista de caja (por los $40.000) y sus
+ * $60.000 no aparecían nunca en "movimientos en otras cuentas", donde están
+ * los demás sueldos pagados por transferencia. La única huella era el
+ * renglón chico del reparto, debajo del monto.
+ *
+ * Para la encargada eso es peor que un número mal: la lista de transferencias
+ * se lee como si fuera todo lo que se pagó por banco, y calladamente no lo es.
+ *
+ * Con esto, cada movimiento aporta a la sección de caja lo que salió del
+ * cajón y a la de otras cuentas lo que salió por banco. Nada se duplica: las
+ * dos porciones suman el total.
+ *
+ * Las transferencias internas quedan afuera a propósito: ya se describen
+ * enteras con "origen → destino" y repetirlas del otro lado sería contar dos
+ * veces la misma operación.
+ */
+export function tramosNoCaja(m: MovimientoConPagos): TramoCuenta[] {
+  if (m.tipo !== 'TRANSFERENCIA_INTERNA' && m.pagos && m.pagos.length > 0) {
+    return m.pagos
+      .filter((p) => !esCajaSesion(p.cuenta))
+      .map((p) => ({ cuenta: p.cuenta?.nombre ?? '—', monto: Number(p.monto) }))
+      .filter((t) => Math.abs(t.monto) > 0.0001);
+  }
+
+  // Sin reparto: o fue entero por el cajón, o entero por otra cuenta.
+  if (afectaCaja(m)) return [];
+  const nombre =
+    m.tipo === 'TRANSFERENCIA_INTERNA'
+      ? `${m.cuentaOrigen?.nombre ?? '—'} → ${m.cuentaDestino?.nombre ?? '—'}`
+      : m.cuentaOrigen?.nombre ?? m.cuentaDestino?.nombre ?? '—';
+  const monto = Number(m.monto);
+  return Math.abs(monto) > 0.0001 ? [{ cuenta: nombre, monto }] : [];
+}

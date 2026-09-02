@@ -273,6 +273,9 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
             fecha: true,
             observacion: true,
             liquidacionId: true,
+            horasAplicadas: true,
+            categoriaLaboralId: true,
+            tipoHoraId: true,
             creadoAt: true,
             tipoHora: { select: { nombre: true, multiplicador: true, valorHoraFijo: true } },
             categoriaLaboral: { select: { id: true, nombre: true, valorHora: true } },
@@ -309,6 +312,22 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
           fecha: m.fecha,
           observacion: m.observacion,
           liquidado: m.liquidacionId != null,
+          /**
+           * ¿Se puede corregir o borrar esta fila?
+           *
+           * Lo decide el servidor y no la pantalla: la regla es "no tiene un
+           * peso cobrado", y una fila puede estar cobrada A MEDIAS sin
+           * `liquidacionId` (el banco de horas se paga de a partes). Si la UI
+           * lo dedujera de `liquidado`, ofrecería editar filas que el backend
+           * después rechaza.
+           */
+          editable:
+            m.tipo === 'HORAS_TRABAJADAS' &&
+            m.liquidacionId == null &&
+            Number(m.horasAplicadas) <= 0.000001,
+          /// Para precargar el formulario de corrección sin otra consulta.
+          tipoHoraId: m.tipoHoraId,
+          categoriaLaboralId: m.categoriaLaboralId,
           tipoHora: m.tipoHora?.nombre ?? null,
           // La categoría sólo aparece cuando ese día fue una excepción. Si es
           // la de siempre no se muestra: repetirla en cada fila es ruido.
@@ -482,6 +501,184 @@ export default async function bancoHorasRoutes(fastify: FastifyInstance) {
         montoPagado: out.plan.montoPagado.toFixed(2),
         alPrestamo: out.plan.montoAlPrestamo.toFixed(2),
       });
+    },
+  );
+
+  // ── Corregir o borrar horas ya cargadas ────────────────────────────────
+  //
+  // Hasta ahora una carga de horas era definitiva: si se tipeaban 8 en vez de
+  // 6, o se cargaban en el empleado equivocado, no había vuelta atrás. La
+  // encargada terminaba compensando con otra carga al revés, y el legajo
+  // quedaba con dos filas falsas en vez de una correcta.
+  //
+  // **El límite es la plata, no el tiempo.** Mientras esas horas no se hayan
+  // cobrado son un apunte; una vez liquidadas son parte de un pago que ya se
+  // hizo, con su `valorHoraAplicado` estampado. Tocarlas ahí cambiaría el
+  // sentido de un recibo firmado.
+  //
+  // Por eso el guard mira `horasAplicadas` y `liquidacionId`, no el estado ni
+  // la antigüedad: `horasAplicadas > 0` alcanza para bloquear, incluso si la
+  // fila se cobró sólo a medias (el banco de horas se paga de a partes).
+  const filaEditable = async (id: string) => {
+    const fila = await prisma.movimientoBancoHoras.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        tipo: true,
+        empleadoId: true,
+        horas: true,
+        horasAplicadas: true,
+        liquidacionId: true,
+        fecha: true,
+        tipoHoraId: true,
+        categoriaLaboralId: true,
+        observacion: true,
+      },
+    });
+    if (!fila) return { error: { code: 404, body: { error: 'Esa carga de horas no existe' } } };
+    if (fila.tipo !== 'HORAS_TRABAJADAS') {
+      return {
+        error: {
+          code: 409,
+          body: {
+            error:
+              'Esto no es una carga de horas: los adelantos, devoluciones y liquidaciones ' +
+              'mueven plata y se corrigen desde el movimiento de caja.',
+            tipo: fila.tipo,
+          },
+        },
+      };
+    }
+    if (Number(fila.horasAplicadas) > 0.000001 || fila.liquidacionId) {
+      return {
+        error: {
+          code: 409,
+          body: {
+            error:
+              'Estas horas ya se cobraron: forman parte de una liquidación hecha, con su valor ' +
+              'hora estampado. Para corregirlas hay que anular esa liquidación primero.',
+            horas: fila.horas?.toString() ?? null,
+            horasCobradas: fila.horasAplicadas.toString(),
+          },
+        },
+      };
+    }
+    return { fila };
+  };
+
+  fastify.patch(
+    '/admin/banco-horas/movimientos/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          fecha: z.string().datetime().optional(),
+          horas: z.number().positive().max(24).optional(),
+          tipoHoraId: z.string().uuid().nullish(),
+          categoriaLaboralId: z.string().uuid().nullish(),
+          observacion: z.string().max(300).nullish(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as {
+        fecha?: string;
+        horas?: number;
+        tipoHoraId?: string | null;
+        categoriaLaboralId?: string | null;
+        observacion?: string | null;
+      };
+
+      const r = await filaEditable(id);
+      if (r.error) return reply.code(r.error.code).send(r.error.body);
+      const fila = r.fila!;
+
+      if (body.categoriaLaboralId) {
+        const cat = await prisma.categoriaLaboral.findUnique({
+          where: { id: body.categoriaLaboralId },
+          select: { id: true, activo: true },
+        });
+        if (!cat) return reply.code(404).send({ error: 'Categoría laboral no encontrada' });
+        if (!cat.activo) throw new ReglaNegocioError('Esa categoría laboral está desactivada.');
+      }
+
+      const data: Record<string, unknown> = {};
+      if (body.fecha !== undefined) data.fecha = new Date(body.fecha);
+      if (body.horas !== undefined) data.horas = body.horas;
+      if (body.tipoHoraId !== undefined) data.tipoHoraId = body.tipoHoraId ?? null;
+      if (body.categoriaLaboralId !== undefined)
+        data.categoriaLaboralId = body.categoriaLaboralId ?? null;
+      if (body.observacion !== undefined) data.observacion = body.observacion ?? null;
+
+      const actualizada = await prisma.movimientoBancoHoras.update({ where: { id }, data });
+      await recordAudit({
+        tabla: 'movimientos_banco_horas',
+        registroId: id,
+        accion: 'UPDATE',
+        usuarioId: req.usuario!.id,
+        valorAnterior: {
+          horas: fila.horas?.toString() ?? null,
+          fecha: fila.fecha.toISOString(),
+          tipoHoraId: fila.tipoHoraId,
+          categoriaLaboralId: fila.categoriaLaboralId,
+          observacion: fila.observacion,
+        },
+        valorNuevo: {
+          horas: actualizada.horas?.toString() ?? null,
+          fecha: actualizada.fecha.toISOString(),
+          tipoHoraId: actualizada.tipoHoraId,
+          categoriaLaboralId: actualizada.categoriaLaboralId,
+          observacion: actualizada.observacion,
+        },
+        contexto: { fuente: 'correccion manual de horas cargadas' },
+      });
+      return reply.send({ ok: true, id, empleadoId: fila.empleadoId });
+    },
+  );
+
+  fastify.delete(
+    '/admin/banco-horas/movimientos/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        // Por query y no en el body: `api.delete` del cliente no manda cuerpo.
+        querystring: z.object({ motivo: z.string().max(300).optional() }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const { motivo } = req.query as { motivo?: string };
+
+      const r = await filaEditable(id);
+      if (r.error) return reply.code(r.error.code).send(r.error.body);
+      const fila = r.fila!;
+
+      await prisma.$transaction(async (tx) => {
+        // El snapshot va antes: después no hay de dónde sacarlo.
+        await recordAudit({
+          tabla: 'movimientos_banco_horas',
+          registroId: id,
+          accion: 'DELETE',
+          usuarioId: req.usuario!.id,
+          valorAnterior: {
+            empleadoId: fila.empleadoId,
+            horas: fila.horas?.toString() ?? null,
+            fecha: fila.fecha.toISOString(),
+            tipoHoraId: fila.tipoHoraId,
+            categoriaLaboralId: fila.categoriaLaboralId,
+            observacion: fila.observacion,
+          },
+          valorNuevo: null,
+          contexto: { motivo: motivo ?? null, fuente: 'borrado manual de horas cargadas' },
+          tx,
+        });
+        await tx.movimientoBancoHoras.delete({ where: { id } });
+      });
+
+      return reply.send({ ok: true, id, empleadoId: fila.empleadoId, borrada: true });
     },
   );
 

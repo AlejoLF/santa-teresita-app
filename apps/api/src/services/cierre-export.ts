@@ -16,6 +16,7 @@ import {
   efectoEnCaja,
   detalleReparto,
   esCobroCuentaCorriente,
+  tramosNoCaja,
 } from './efecto-caja.js';
 
 interface SesionConTodo {
@@ -190,6 +191,14 @@ interface LineaMovimiento {
   efectoCaja: number;
   /** "$40.000 Caja física + $60.000 Santander". null si fue de una sola cuenta. */
   reparto: string | null;
+  /**
+   * Lo que NO salió del cajón, una línea por cuenta.
+   *
+   * Es lo que hace que un pago repartido aparezca TAMBIÉN abajo, entre los
+   * movimientos por banco, en vez de esconder su parte transferida en la
+   * letra chica de la sección de caja. Ver services/efecto-caja.ts.
+   */
+  tramosNoCaja: Array<{ cuenta: string; monto: number }>;
 }
 
 export interface CierreData {
@@ -385,6 +394,7 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
       afectaCaja: Math.abs(efecto) > 0.0001,
       efectoCaja: efecto,
       reparto: detalleReparto(m),
+      tramosNoCaja: tramosNoCaja(m),
     };
     });
 
@@ -755,6 +765,11 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
     { header: 'Categoría', key: 'categoria', width: 24 },
     { header: 'Cuenta', key: 'cuenta', width: 24 },
     { header: 'Monto', key: 'monto', width: 14 },
+    // Un pago repartido tiene UNA `cuenta` (la primera del reparto) y un monto
+    // total: leído solo, dice que los $100.000 salieron de Caja física cuando
+    // salieron $40.000. Estas dos columnas lo desarman sin sacar el total.
+    { header: 'Del cajón', key: 'delCajon', width: 14 },
+    { header: 'Reparto', key: 'reparto', width: 44 },
     { header: 'Observación', key: 'observacion', width: 40 },
     { header: 'Usuario', key: 'usuario', width: 16 },
   ];
@@ -764,8 +779,10 @@ export async function generarExcelCierre(data: CierreData): Promise<Buffer> {
       hora: m.hora.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }),
       tipo: m.tipo,
       categoria: m.entidad ? `${m.categoria} → ${m.entidad}` : m.categoria,
-      cuenta: m.cuenta,
+      cuenta: m.reparto ? 'varias (ver Reparto)' : m.cuenta,
       monto: fmtMoney(Number(m.monto)),
+      delCajon: m.efectoCaja === 0 ? '—' : fmtMoney(Math.abs(m.efectoCaja)),
+      reparto: m.reparto ?? '',
       observacion: m.observacion ?? '',
       usuario: m.usuario,
     });
@@ -839,10 +856,24 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
   // efectivo físico del turno vs los del resto de las cuentas. Así el cuadre
   // de la caja no se mezcla con tarjetas / transferencias / bancos.
   const movsCaja = data.movimientos.filter((m) => m.afectaCaja);
-  const movsOtras = data.movimientos.filter((m) => !m.afectaCaja);
+  // Un movimiento puede aportar a las DOS secciones: un sueldo pagado 40% en
+  // efectivo y 60% por Mercado Pago sale del cajón por su parte y del banco
+  // por la otra. Antes se partía con un booleano y la parte bancaria de un
+  // pago repartido no llegaba nunca acá, así que esta lista se leía como "todo
+  // lo que se pagó por transferencia" siendo que no lo era.
+  const movsOtras = data.movimientos.flatMap((m) =>
+    m.tramosNoCaja.map((t) => ({
+      mov: m,
+      cuenta: t.cuenta,
+      monto: t.monto,
+      /** El resto del movimiento salió del cajón: hay que decirlo o el monto confunde. */
+      parcial: m.afectaCaja,
+    })),
+  );
   const netoOtras = movsOtras.reduce(
-    (acc, m) =>
-      acc + (m.tipo === 'INGRESO' ? Number(m.monto) : m.tipo === 'EGRESO' ? -Number(m.monto) : 0),
+    (acc, f) =>
+      acc +
+      (f.mov.tipo === 'INGRESO' ? f.monto : f.mov.tipo === 'EGRESO' ? -f.monto : 0),
     0,
   );
   const fmtCant = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
@@ -977,14 +1008,22 @@ export function generarHtmlCierre(data: CierreData): { subject: string; html: st
         movsOtras.length === 0
           ? `<tr><td style="padding:8px 10px;color:#999;font-style:italic;">Sin movimientos en otras cuentas este turno.</td></tr>`
           : movsOtras
-              .map((m) => {
+              .map((f) => {
+                const m = f.mov;
                 const esIng = m.tipo === 'INGRESO';
                 const esTransf = m.tipo === 'TRANSFERENCIA_INTERNA';
                 const col = esTransf ? '#777' : esIng ? '#2C8C5A' : '#' + ROJO.slice(2);
                 const marker = esTransf ? '⇄' : esIng ? '+' : '−';
+                // En un pago repartido el monto de la fila es SÓLO la parte de
+                // esta cuenta. Sin la aclaración, la encargada ve "$60.000
+                // Sueldos" y no lo reconoce contra el pago de $100.000 que
+                // autorizó.
+                const aclara = f.parcial
+                  ? `<div style="font-size:11px;color:#B7791F">parte de ${fmtMoney(Number(m.monto))} · el resto salió del cajón</div>`
+                  : '';
                 return `<tr>
-                  <td style="padding:4px 10px"><span style="color:${col};font-weight:500">${marker}</span> ${etiquetaMov(m)}<div style="font-size:11px;color:#999">${escapeHtml(m.cuenta)}</div></td>
-                  <td style="padding:4px 10px;text-align:right;font-family:monospace;color:${col}">${esTransf ? '' : marker}${fmtMoney(Number(m.monto))}</td>
+                  <td style="padding:4px 10px"><span style="color:${col};font-weight:500">${marker}</span> ${etiquetaMov(m)}<div style="font-size:11px;color:#999">${escapeHtml(f.cuenta)}</div>${aclara}</td>
+                  <td style="padding:4px 10px;text-align:right;font-family:monospace;color:${col}">${esTransf ? '' : marker}${fmtMoney(f.monto)}</td>
                 </tr>`;
               })
               .join('')

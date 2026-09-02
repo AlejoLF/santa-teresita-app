@@ -852,9 +852,21 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // PATCH /admin/facturas/:id — corregir los datos de una factura ANTES de
-  // validar (el humano arregla lo que el OCR leyó mal). Solo en
-  // PENDIENTE_VALIDACION. Reemplaza items si vienen. NO toca pagos.
+  // PATCH /admin/facturas/:id — corregir los datos de una factura.
+  //
+  // Nació para el paso de validación del OCR (el humano arregla lo que la
+  // máquina leyó mal) y por eso sólo aceptaba PENDIENTE_VALIDACION. Pero los
+  // errores aparecen igual DESPUÉS de aceptar: un total mal tipeado, un
+  // concepto que va a otro insumo, o —el más común— la factura cargada al
+  // proveedor equivocado. Sin edición, la única salida era anularla y volver
+  // a cargarla entera.
+  //
+  // El límite real no es el estado, es la PLATA: mientras no haya un peso
+  // imputado, cambiar el total es corregir un dato. Con pagos aplicados, ese
+  // mismo cambio deja el saldo del proveedor mintiendo (pagado > total, o una
+  // deuda que no existe). Por eso el guard ahora es `totalPagado`.
+  //
+  // Reemplaza items si vienen. NO toca pagos.
   fastify.patch(
     '/admin/facturas/:id',
     {
@@ -900,13 +912,20 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       };
       const actual = await prisma.facturaRecibida.findUnique({
         where: { id },
-        select: { id: true, estado: true, numero: true, total: true },
+        select: { id: true, estado: true, numero: true, total: true, totalPagado: true },
       });
       if (!actual) return reply.code(404).send({ error: 'Factura no encontrada' });
-      if (actual.estado !== EstadoFacturaRecibida.PENDIENTE_VALIDACION) {
-        return reply
-          .code(409)
-          .send({ error: 'Solo se puede editar una factura sin validar', estado: actual.estado });
+      if (actual.estado === EstadoFacturaRecibida.ANULADA) {
+        return reply.code(409).send({ error: 'La factura está anulada', estado: actual.estado });
+      }
+      if (Number(actual.totalPagado) > 0.01) {
+        return reply.code(409).send({
+          error:
+            'Esta factura ya tiene pagos imputados: editarla dejaría el saldo del proveedor mal. ' +
+            'Desimputá los pagos primero.',
+          estado: actual.estado,
+          totalPagado: actual.totalPagado.toString(),
+        });
       }
 
       const data: Record<string, unknown> = {};
@@ -1067,6 +1086,102 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         });
       });
       return reply.send({ ok: true, id, estado: 'ANULADA' });
+    },
+  );
+
+  // DELETE /admin/facturas/:id — borrar una factura que NO tendría que existir.
+  //
+  // Distinto de anular, y a propósito. `anular` es para una factura real que
+  // se rechaza: el papel existe, la decisión de no pagarlo es información y
+  // queda en el listado como ANULADA. Esto es para la fila que nunca debió
+  // entrar —la misma factura cargada dos veces, una foto de otra cosa, una
+  // prueba— donde dejarla anulada es ensuciar la búsqueda para siempre con
+  // algo que no pasó.
+  //
+  // Sólo si no tiene un peso imputado: la guarda es la misma que para editar,
+  // porque borrar una factura con pagos dejaría esos pagos apuntando al vacío
+  // y el saldo del proveedor mal. La base además lo impide sola (`PagoFactura`
+  // no cascadea), pero el 409 explica el motivo en vez de tirar un error de FK.
+  //
+  // No se pierde el rastro: el audit log guarda la factura entera antes de
+  // borrarla, así que sigue siendo posible responder "¿qué había acá?".
+  fastify.delete(
+    '/admin/facturas/:id',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        // El motivo va por query y no en el body: `api.delete` del cliente no
+        // manda cuerpo a propósito (Fastify rechaza un body vacío con
+        // Content-Type json — ver la nota de FST_ERR_CTP_EMPTY_JSON_BODY).
+        querystring: z.object({ motivo: z.string().max(500).optional() }),
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const { motivo } = req.query as { motivo?: string };
+
+      const factura = await prisma.facturaRecibida.findUnique({
+        where: { id },
+        include: {
+          items: true,
+          proveedor: { select: { nombre: true } },
+          _count: { select: { pagosFactura: true, movimientosFactura: true } },
+        },
+      });
+      if (!factura) return reply.code(404).send({ error: 'Factura no encontrada' });
+
+      const imputada =
+        Number(factura.totalPagado) > 0.01 ||
+        factura._count.pagosFactura > 0 ||
+        factura._count.movimientosFactura > 0;
+      if (imputada) {
+        return reply.code(409).send({
+          error:
+            'Esta factura tiene pagos imputados: borrarla dejaría esos pagos sin factura y el ' +
+            'saldo del proveedor mal. Desimputá los pagos primero, o anulala si el comprobante ' +
+            'existe pero no se va a pagar.',
+          totalPagado: factura.totalPagado.toString(),
+          pagos: factura._count.pagosFactura,
+          movimientos: factura._count.movimientosFactura,
+        });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        // El snapshot va ANTES del delete: después no hay de dónde sacarlo.
+        await recordAudit({
+          tabla: 'facturas_recibidas',
+          registroId: id,
+          accion: 'DELETE',
+          usuarioId: req.usuario!.id,
+          valorAnterior: {
+            proveedor: factura.proveedor?.nombre ?? null,
+            proveedorId: factura.proveedorId,
+            tipoComprobante: factura.tipoComprobante,
+            puntoVenta: factura.puntoVenta,
+            numero: factura.numero,
+            fechaEmision: factura.fechaEmision.toISOString(),
+            total: factura.total.toString(),
+            estado: factura.estado,
+            origen: factura.origen,
+            observaciones: factura.observaciones,
+            items: factura.items.map((it) => ({
+              descripcion: it.descripcion,
+              cantidad: it.cantidad.toString(),
+              unidad: it.unidad,
+              precioUnitario: it.precioUnitario.toString(),
+              subtotal: it.subtotal.toString(),
+            })),
+          },
+          valorNuevo: null,
+          contexto: { motivo: motivo ?? null, fuente: 'borrado manual desde facturas' },
+          tx,
+        });
+        // Los items cascadean (`onDelete: Cascade`).
+        await tx.facturaRecibida.delete({ where: { id } });
+      });
+
+      return reply.send({ ok: true, id, borrada: true });
     },
   );
 
