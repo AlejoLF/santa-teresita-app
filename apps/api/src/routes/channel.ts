@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@sta/db/client';
-import { RolUsuario } from '@sta/db';
+import { RolUsuario, Prisma } from '@sta/db';
 import { config } from '../config.js';
 import { FueraDeHorarioError, getSesionActualReadOnly } from '../services/sesion-caja.js';
 import {
@@ -92,6 +92,31 @@ function explicarZod(error: z.ZodError): string {
       return `${donde}: ${i.message}`;
     })
     .join(' · ');
+}
+
+/**
+ * ¿Existe ya la tabla del buzón?
+ *
+ * La migración que la crea viaja en el repo, pero el código llega a producción
+ * (Vercel/Railway deployan solos en cada push) ANTES de que alguien corra Cloud
+ * Migrate. En esa ventana la tabla no existe y Postgres rechaza la consulta.
+ *
+ * Sin este chequeo, esa consulta tiraba abajo TODA la pantalla de Integraciones
+ * con un "la base de datos rechazó la operación" — justo la pantalla cuyo
+ * trabajo es explicar qué está mal configurado. Incidente real: 02/09/2026.
+ *
+ * `P2021` es el código de Prisma para "la tabla no existe". Cualquier otro
+ * error se propaga: un problema de conexión NO se disfraza de "falta migrar".
+ */
+async function conBuzon<T>(fn: () => Promise<T>, siNoExiste: T): Promise<[T, boolean]> {
+  try {
+    return [await fn(), true];
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2021') {
+      return [siNoExiste, false];
+    }
+    throw e;
+  }
 }
 
 export default async function channelRoutes(fastify: FastifyInstance) {
@@ -515,11 +540,18 @@ export default async function channelRoutes(fastify: FastifyInstance) {
         getSesionActualReadOnly(),
       ]);
 
-      const ultimas = await prisma.recepcionCanal.findMany({
-        orderBy: { recibidoAt: 'desc' },
-        take: 1,
-        select: { recibidoAt: true, resultado: true, detalle: true },
-      });
+      // El buzón puede no existir todavía (código deployado, Cloud Migrate sin
+      // correr). Que falte NO puede tapar lo demás: la URL para pegar en RAPPI
+      // es justamente lo que hace falta en ese momento.
+      const [ultimas, buzonListo] = await conBuzon(
+        () =>
+          prisma.recepcionCanal.findMany({
+            orderBy: { recibidoAt: 'desc' },
+            take: 1,
+            select: { recibidoAt: true, resultado: true, detalle: true },
+          }),
+        [] as Array<{ recibidoAt: Date; resultado: string; detalle: string | null }>,
+      );
 
       return {
         tokenConfigurado: Boolean(token),
@@ -554,6 +586,9 @@ export default async function channelRoutes(fastify: FastifyInstance) {
             : 'Ahora mismo no hay turno abierto: un pedido que llegue en este momento rebota.',
         },
         ultimaRecepcion: ultimas[0] ?? null,
+        // false = falta correr Cloud Migrate. Se guarda lo que llega igual
+        // (services/recepcion-canal.ts nunca tira), pero no queda registrado.
+        buzonListo,
       };
     },
   );
@@ -572,12 +607,16 @@ export default async function channelRoutes(fastify: FastifyInstance) {
     },
     async (req) => {
       const q = req.query as { limite: number; soloErrores?: boolean };
-      const recepciones = await prisma.recepcionCanal.findMany({
-        where: q.soloErrores ? { resultado: { notIn: ['OK', 'DUPLICADO'] } } : {},
-        orderBy: { recibidoAt: 'desc' },
-        take: q.limite,
-      });
-      return { recepciones };
+      const [recepciones, buzonListo] = await conBuzon(
+        () =>
+          prisma.recepcionCanal.findMany({
+            where: q.soloErrores ? { resultado: { notIn: ['OK', 'DUPLICADO'] } } : {},
+            orderBy: { recibidoAt: 'desc' },
+            take: q.limite,
+          }),
+        [] as Awaited<ReturnType<typeof prisma.recepcionCanal.findMany>>,
+      );
+      return { recepciones, buzonListo };
     },
   );
 
