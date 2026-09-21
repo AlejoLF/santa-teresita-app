@@ -36,8 +36,13 @@ export const NOVEDADES: Novedad[] = [
   {
     version: '2.0.0-alpha.71',
     fecha: '21 de septiembre',
-    titulo: 'Proveedor repetido: ahora te dice qué pasó',
+    titulo: 'Encargos para mayoristas, y proveedor repetido más claro',
     cambios: [
+      'ENCARGOS PARA MAYORISTAS: arriba de todo, al cargar un encargo, ahora hay una barra que dice CON QUÉ LISTA DE PRECIOS estás trabajando, y te deja cambiarla. Si elegís una que no es la del local, la barra se pone naranja para que no se te pase.',
+      'Los precios que ves en pantalla cambian al cambiar la lista: lo que mirás es lo que se va a guardar.',
+      'Al lado podés elegir el CLIENTE MAYORISTA. Cuando lo elegís, se pone sola su lista de precios y se completan nombre y teléfono. Igual podés usar cualquier otra lista con cualquier cliente.',
+      'CUENTA CORRIENTE: con un mayorista elegido aparece un casillero "Va a la cuenta corriente". Tildado, el encargo NO se cobra en el mostrador: cuando marcás la entrega se genera solo el remito que suma a su deuda, y se cobra después desde Mayoristas como siempre.',
+      'Si deshacés la entrega o anulás el encargo, esa deuda se va sola. Si el remito ya se cobró, no te deja y te explica por qué.',
       'PROVEEDORES: si al editar un proveedor le ponés un nombre que YA tiene otro, antes salía "la base de datos rechazó la operación" y no se entendía nada. Ahora te dice cuál es el proveedor que ya existe con ese nombre, y qué hacer.',
       'Ojo, porque casi siempre lo que hace falta es otra cosa: si una factura entró con el proveedor equivocado (pasa cuando la carga el lector de facturas), NO le cambies el nombre al proveedor. Abrí la factura y tocá "no es este" para pasarla al proveedor correcto, dejando tildado "recordar". Así las próximas facturas de ese proveedor entran solas donde van.',
       'También avisa cuando el nombre lo está ocupando un proveedor DESACTIVADO, que no aparece en la lista pero igual reserva el nombre.',

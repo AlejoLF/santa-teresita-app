@@ -131,6 +131,20 @@ export default async function catalogoRoutes(fastify: FastifyInstance) {
         : [];
       const deltaPorOpcion = new Map(overrides.map((o) => [o.opcionId, o.deltaPrecio.toString()]));
 
+      // El ajuste porcentual de la lista pedida. Sin esto, pedir el catálogo
+      // "para la lista X" devolvía los precios de catálogo pelados y la
+      // pantalla mostraba una cosa mientras el backend guardaba otra — el peor
+      // desenlace posible en una pantalla de precios.
+      const listaPedida = q.listaPreciosId
+        ? await getCached(`catalogo:lista:${q.listaPreciosId}`, TTL_PRODUCTOS, () =>
+            prisma.listaPrecios.findUnique({
+              where: { id: q.listaPreciosId },
+              select: { id: true, nombre: true, ajustePctDefault: true },
+            }),
+          )
+        : null;
+      const ajustePct = Number(listaPedida?.ajustePctDefault ?? 0);
+
       // Sabores: el código viene del campo `OpcionModificador.codigo` (asignado en el seed).
       // Si está vacío, fallback a código derivado del producto (legacy).
       // incluyeSalsa: detectado por nombre del tipoProducto.
@@ -159,8 +173,21 @@ export default async function catalogoRoutes(fastify: FastifyInstance) {
             ? 'ESPECIAL'
             : null;
 
+        // `precioBase` sale YA valuado contra la lista pedida: override del
+        // producto si lo hay, o el precio de catálogo con el ajuste de la
+        // lista. Mismo criterio que `crearVenta`/`crearEncargo` y que el
+        // catálogo de mayoristas — si difirieran, la pantalla mentiría.
+        // Sin `listaPreciosId` no cambia nada: el catálogo sale como siempre.
+        const precioBase = listaPedida
+          ? (p.preciosPorLista?.[0]?.precioEfectivo
+              ? Number(p.preciosPorLista[0].precioEfectivo)
+              : Number(p.precioBase) * (1 + ajustePct / 100)
+            ).toFixed(2)
+          : p.precioBase;
+
         return {
           ...p,
+          precioBase,
           modificadores: todosLosMods,
           saboresResumen: sabores.map((s) => s.nombre).slice(0, 8),
           sabores,
@@ -168,7 +195,10 @@ export default async function catalogoRoutes(fastify: FastifyInstance) {
         };
       });
 
-      return { productos: productosConSabores };
+      return {
+        productos: productosConSabores,
+        ...(listaPedida && { lista: { id: listaPedida.id, nombre: listaPedida.nombre } }),
+      };
     },
   );
 

@@ -40,6 +40,25 @@ export const EncargoNuevoSchema = z.object({
   observaciones: z.string().max(500).optional(),
   accion: z.enum(['cargar', 'cobrar']).default('cargar'),
   /**
+   * Lista de precios con la que se valúa el encargo.
+   *
+   * Omitida = la del local (el caso de todos los días). Se manda cuando el
+   * encargo es para un mayorista: la encargada elige su lista y los precios
+   * salen de ahí. Antes esto era imposible —`crearEncargo` resolvía siempre
+   * LOCAL_MOSTRADOR— y los encargos de mayorista había que cargarlos a precio
+   * de mostrador y corregirlos a mano.
+   */
+  listaPreciosId: z.string().uuid().optional(),
+  /** Mayorista destinatario. Obligatorio si el cobro va a cuenta corriente. */
+  clienteMayoristaId: z.string().uuid().optional(),
+  /**
+   * Cómo se cobra:
+   *   - 'AL_ENTREGAR' (default): como cualquier encargo, se cobra al retirar.
+   *   - 'CUENTA_CORRIENTE': no se cobra; al marcar la entrega genera un remito
+   *     que suma a la deuda del mayorista.
+   */
+  cobro: z.enum(['AL_ENTREGAR', 'CUENTA_CORRIENTE']).default('AL_ENTREGAR'),
+  /**
    * Comandera por la que sale la comanda del encargo. Los encargos se toman
    * también desde PCs que no son la del mostrador, así que la caja elige el
    * destino al cargar (no solo al re-imprimir).

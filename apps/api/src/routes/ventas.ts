@@ -13,6 +13,7 @@ import {
   quitarItemDeVenta,
   editarItemDeVenta,
 } from '../services/venta.js';
+import { anularRemitoDeEncargo } from '../services/encargo.js';
 import {
   getOrCreateSesionActual,
   getSesionActualReadOnly,
@@ -629,6 +630,17 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
       if (venta.estado !== EstadoVenta.PROCESADA) {
         return reply.code(400).send({ error: 'La venta no está en estado PROCESADA' });
       }
+      // Un encargo a cuenta corriente NO se cobra por caja: su plata entra
+      // después, cuando el mayorista salda el remito. Dejarlo pasar cobraría
+      // dos veces lo mismo — una acá y otra contra la cuenta corriente.
+      if (venta.encargoACuentaCorriente) {
+        return reply.code(409).send({
+          error:
+            'Este encargo va a la cuenta corriente del mayorista, así que no se cobra acá. ' +
+            'Se cobra desde Mayoristas cuando salda el remito.',
+          codigo: 'ENCARGO_CUENTA_CORRIENTE',
+        });
+      }
 
       // Calcular el descuento manual si aplica.
       //
@@ -919,7 +931,19 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // 2. Marcar la venta como ANULADA
+        // 2. Si era un encargo a cuenta corriente que ya generó remito, la
+        //    deuda del mayorista se va con él. Si no, quedaría debiendo
+        //    mercadería de un pedido anulado, y eso no lo detecta nadie hasta
+        //    que discute la cuenta a fin de mes.
+        if (venta.encargoACuentaCorriente) {
+          await anularRemitoDeEncargo(tx, {
+            encargoId: venta.id,
+            usuarioId: req.usuario!.id,
+            motivo: `Encargo #${venta.numero} anulado: ${body.motivo}`,
+          });
+        }
+
+        // 3. Marcar la venta como ANULADA
         const updated = await tx.venta.update({
           where: { id: venta.id },
           data: {
@@ -930,7 +954,7 @@ export default async function ventasRoutes(fastify: FastifyInstance) {
           },
         });
 
-        // 3. Audit dentro de la misma transacción
+        // 4. Audit dentro de la misma transacción
         await recordAudit({
           tabla: 'ventas',
           registroId: venta.id,

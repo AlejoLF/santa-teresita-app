@@ -33,6 +33,17 @@ interface Categoria {
   id: string;
   nombre: string;
 }
+interface ListaOpcion {
+  id: string;
+  nombre: string;
+  canalDefault: string;
+}
+interface MayoristaOpcion {
+  id: string;
+  nombre: string;
+  telefono: string | null;
+  listaPreciosId: string;
+}
 interface Modificador {
   grupoId: string;
   grupoNombre: string;
@@ -135,20 +146,100 @@ function NuevoEncargoInner() {
   const [indicaciones, setIndicaciones] = useState('');
   const [observaciones, setObservaciones] = useState('');
 
+  // ── Con qué precios y para quién ──────────────────────────────────────
+  const [listas, setListas] = useState<ListaOpcion[]>([]);
+  const [mayoristas, setMayoristas] = useState<MayoristaOpcion[]>([]);
+  const [listaSel, setListaSel] = useState<string>('');
+  const [mayoristaSel, setMayoristaSel] = useState<string>('');
+  const [aCuentaCorriente, setACuentaCorriente] = useState(false);
+  const [cargandoPrecios, setCargandoPrecios] = useState(false);
+
+  const listaActiva = listas.find((l) => l.id === listaSel) ?? null;
+  const mayoristaActivo = mayoristas.find((m) => m.id === mayoristaSel) ?? null;
+
   useEffect(() => {
     (async () => {
       try {
-        const [cats, prods] = await Promise.all([
+        const [cats, opts] = await Promise.all([
           api.getCached<{ categorias: Categoria[] }>('/catalogo/categorias', 5 * 60_000),
-          api.getCached<{ productos: Producto[] }>('/catalogo/productos?limit=2000', 5 * 60_000),
+          api.getCached<{
+            listas: ListaOpcion[];
+            mayoristas: MayoristaOpcion[];
+            listaLocalId: string | null;
+          }>('/encargos/opciones', 5 * 60_000),
         ]);
         setCategorias(cats.categorias ?? []);
-        setProductos(prods.productos ?? []);
+        setListas(opts.listas ?? []);
+        setMayoristas(opts.mayoristas ?? []);
+        setListaSel(opts.listaLocalId ?? opts.listas?.[0]?.id ?? '');
       } catch (e) {
         if (!(e instanceof ApiError) || e.status !== 401) setError('No se pudo cargar el catálogo');
       }
     })();
   }, []);
+
+  // El catálogo se re-pide cuando cambia la lista: los precios que se ven
+  // tienen que ser los que se van a guardar. Mostrar los de mostrador mientras
+  // el encargo se graba a precio mayorista sería peor que no tener el selector.
+  useEffect(() => {
+    if (!listaSel) return;
+    let vigente = true;
+    setCargandoPrecios(true);
+    (async () => {
+      try {
+        const prods = await api.getCached<{ productos: Producto[] }>(
+          `/catalogo/productos?limit=2000&listaPreciosId=${listaSel}`,
+          5 * 60_000,
+        );
+        if (!vigente) return;
+        setProductos(prods.productos ?? []);
+      } catch (e) {
+        if (!vigente) return;
+        if (!(e instanceof ApiError) || e.status !== 401) setError('No se pudo cargar el catálogo');
+      } finally {
+        if (vigente) setCargandoPrecios(false);
+      }
+    })();
+    return () => {
+      vigente = false;
+    };
+  }, [listaSel]);
+
+  // Lo que ya está en el changuito quedó valuado con la lista anterior. Se
+  // revalúa con la nueva en vez de vaciarlo: la encargada se da cuenta tarde
+  // de que era para un mayorista, y hacerla cargar todo de nuevo es la forma
+  // segura de que termine no usando el selector.
+  useEffect(() => {
+    if (productos.length === 0) return;
+    setCart((c) =>
+      c.map((l) => {
+        const p = productos.find((x) => x.id === l.productoId);
+        if (!p) return l;
+        const mods = l.modificadores.map((m) => {
+          const s = p.sabores?.find((x) => x.opcionId === m.opcionId);
+          return s ? { ...m, deltaPrecio: s.deltaPrecio } : m;
+        });
+        return { ...l, precioBase: Number(p.precioBase), modificadores: mods };
+      }),
+    );
+    // Depende SÓLO del catálogo: si mirara el cart entraría en bucle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productos]);
+
+  // Elegir un mayorista trae su lista, que es lo que se quiere el 99% de las
+  // veces. Queda cambiable después: se pidió poder usar cualquier lista con
+  // cualquier cliente.
+  function elegirMayorista(id: string) {
+    setMayoristaSel(id);
+    const m = mayoristas.find((x) => x.id === id);
+    if (!m) {
+      setACuentaCorriente(false);
+      return;
+    }
+    setListaSel(m.listaPreciosId);
+    if (!nombre.trim()) setNombre(m.nombre);
+    if (!telefono.trim() && m.telefono) setTelefono(m.telefono);
+  }
 
   const filtrados = useMemo(() => {
     return productos
@@ -211,6 +302,10 @@ function NuevoEncargoInner() {
 
   async function enviar(accion: 'cargar' | 'cobrar') {
     if (!valido) return;
+    if (accion === 'cobrar' && aCuentaCorriente) {
+      setError('Este encargo va a la cuenta corriente del mayorista: no se cobra acá.');
+      return;
+    }
     setEnviando(accion);
     setError(null);
     try {
@@ -245,6 +340,9 @@ function NuevoEncargoInner() {
         ...(tipoEntrega === 'ENVIO' && { direccionEntrega: direccion.trim() }),
         ...(indicaciones.trim() && { indicacionesEntrega: indicaciones.trim() }),
         ...(observaciones.trim() && { observaciones: observaciones.trim() }),
+        ...(listaSel && { listaPreciosId: listaSel }),
+        ...(mayoristaSel && { clienteMayoristaId: mayoristaSel }),
+        cobro: aCuentaCorriente ? 'CUENTA_CORRIENTE' : 'AL_ENTREGAR',
         destinoImpresion,
       };
       const res = await api.post<{ id: string }>('/encargos', body);
@@ -272,6 +370,94 @@ function NuevoEncargoInner() {
 
       {error && (
         <div className="mb-3 bg-pomodoro-100 text-pomodoro-600 px-3 py-2 rounded text-sm">{error}</div>
+      )}
+
+      {/* ── Con qué precios y para quién ──────────────────────────────────
+          Arriba de todo y siempre visible, no escondido en un desplegable: el
+          error que importa evitar es cargar veinte líneas sin notar que están
+          a precio de mostrador cuando eran para un mayorista. Cuando NO es la
+          lista del local, el cartel cambia de color para que salte a la vista. */}
+      {!adicionDe && (
+        <div
+          className={cn(
+            'mb-3 rounded-lg border p-3',
+            listaActiva && listaActiva.canalDefault !== 'LOCAL_MOSTRADOR'
+              ? 'border-saffron-600/40 bg-saffron-100'
+              : 'border-cream-300 bg-surface-sunken',
+          )}
+        >
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="text-2xs uppercase tracking-wider text-ink-500 flex-1 min-w-[180px]">
+              Lista de precios
+              <select
+                value={listaSel}
+                onChange={(e) => setListaSel(e.target.value)}
+                className="input w-full mt-1 text-sm font-medium"
+              >
+                {listas.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.nombre}
+                    {l.canalDefault === 'LOCAL_MOSTRADOR' ? ' (la del local)' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="text-2xs uppercase tracking-wider text-ink-500 flex-1 min-w-[180px]">
+              Cliente mayorista
+              <select
+                value={mayoristaSel}
+                onChange={(e) => elegirMayorista(e.target.value)}
+                className="input w-full mt-1 text-sm"
+              >
+                <option value="">— No es de un mayorista —</option>
+                {mayoristas.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.nombre}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <p className="text-2xs text-ink-700 mt-2">
+            {cargandoPrecios ? (
+              <span className="text-ink-500">Actualizando los precios…</span>
+            ) : (
+              <>
+                Los precios que ves abajo son los de{' '}
+                <strong>{listaActiva?.nombre ?? 'la lista elegida'}</strong>.
+                {mayoristaActivo && listaActiva?.id !== mayoristaActivo.listaPreciosId && (
+                  <span className="text-saffron-600">
+                    {' '}
+                    Ojo: no es la lista habitual de {mayoristaActivo.nombre}.
+                  </span>
+                )}
+              </>
+            )}
+          </p>
+
+          {/* El switch aparece sólo con un mayorista elegido: sin él no hay
+              cuenta corriente a la que cargar la deuda. */}
+          {mayoristaActivo && (
+            <label className="mt-2 flex items-start gap-2 text-sm text-ink-900 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aCuentaCorriente}
+                onChange={(e) => setACuentaCorriente(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Va a la cuenta corriente de {mayoristaActivo.nombre}
+                <span className="block text-2xs text-ink-500">
+                  {aCuentaCorriente
+                    ? 'No se cobra acá. Cuando marques la entrega se genera el remito que suma a su deuda.'
+                    : 'Se cobra al entregar, como cualquier encargo.'}
+                </span>
+              </span>
+            </label>
+          )}
+        </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-4">
@@ -580,22 +766,40 @@ function NuevoEncargoInner() {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              <button
-                onClick={() => void enviar('cargar')}
-                disabled={!valido || enviando !== null}
-                className="px-3 py-3 rounded-md border-2 border-wood-700 text-wood-700 font-medium hover:bg-wood-50 disabled:opacity-40 transition-colors"
-              >
-                {enviando === 'cargar' ? 'Cargando…' : '📋 Cargar (a pagar)'}
-              </button>
-              <button
-                onClick={() => void enviar('cobrar')}
-                disabled={!valido || enviando !== null}
-                className="px-3 py-3 rounded-md bg-wood-700 text-wood-50 font-medium hover:bg-wood-900 disabled:opacity-40 transition-colors"
-              >
-                {enviando === 'cobrar' ? 'Yendo al cobro…' : '💵 Cobrar'}
-              </button>
-            </div>
+            {/* A cuenta corriente no hay nada que cobrar acá: la plata entra
+                cuando el mayorista salda el remito. Se muestra un solo botón
+                en vez de dejar uno que el backend va a rechazar igual. */}
+            {aCuentaCorriente ? (
+              <div className="pt-1">
+                <button
+                  onClick={() => void enviar('cargar')}
+                  disabled={!valido || enviando !== null}
+                  className="w-full px-3 py-3 rounded-md bg-wood-700 text-wood-50 font-medium hover:bg-wood-900 disabled:opacity-40 transition-colors"
+                >
+                  {enviando === 'cargar' ? 'Cargando…' : '📋 Cargar a cuenta corriente'}
+                </button>
+                <p className="text-2xs text-ink-500 mt-1 text-center">
+                  Se cobra desde Mayoristas cuando salde el remito.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  onClick={() => void enviar('cargar')}
+                  disabled={!valido || enviando !== null}
+                  className="px-3 py-3 rounded-md border-2 border-wood-700 text-wood-700 font-medium hover:bg-wood-50 disabled:opacity-40 transition-colors"
+                >
+                  {enviando === 'cargar' ? 'Cargando…' : '📋 Cargar (a pagar)'}
+                </button>
+                <button
+                  onClick={() => void enviar('cobrar')}
+                  disabled={!valido || enviando !== null}
+                  className="px-3 py-3 rounded-md bg-wood-700 text-wood-50 font-medium hover:bg-wood-900 disabled:opacity-40 transition-colors"
+                >
+                  {enviando === 'cobrar' ? 'Yendo al cobro…' : '💵 Cobrar'}
+                </button>
+              </div>
+            )}
           </section>
         </aside>
       </div>

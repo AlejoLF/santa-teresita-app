@@ -45,17 +45,59 @@ export async function crearEncargo(args: {
 }): Promise<Venta> {
   const { data, usuarioId } = args;
 
+  // ── El mayorista destinatario, si lo hay ────────────────────────────
+  const aCuentaCorriente = data.cobro === 'CUENTA_CORRIENTE';
+  let mayorista = null;
+  if (data.clienteMayoristaId) {
+    mayorista = await prisma.clienteMayorista.findUnique({
+      where: { id: data.clienteMayoristaId },
+      select: { id: true, nombre: true, activo: true, listaPreciosId: true },
+    });
+    if (!mayorista) throw new ReglaNegocioError('El mayorista elegido no existe');
+    if (!mayorista.activo) {
+      throw new ReglaNegocioError(`El mayorista "${mayorista.nombre}" está desactivado.`);
+    }
+  }
+  // Sin mayorista no hay cuenta corriente a la que cargar la deuda. Se valida
+  // acá y no sólo en la pantalla: es plata que se entrega sin registrar.
+  if (aCuentaCorriente && !mayorista) {
+    throw new ReglaNegocioError(
+      'Para dejar un encargo en cuenta corriente hay que decir de qué mayorista es.',
+    );
+  }
+
   const esEnvio = data.tipoEntrega === 'ENVIO';
   const canal: CanalVenta = esEnvio ? CanalVenta.TELEFONO : CanalVenta.MOSTRADOR;
   const modalidad: ModalidadVenta = esEnvio
     ? ModalidadVenta.DELIVERY_PROPIO
     : ModalidadVenta.TAKE_AWAY;
 
-  // Encargos siempre usan la lista del local (precio de mostrador).
-  const lista = await prisma.listaPrecios.findFirst({
-    where: { canalDefault: CanalListaPrecios.LOCAL_MOSTRADOR, activa: true },
-    orderBy: { nombre: 'asc' },
-  });
+  // ── Con qué lista se valúa ──────────────────────────────────────────
+  //
+  // Antes era siempre la del local. La encargada también carga encargos para
+  // mayoristas, que tienen su propia lista: cargarlos a precio de mostrador y
+  // corregir a mano después es la clase de trabajo manual que termina en un
+  // precio mal puesto.
+  //
+  // Prioridad: la que eligió explícitamente > la del mayorista destinatario >
+  // la del local. La explícita gana sobre la del mayorista a propósito: se
+  // pidió poder elegir CUALQUIER lista para cualquier cliente.
+  let lista;
+  if (data.listaPreciosId) {
+    lista = await prisma.listaPrecios.findUnique({ where: { id: data.listaPreciosId } });
+    if (!lista) throw new ReglaNegocioError('La lista de precios elegida no existe');
+    if (!lista.activa) {
+      throw new ReglaNegocioError(`La lista "${lista.nombre}" está desactivada.`);
+    }
+  } else if (mayorista) {
+    lista = await prisma.listaPrecios.findUnique({ where: { id: mayorista.listaPreciosId } });
+    if (!lista) throw new ReglaNegocioError('El mayorista apunta a una lista que no existe');
+  } else {
+    lista = await prisma.listaPrecios.findFirst({
+      where: { canalDefault: CanalListaPrecios.LOCAL_MOSTRADOR, activa: true },
+      orderBy: { nombre: 'asc' },
+    });
+  }
   if (!lista) throw new ReglaNegocioError('No hay lista de precios activa para el local');
 
   const sesion = await getOrCreateSesionActual(usuarioId);
@@ -154,6 +196,8 @@ export async function crearEncargo(args: {
         modalidad,
         pcOrigen: data.pcOrigen,
         clienteId: clienteIdResuelto,
+        clienteMayoristaId: mayorista?.id ?? null,
+        encargoACuentaCorriente: aCuentaCorriente,
         listaPreciosId: lista.id,
         sesionCajaId: sesion.id,
         numeroOrdenTurno: numeroOrden,
@@ -541,4 +585,167 @@ export async function buscarEncargos(args: {
     prisma.venta.count({ where }),
   ]);
   return { encargos: encargos.map(mapEncargoListItem), total, page, pageSize };
+}
+
+/**
+ * El encargo a cuenta corriente se convierte en deuda del mayorista.
+ *
+ * ─── Por qué al ENTREGAR y no al cargar ──────────────────────────────────
+ *
+ * Un encargo se carga días antes y se puede cambiar, ampliar o anular en el
+ * medio. Si el remito naciera con el encargo, la cuenta corriente mostraría
+ * deuda por mercadería que todavía está en el mostrador —y que quizás nunca
+ * sale—. La deuda arranca cuando la mercadería se va: por eso cuelga del
+ * retiro, que es el momento en que eso pasa de verdad.
+ *
+ * ─── Por qué no puede duplicarse ─────────────────────────────────────────
+ *
+ * `remitos.encargo_id` tiene índice ÚNICO. Marcar la entrega dos veces (dos
+ * clicks, dos cajas, un reintento de red) rebota contra la base, no contra un
+ * chequeo de la aplicación que podría correr tarde. El chequeo previo está
+ * igual, pero para dar un error entendible, no como única defensa.
+ *
+ * Incluye las adiciones no anuladas: lo que se entrega es el pedido completo,
+ * no la versión con la que nació.
+ */
+export async function generarRemitoDeEncargo(
+  tx: Prisma.TransactionClient,
+  args: { encargoId: string; usuarioId: string },
+): Promise<{ id: string; numero: number; total: string } | null> {
+  const { encargoId, usuarioId } = args;
+
+  const encargo = await tx.venta.findUnique({
+    where: { id: encargoId },
+    include: {
+      items: { orderBy: { orden: 'asc' } },
+      adicionesEncargo: {
+        where: { estado: { not: EstadoVenta.ANULADA } },
+        orderBy: { fechaApertura: 'asc' },
+        include: { items: { orderBy: { orden: 'asc' } } },
+      },
+      clienteMayorista: { select: { id: true, nombre: true } },
+    },
+  });
+  if (!encargo || !encargo.encargoACuentaCorriente || !encargo.clienteMayorista) return null;
+  if (encargo.estado === EstadoVenta.ANULADA) return null;
+
+  const yaTiene = await tx.remito.findUnique({
+    where: { encargoId },
+    select: { id: true, numero: true, total: true, estado: true },
+  });
+  if (yaTiene) {
+    // Idempotente: volver a marcar la entrega devuelve el remito que ya existe
+    // en vez de romper. Anulado es distinto — ver el comentario de abajo.
+    if (yaTiene.estado !== 'ANULADO') {
+      return { id: yaTiene.id, numero: yaTiene.numero, total: yaTiene.total.toFixed(2) };
+    }
+    throw new ReglaNegocioError(
+      `Este encargo ya generó el remito #${yaTiene.numero} y está anulado. ` +
+        'Si la mercadería sale igual, cargá el remito a mano desde Mayoristas.',
+      409,
+    );
+  }
+
+  // Todas las líneas: las del encargo y las de sus adiciones vivas.
+  const lineas = [...encargo.items, ...encargo.adicionesEncargo.flatMap((a) => a.items)];
+  if (lineas.length === 0) return null;
+
+  // El total sale de sumar las líneas, igual que un remito cargado a mano. No
+  // se usa `venta.total` a propósito: ése puede traer descuento o recargo de
+  // canal del flujo de cobro, y este encargo justamente NO se cobra acá.
+  const total = lineas.reduce((acc, it) => acc + Number(it.subtotal), 0);
+
+  const remito = await tx.remito.create({
+    data: {
+      clienteMayoristaId: encargo.clienteMayorista.id,
+      encargoId,
+      fecha: new Date(),
+      total: total.toFixed(2),
+      observaciones: `Encargo #${encargo.numero}`,
+      usuarioId,
+      items: {
+        create: lineas.map((it, idx) => ({
+          productoId: it.productoId,
+          nombreSnapshot: it.nombreSnapshot,
+          cantidad: it.cantidad,
+          precioUnitario: it.precioUnitario,
+          subtotal: it.subtotal,
+          orden: idx,
+          modificadoresAplicados: it.modificadoresAplicados as never,
+          deltaModificadores: it.deltaModificadores,
+        })),
+      },
+    },
+    include: { items: true },
+  });
+
+  // El padre ANTES que los hijos: el replicador aplica por secuencia y la FK
+  // del item exige que el remito ya esté en la nube. Mismo motivo que en la
+  // carga manual de remitos (routes/mayoristas.ts).
+  await recordAudit({
+    tabla: 'remitos',
+    registroId: remito.id,
+    accion: 'INSERT',
+    usuarioId,
+    valorNuevo: {
+      numero: remito.numero,
+      cliente: encargo.clienteMayorista.nombre,
+      total: remito.total.toFixed(2),
+      desdeEncargo: encargo.numero,
+    },
+    tx,
+  });
+  for (const it of remito.items) {
+    await recordAudit({
+      tabla: 'remito_items',
+      registroId: it.id,
+      accion: 'INSERT',
+      usuarioId,
+      valorNuevo: { remitoId: remito.id, nombre: it.nombreSnapshot },
+      tx,
+    });
+  }
+
+  return { id: remito.id, numero: remito.numero, total: remito.total.toFixed(2) };
+}
+
+/**
+ * Deshacer la entrega (o anular el encargo) tiene que sacar la deuda.
+ *
+ * Si no, queda un mayorista debiendo mercadería que no se llevó — y eso no lo
+ * detecta nadie hasta que discute la cuenta a fin de mes.
+ *
+ * Un remito YA COBRADO no se toca: ahí la plata entró, y borrarlo dejaría el
+ * cobro apuntando al vacío. En ese caso se avisa y lo resuelve una persona.
+ */
+export async function anularRemitoDeEncargo(
+  tx: Prisma.TransactionClient,
+  args: { encargoId: string; usuarioId: string; motivo: string },
+): Promise<void> {
+  const remito = await tx.remito.findUnique({
+    where: { encargoId: args.encargoId },
+    select: { id: true, numero: true, estado: true },
+  });
+  if (!remito || remito.estado === 'ANULADO') return;
+  if (remito.estado === 'PAGADO') {
+    throw new ReglaNegocioError(
+      `El remito #${remito.numero} de este encargo ya fue cobrado. Para deshacerlo hay que ` +
+        'revertir primero ese cobro desde Mayoristas.',
+      409,
+    );
+  }
+
+  await tx.remito.update({
+    where: { id: remito.id },
+    data: { estado: 'ANULADO', motivoAnulacion: args.motivo, anuladoAt: new Date() },
+  });
+  await recordAudit({
+    tabla: 'remitos',
+    registroId: remito.id,
+    accion: 'UPDATE',
+    usuarioId: args.usuarioId,
+    valorAnterior: { estado: remito.estado },
+    valorNuevo: { estado: 'ANULADO', motivo: args.motivo },
+    tx,
+  });
 }
