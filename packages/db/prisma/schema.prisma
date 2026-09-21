@@ -656,6 +656,8 @@ model ClienteMayorista {
 
   listaPrecios ListaPrecios @relation(fields: [listaPreciosId], references: [id])
   remitos      Remito[]
+  /// Encargos cargados a nombre de este mayorista (pestaña Encargos).
+  encargos     Venta[]
 
   @@index([activo])
   @@map("clientes_mayoristas")
@@ -678,11 +680,16 @@ model Remito {
   /// Movimiento del cobro que saldó este remito. Nullable: se puede marcar
   /// pagado a mano (cobro viejo, ajuste) sin un movimiento asociado.
   pagadoConMovimientoId String?      @map("pagado_con_movimiento_id") @db.Uuid
+  /// El encargo que lo generó, cuando salió de la pestaña Encargos con cobro
+  /// "a cuenta corriente". ÚNICO a propósito: es la garantía de que entregar
+  /// dos veces el mismo encargo no duplique la deuda del mayorista.
+  encargoId             String?      @unique @map("encargo_id") @db.Uuid
   creadoAt              DateTime     @default(now()) @map("creado_at")
 
   clienteMayorista    ClienteMayorista @relation(fields: [clienteMayoristaId], references: [id])
   items               RemitoItem[]
   pagadoConMovimiento Movimiento?      @relation(fields: [pagadoConMovimientoId], references: [id], onDelete: SetNull)
+  encargo             Venta?           @relation("RemitoDeEncargo", fields: [encargoId], references: [id])
 
   @@index([clienteMayoristaId, estado])
   @@index([pagadoConMovimientoId])
@@ -1075,16 +1082,34 @@ model Venta {
   retiradoAt              DateTime?             @map("retirado_at")
   /// Quién marcó el retiro (sin relación, igual que usuarioCobroEncargoId).
   usuarioRetiroEncargoId  String?               @map("usuario_retiro_encargo_id") @db.Uuid
+  /// Mayorista destinatario del encargo.
+  ///
+  /// Va aparte de `clienteId` porque los mayoristas viven en su PROPIA tabla
+  /// (`clientes_mayoristas`), con su lista de precios y su cuenta corriente;
+  /// `clienteId` apunta a `clientes`, que son los consumidores finales. Son
+  /// dos cosas distintas y unificarlas mezclaría la cuenta corriente de una
+  /// empresa con el historial de un cliente de mostrador.
+  clienteMayoristaId      String?               @map("cliente_mayorista_id") @db.Uuid
+  /// true = este encargo NO se cobra al entregar: suma a la cuenta corriente
+  /// del mayorista, generando un remito cuando se marca la entrega.
+  ///
+  /// Es una elección del momento de la carga, no una propiedad del mayorista:
+  /// al mismo cliente se le puede vender a cuenta corriente un día y cobrarle
+  /// en el mostrador al otro.
+  encargoACuentaCorriente Boolean               @default(false) @map("encargo_a_cuenta_corriente")
 
-  cliente             Cliente?     @relation(fields: [clienteId], references: [id])
-  listaPrecios        ListaPrecios @relation(fields: [listaPreciosId], references: [id])
-  usuarioApertura     Usuario      @relation("VentaApertura", fields: [usuarioAperturaId], references: [id])
-  usuarioCierre       Usuario?     @relation("VentaCierre", fields: [usuarioCierreId], references: [id])
-  usuarioAnulacion    Usuario?     @relation("VentaAnulacion", fields: [usuarioAnulacionId], references: [id])
-  usuarioCobroEncargo Usuario?     @relation("VentaCobroEncargo", fields: [usuarioCobroEncargoId], references: [id])
-  sesionCaja          SesionCaja?  @relation(fields: [sesionCajaId], references: [id])
-  encargoPadre        Venta?       @relation("EncargoAdiciones", fields: [encargoPadreId], references: [id])
-  adicionesEncargo    Venta[]      @relation("EncargoAdiciones")
+  clienteMayorista    ClienteMayorista? @relation(fields: [clienteMayoristaId], references: [id])
+  /// El remito que generó este encargo al entregarse (cuenta corriente).
+  remitoGenerado      Remito?           @relation("RemitoDeEncargo")
+  cliente             Cliente?          @relation(fields: [clienteId], references: [id])
+  listaPrecios        ListaPrecios      @relation(fields: [listaPreciosId], references: [id])
+  usuarioApertura     Usuario           @relation("VentaApertura", fields: [usuarioAperturaId], references: [id])
+  usuarioCierre       Usuario?          @relation("VentaCierre", fields: [usuarioCierreId], references: [id])
+  usuarioAnulacion    Usuario?          @relation("VentaAnulacion", fields: [usuarioAnulacionId], references: [id])
+  usuarioCobroEncargo Usuario?          @relation("VentaCobroEncargo", fields: [usuarioCobroEncargoId], references: [id])
+  sesionCaja          SesionCaja?       @relation(fields: [sesionCajaId], references: [id])
+  encargoPadre        Venta?            @relation("EncargoAdiciones", fields: [encargoPadreId], references: [id])
+  adicionesEncargo    Venta[]           @relation("EncargoAdiciones")
 
   items             ItemVenta[]
   pagos             Pago[]
@@ -1104,6 +1129,8 @@ model Venta {
   @@index([esEncargo, fechaEntregaPromesa])
   @@index([encargoPadreId])
   @@index([esEncargo, retiradoAt])
+  /// La cuenta corriente del mayorista se arma buscando sus encargos.
+  @@index([clienteMayoristaId])
   // Idempotencia de órdenes de canal: un índice ÚNICO PARCIAL, scopeado al
   // usuario de sistema "Canales", garantiza que el puente automático
   // (/channel/orders) cree UNA sola venta por (canal, idExternoCanal) aunque el
@@ -1970,14 +1997,14 @@ model RecepcionCanal {
   /// puntas, nunca el valor. Alcanza para distinguir "no mandó token" de "mandó
   /// uno distinto" sin dejar un secreto guardado —y replicado a la nube— en una
   /// tabla de diagnóstico.
-  headers    Json     @db.JsonB
+  headers   Json    @db.JsonB
   /// Body crudo parseado como JSON. Null si no era JSON válido.
-  body       Json?    @db.JsonB
+  body      Json?   @db.JsonB
   /// El body tal cual llegó, cuando no se pudo parsear (o vino vacío).
-  bodyTexto  String?  @map("body_texto")
+  bodyTexto String? @map("body_texto")
   /// Cuánto pesaba el body original. Si superó el tope, `body`/`bodyTexto` van
   /// recortados y esto dice cuánto era en realidad.
-  bytes      Int      @default(0)
+  bytes     Int     @default(0)
 
   status    Int
   /// OK · SIN_TOKEN_CONFIGURADO · TOKEN_INVALIDO · BODY_INVALIDO ·

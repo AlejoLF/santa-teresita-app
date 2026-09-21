@@ -19,6 +19,8 @@ import {
   type PeriodoBusqueda,
 } from '../services/filtro-temporal.js';
 import { prisma } from '@sta/db/client';
+import { generarRemitoDeEncargo, anularRemitoDeEncargo } from '../services/encargo.js';
+import { ReglaNegocioError } from '../services/errores.js';
 import { EstadoVenta } from '@sta/db';
 
 /** Hoy en formato YYYY-MM-DD, en hora de Argentina. */
@@ -77,6 +79,37 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
         }
         throw e;
       }
+    },
+  );
+
+  // GET /encargos/opciones — lo que la pantalla de carga necesita para elegir
+  // con qué precios y para quién.
+  //
+  // Va acá y no en /admin/listas ni /admin/mayoristas a propósito: esos dos son
+  // sólo-ADMIN, y los encargos los carga cualquiera que esté en la caja. Sería
+  // un error abrirles el panel de administración entero para que puedan elegir
+  // una lista, así que esto devuelve lo mínimo: nombres e ids, sin precios ni
+  // datos fiscales ni saldos.
+  fastify.get(
+    '/encargos/opciones',
+    { preHandler: fastify.requireAuth() },
+    async () => {
+      const [listas, mayoristas] = await Promise.all([
+        prisma.listaPrecios.findMany({
+          where: { activa: true },
+          select: { id: true, nombre: true, canalDefault: true },
+          orderBy: { nombre: 'asc' },
+        }),
+        prisma.clienteMayorista.findMany({
+          where: { activo: true },
+          select: { id: true, nombre: true, telefono: true, listaPreciosId: true },
+          orderBy: { nombre: 'asc' },
+        }),
+      ]);
+      // La del local es la que se usa por defecto; la pantalla la marca.
+      const localId =
+        listas.find((l) => l.canalDefault === 'LOCAL_MOSTRADOR')?.id ?? listas[0]?.id ?? null;
+      return { listas, mayoristas, listaLocalId: localId };
     },
   );
 
@@ -412,7 +445,13 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
 
       const venta = await prisma.venta.findUnique({
         where: { id: params.id },
-        select: { id: true, esEncargo: true, estado: true, encargoPadreId: true },
+        select: {
+          id: true,
+          esEncargo: true,
+          estado: true,
+          encargoPadreId: true,
+          encargoACuentaCorriente: true,
+        },
       });
       if (!venta || !venta.esEncargo) {
         return reply.code(404).send({ error: 'Encargo no encontrado' });
@@ -426,21 +465,51 @@ export default async function encargosRoutes(fastify: FastifyInstance) {
         });
       }
 
-      await prisma.venta.update({
-        where: { id: venta.id },
-        data: {
-          retiradoAt: retirado ? new Date() : null,
-          usuarioRetiroEncargoId: retirado ? req.usuario!.id : null,
-        },
-      });
-      await recordAudit({
-        tabla: 'ventas',
-        registroId: venta.id,
-        accion: 'UPDATE',
-        usuarioId: req.usuario!.id,
-        valorNuevo: { encargoRetirado: retirado },
-      });
-      return reply.send(await getVentaCompleta(venta.id));
+      // Marcar la entrega y mover la cuenta corriente van en la MISMA
+      // transacción: si el remito falla, el encargo no puede quedar entregado
+      // sin deuda — sería mercadería que salió y no le debe nadie.
+      let remito: { id: string; numero: number; total: string } | null = null;
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.venta.update({
+            where: { id: venta.id },
+            data: {
+              retiradoAt: retirado ? new Date() : null,
+              usuarioRetiroEncargoId: retirado ? req.usuario!.id : null,
+            },
+          });
+          await recordAudit({
+            tabla: 'ventas',
+            registroId: venta.id,
+            accion: 'UPDATE',
+            usuarioId: req.usuario!.id,
+            valorNuevo: { encargoRetirado: retirado },
+            tx,
+          });
+
+          if (!venta.encargoACuentaCorriente) return;
+          if (retirado) {
+            remito = await generarRemitoDeEncargo(tx, {
+              encargoId: venta.id,
+              usuarioId: req.usuario!.id,
+            });
+          } else {
+            // Se deshizo la entrega: la deuda tiene que irse con ella.
+            await anularRemitoDeEncargo(tx, {
+              encargoId: venta.id,
+              usuarioId: req.usuario!.id,
+              motivo: 'Se deshizo la entrega del encargo',
+            });
+          }
+        });
+      } catch (e) {
+        if (e instanceof ReglaNegocioError) {
+          return reply.code(e.statusCode).send({ error: e.message });
+        }
+        throw e;
+      }
+
+      return reply.send({ ...(await getVentaCompleta(venta.id)), remitoGenerado: remito });
     },
   );
 
