@@ -34,6 +34,17 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.72',
+    fecha: '21 de septiembre',
+    titulo: 'Percepciones al cargar una factura a mano',
+    cambios: [
+      'FACTURAS: al cargar una factura a mano, abajo del IVA ahora hay una sección "Percepciones y otros conceptos". Ahí cargás lo que la factura suma DESPUÉS del IVA: percepción de IIBB, de ganancias, sellados, fletes.',
+      'Cada una lleva SU nombre, el que trae el comprobante. Así, cuando revisás la factura tres meses después, sabés qué era cada cosa.',
+      'El total las suma solo. Ya no hace falta inflar el neto para que cierre — el neto queda como el del papel.',
+      'Podés cargar varias, y también verlas y corregirlas después desde la ficha de la factura.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.71',
     fecha: '21 de septiembre',
     titulo: 'Encargos para mayoristas, y proveedor repetido más claro',
