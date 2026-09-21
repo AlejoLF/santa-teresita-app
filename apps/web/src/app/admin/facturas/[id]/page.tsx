@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { Fragment, use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
@@ -44,6 +44,8 @@ interface FacturaDetalle {
   fechaVencimiento: string | null;
   netoGravado: string;
   iva21: string;
+  /** Conceptos posteriores al IVA: percepciones, sellados, fletes. */
+  percepciones?: Array<{ id: string; concepto: string; monto: string }>;
   total: string;
   totalPagado: string;
   saldo: string;
@@ -887,6 +889,16 @@ function ReadOnlyView({
           <span className="text-right">
             <MoneyAmount value={factura.iva21} />
           </span>
+          {/* Cada percepción con SU nombre, y no un "otros impuestos" mudo:
+              el punto de cargarlas es poder reconocerlas tres meses después. */}
+          {(factura.percepciones ?? []).map((pc) => (
+            <Fragment key={pc.id}>
+              <span className="text-ink-500">{pc.concepto}:</span>
+              <span className="text-right">
+                <MoneyAmount value={pc.monto} />
+              </span>
+            </Fragment>
+          ))}
           <span className="border-t border-cream-300 pt-2 font-semibold text-ink-900">Total:</span>
           <span className="border-t border-cream-300 pt-2 text-right font-semibold">
             <MoneyAmount value={factura.total} className="text-md text-teresita-700" />

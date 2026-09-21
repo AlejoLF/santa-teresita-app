@@ -407,6 +407,15 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
               }),
             )
             .default([]),
+          percepciones: z
+            .array(
+              z.object({
+                concepto: z.string().min(1).max(120),
+                monto: z.string().regex(/^-?\d+(\.\d{1,2})?$/),
+              }),
+            )
+            .max(20)
+            .default([]),
         }),
       },
     },
@@ -432,9 +441,14 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           alicuotaIva: string;
           subtotal: string;
         }>;
+        percepciones: Array<{ concepto: string; monto: string }>;
       };
 
       const fechaEm = new Date(body.fechaEmision);
+      // `otrosImpuestos` queda con la SUMA de las percepciones: es el campo que
+      // ya leían el Excel de facturas y la ingesta por OCR, y así siguen viendo
+      // el mismo número sin saber de la tabla nueva.
+      const totalPercepciones = body.percepciones.reduce((a, p) => a + Number(p.monto), 0);
 
       const createdTx = await prisma.$transaction(async (tx) => {
         const factura = await tx.facturaRecibida.create({
@@ -448,6 +462,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
             fechaVencimiento: body.fechaVencimiento ? new Date(body.fechaVencimiento) : null,
             netoGravado: body.neto,
             iva21: body.iva,
+            otrosImpuestos: totalPercepciones.toFixed(2),
             total: body.total,
             estado: EstadoFacturaRecibida.PENDIENTE_PAGO,
             origen: 'PROGRAMA_MANUAL',
@@ -464,6 +479,13 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
                 precioUnitario: it.precioUnitario,
                 alicuotaIva: it.alicuotaIva,
                 subtotal: it.subtotal,
+                orden: idx,
+              })),
+            },
+            percepciones: {
+              create: body.percepciones.map((pc, idx) => ({
+                concepto: pc.concepto.trim(),
+                monto: pc.monto,
                 orden: idx,
               })),
             },
@@ -517,6 +539,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         include: {
           proveedor: { select: { id: true, nombre: true } },
           items: { include: { insumo: true }, orderBy: { orden: 'asc' } },
+          percepciones: { orderBy: { orden: 'asc' } },
           pagosFactura: {
             include: { pago: { include: { cuenta: { select: { nombre: true } } } } },
           },
@@ -938,6 +961,17 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
               }),
             )
             .optional(),
+          // Conceptos posteriores al IVA (percepciones, sellados, fletes). Si
+          // vienen, reemplazan a los que había — igual criterio que `items`.
+          percepciones: z
+            .array(
+              z.object({
+                concepto: z.string().min(1).max(120),
+                monto: z.string().regex(/^-?\d+(\.\d{1,2})?$/),
+              }),
+            )
+            .max(20)
+            .optional(),
         }),
       },
     },
@@ -948,6 +982,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           insumoId?: string | null; descripcion: string; cantidad: string;
           unidad: string; precioUnitario: string; alicuotaIva: string; subtotal: string;
         }>;
+        percepciones?: Array<{ concepto: string; monto: string }>;
       };
       const actual = await prisma.facturaRecibida.findUnique({
         where: { id },
@@ -984,6 +1019,21 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       if (body.observaciones !== undefined) data.observaciones = body.observaciones;
 
       const updated = await prisma.$transaction(async (tx) => {
+        if (body.percepciones) {
+          await tx.facturaPercepcion.deleteMany({ where: { facturaId: id } });
+          data.percepciones = {
+            create: body.percepciones.map((pc, idx) => ({
+              concepto: pc.concepto.trim(),
+              monto: pc.monto,
+              orden: idx,
+            })),
+          };
+          // El rollup acompaña: si no, `otrosImpuestos` quedaría con la suma
+          // vieja y el Excel mostraría un número que ya no existe.
+          data.otrosImpuestos = body.percepciones
+            .reduce((a, pc) => a + Number(pc.monto), 0)
+            .toFixed(2);
+        }
         if (body.items) {
           await tx.facturaItemRecibida.deleteMany({ where: { facturaId: id } });
           data.items = {

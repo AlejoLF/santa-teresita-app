@@ -1545,6 +1545,7 @@ model FacturaRecibida {
   usuarioValidacion Usuario?  @relation("FacturaValidadaPor", fields: [usuarioValidacionId], references: [id])
 
   items              FacturaItemRecibida[]
+  percepciones       FacturaPercepcion[]
   pagosFactura       PagoFactura[]
   movimientosFactura MovimientoFactura[]
 
@@ -1552,6 +1553,32 @@ model FacturaRecibida {
   @@index([estado, fechaVencimiento])
   @@index([proveedorId, estado])
   @@map("facturas_recibidas")
+}
+
+/// Un concepto que la factura suma DESPUÉS del IVA: percepciones de IIBB, de
+/// ganancias, impuestos municipales, fletes.
+///
+/// No son ítems: no tienen cantidad ni precio unitario y no se le compran a
+/// nadie — se agregan al pie del comprobante. Y no entran en el IVA: por eso
+/// el total no es `neto + iva` cuando aparecen.
+///
+/// Tampoco alcanzaba el `otrosImpuestos` que ya existía: es UN número sin
+/// nombre, y la encargada necesita saber QUÉ es cada cosa cuando revisa la
+/// factura tres meses después. `otrosImpuestos` se mantiene con la SUMA de
+/// estas filas, así el Excel de facturas y la ingesta por OCR siguen leyendo
+/// lo mismo que antes.
+model FacturaPercepcion {
+  id         String  @id @default(uuid()) @db.Uuid
+  facturaId  String  @map("factura_id") @db.Uuid
+  /// Cómo lo llama el comprobante: "Percepción IIBB", "Sellado", "Flete".
+  concepto   String  @db.VarChar(120)
+  monto      Decimal @db.Decimal(18, 2)
+  orden      Int     @default(0)
+
+  factura FacturaRecibida @relation(fields: [facturaId], references: [id], onDelete: Cascade)
+
+  @@index([facturaId])
+  @@map("factura_percepciones")
 }
 
 model FacturaItemRecibida {

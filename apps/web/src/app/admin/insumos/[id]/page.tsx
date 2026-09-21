@@ -582,6 +582,16 @@ function FormNuevaFactura({
   const [usarItems, setUsarItems] = useState(true);
   const [netoManual, setNetoManual] = useState('');
   const [ivaManual, setIvaManual] = useState('');
+  /**
+   * Conceptos que el comprobante suma DESPUÉS del IVA: percepciones de IIBB,
+   * de ganancias, sellados, fletes.
+   *
+   * No son ítems —no tienen cantidad ni precio— y no pagan IVA. Sin esto el
+   * total se calculaba `neto + IVA` y no había dónde meterlos: la encargada
+   * terminaba inflando el neto para que cerrara, y la factura quedaba con un
+   * neto que no era el del papel.
+   */
+  const [percepciones, setPercepciones] = useState<Array<{ concepto: string; monto: string }>>([]);
   // Pago opcional
   const [pagarAhora, setPagarAhora] = useState(false);
   const [cuentas, setCuentas] = useState<CuentaShort[]>([]);
@@ -630,7 +640,18 @@ function FormNuevaFactura({
 
   const neto = usarItems ? calculados.neto.toFixed(2) : netoManual || '0';
   const iva = usarItems ? calculados.iva.toFixed(2) : ivaManual || '0';
-  const total = (Number(neto) + Number(iva)).toFixed(2);
+  const totalPercepciones = percepciones.reduce((a, p) => a + (Number(p.monto) || 0), 0);
+  const total = (Number(neto) + Number(iva) + totalPercepciones).toFixed(2);
+
+  function addPercepcion() {
+    setPercepciones((arr) => [...arr, { concepto: '', monto: '' }]);
+  }
+  function setPercepcion(idx: number, patch: Partial<{ concepto: string; monto: string }>) {
+    setPercepciones((arr) => arr.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
+  }
+  function removePercepcion(idx: number) {
+    setPercepciones((arr) => arr.filter((_, i) => i !== idx));
+  }
 
   // Pago helpers
   function addPagoLinea() {
@@ -708,6 +729,10 @@ function FormNuevaFactura({
               subtotal: subtotalLinea(l).toFixed(2),
             }))
           : [],
+        // Sólo las completas: una fila a medio llenar es ruido, no un dato.
+        percepciones: percepciones
+          .filter((p) => p.concepto.trim() && Number(p.monto))
+          .map((p) => ({ concepto: p.concepto.trim(), monto: Number(p.monto).toFixed(2) })),
       });
 
       // 2. Si pagar ahora, registrar el pago multi-cuenta
@@ -885,6 +910,64 @@ function FormNuevaFactura({
             )}
           </section>
 
+          {/* Percepciones y otros conceptos — VAN DESPUÉS DEL IVA.
+              Es literal: percepción de IIBB, de ganancias, sellados, fletes.
+              No pagan IVA y no son ítems, así que van acá y no arriba. */}
+          <section className="border border-cream-300 rounded-md p-3">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-xs font-medium text-ink-700">
+                Percepciones y otros conceptos
+              </h3>
+              <button
+                type="button"
+                onClick={addPercepcion}
+                className="text-2xs text-teresita-700 hover:underline"
+              >
+                + Agregar
+              </button>
+            </div>
+            <p className="text-2xs text-ink-500 mb-2">
+              Lo que la factura suma <strong>después</strong> del IVA: percepción de IIBB, de
+              ganancias, sellados, fletes. Poneles el nombre que trae el comprobante.
+            </p>
+
+            {percepciones.length === 0 ? (
+              <p className="text-2xs text-ink-400 italic py-1">
+                Ninguna. La mayoría de las facturas no tienen.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {percepciones.map((pc, idx) => (
+                  <div key={idx} className="flex gap-2 items-center">
+                    <input
+                      value={pc.concepto}
+                      onChange={(e) => setPercepcion(idx, { concepto: e.target.value })}
+                      className="input flex-1 text-sm"
+                      placeholder="Percepción IIBB"
+                      maxLength={120}
+                    />
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={pc.monto}
+                      onChange={(e) => setPercepcion(idx, { monto: e.target.value })}
+                      className="input w-28 font-mono text-sm"
+                      placeholder="0.00"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removePercepcion(idx)}
+                      className="text-pomodoro-600 px-1 text-sm"
+                      title="Quitar"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           {/* Totales */}
           <section className="bg-surface-sunken rounded-md p-3 grid grid-cols-3 gap-2 sm:gap-3 text-sm font-mono">
             <div className="min-w-0">
@@ -895,6 +978,12 @@ function FormNuevaFactura({
               <div className="text-2xs text-ink-500 uppercase">IVA</div>
               <MoneyAmount value={iva} fit />
             </div>
+            {totalPercepciones !== 0 && (
+              <div className="min-w-0">
+                <div className="text-2xs text-ink-500 uppercase">Percepciones</div>
+                <MoneyAmount value={totalPercepciones.toFixed(2)} fit />
+              </div>
+            )}
             <div className="min-w-0">
               <div className="text-2xs text-ink-500 uppercase">Total</div>
               <MoneyAmount value={total} fit className="text-md text-teresita-700 font-semibold" />
