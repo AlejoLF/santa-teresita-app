@@ -34,6 +34,16 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.71',
+    fecha: '21 de septiembre',
+    titulo: 'Proveedor repetido: ahora te dice qué pasó',
+    cambios: [
+      'PROVEEDORES: si al editar un proveedor le ponés un nombre que YA tiene otro, antes salía "la base de datos rechazó la operación" y no se entendía nada. Ahora te dice cuál es el proveedor que ya existe con ese nombre, y qué hacer.',
+      'Ojo, porque casi siempre lo que hace falta es otra cosa: si una factura entró con el proveedor equivocado (pasa cuando la carga el lector de facturas), NO le cambies el nombre al proveedor. Abrí la factura y tocá "no es este" para pasarla al proveedor correcto, dejando tildado "recordar". Así las próximas facturas de ese proveedor entran solas donde van.',
+      'También avisa cuando el nombre lo está ocupando un proveedor DESACTIVADO, que no aparece en la lista pero igual reserva el nombre.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.70',
     fecha: '2 de septiembre',
     titulo: 'Corregir facturas y horas ya cargadas, y el cierre más claro',

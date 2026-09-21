@@ -36,6 +36,7 @@ import {
   nombreArchivoExport,
 } from '../services/export-busqueda.js';
 import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
+import { ReglaNegocioError } from '../services/errores.js';
 import {
   periodoBusquedaSchema,
   paginacionSchema,
@@ -218,6 +219,39 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
     activo: z.boolean().optional(),
   };
 
+  /**
+   * El nombre del proveedor es ÚNICO en la base (`proveedores_nombre_key`).
+   *
+   * Sin este chequeo, ponerle a un proveedor el nombre de otro que ya existe
+   * reventaba con un P2002 de Prisma, que el clasificador convierte en "La
+   * base de datos rechazó la operación" — un cartel que no dice qué pasó ni
+   * qué hacer. Incidente real: el OCR creó un proveedor con el nombre impreso
+   * en la factura, la encargada fue a Proveedores → Editar para corregirlo al
+   * nombre real, y como ese proveedor YA existía sólo vio el error genérico.
+   *
+   * Y el mensaje no es lo único que estaba mal: renombrar era la operación
+   * equivocada. Si el proveedor bueno ya existe, cambiarle el nombre al
+   * duplicado no junta nada — dejaría las facturas repartidas entre los dos.
+   * Lo que corresponde es mover las facturas al que ya está, que además
+   * enseña el alias para las próximas. Por eso el error explica ESE camino.
+   */
+  async function exigirNombreLibre(nombre: string, exceptoId?: string): Promise<void> {
+    const choca = await prisma.proveedor.findUnique({
+      where: { nombre },
+      select: { id: true, nombre: true, activo: true },
+    });
+    if (!choca || choca.id === exceptoId) return;
+    throw new ReglaNegocioError(
+      `Ya existe un proveedor llamado "${choca.nombre}"` +
+        (choca.activo ? '' : ' (está desactivado)') +
+        '. No se puede repetir el nombre. Si lo que querés es que las facturas de éste ' +
+        `queden en "${choca.nombre}", no lo renombres: abrí cada factura y usá "no es este" ` +
+        'para pasarla, dejando tildado "recordar" — así las próximas entran solas al correcto. ' +
+        'Después desactivá el proveedor que sobra.',
+      409,
+    );
+  }
+
   fastify.post(
     '/admin/proveedores',
     {
@@ -226,6 +260,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
     },
     async (req, reply) => {
       const body = req.body as Record<string, unknown>;
+      await exigirNombreLibre(body.nombre as string);
       // Email vacío → null (zod acepta '' como alternativa al email válido).
       const email = body.email === '' ? null : (body.email ?? null);
       const created = await prisma.proveedor.create({
@@ -275,6 +310,10 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       const body = req.body as Record<string, unknown>;
       const before = await prisma.proveedor.findUnique({ where: { id: params.id } });
       if (!before) return reply.code(404).send({ error: 'Proveedor no encontrado' });
+
+      if (typeof body.nombre === 'string' && body.nombre !== before.nombre) {
+        await exigirNombreLibre(body.nombre, params.id);
+      }
 
       // Email vacío explícito → null (limpieza).
       const data: Record<string, unknown> = {};
