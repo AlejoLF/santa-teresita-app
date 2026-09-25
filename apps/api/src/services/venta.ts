@@ -12,7 +12,7 @@ import {
 import type { ItemNuevo, VentaNueva } from '@sta/shared';
 import { subtotalItem } from '@sta/shared';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
-import { recordAudit } from './audit.js';
+import { recordAudit, recordAuditBatch } from './audit.js';
 import { encolarComandasParaVenta, ventaYaEnviadaACocina } from './impresion.js';
 import {
   resolverDeltasDeLista,
@@ -379,17 +379,21 @@ export async function crearVenta(args: {
     //
     // Van DESPUÉS del audit de la venta (mayor `secuencia`), que es el orden
     // que respeta las FK item → venta y delivery → venta al replicar.
-    for (const it of venta.items) {
-      await recordAudit({
+    //
+    // En UNA tanda, no uno por uno: un pedido de treinta renglones eran
+    // noventa viajes a la base dentro de la transacción, y eso es lo que la
+    // hacía cortar. La cadena de hashes sale igual (ver recordAuditBatch).
+    await recordAuditBatch(
+      tx,
+      venta.items.map((it) => ({
         tabla: 'items_venta',
         registroId: it.id,
         accion: 'INSERT',
         usuarioId,
         pcOrigen: data.pcOrigen,
         contexto: { ventaId: venta.id },
-        tx,
-      });
-    }
+      })),
+    );
     if (deliveryNuevo) {
       await recordAudit({
         tabla: 'delivery_info',
@@ -580,17 +584,18 @@ export async function agregarItemsAVenta(args: {
     });
     // Solo los que no estaban antes: re-auditar los viejos no rompe nada
     // (el replicador upsertea) pero ensucia el log y la cola.
-    for (const it of updated.items) {
-      if (idsPrevios.has(it.id)) continue;
-      await recordAudit({
-        tabla: 'items_venta',
-        registroId: it.id,
-        accion: 'INSERT',
-        usuarioId: args.usuarioId,
-        contexto: { ventaId },
-        tx,
-      });
-    }
+    await recordAuditBatch(
+      tx,
+      updated.items
+        .filter((it) => !idsPrevios.has(it.id))
+        .map((it) => ({
+          tabla: 'items_venta',
+          registroId: it.id,
+          accion: 'INSERT',
+          usuarioId: args.usuarioId,
+          contexto: { ventaId },
+        })),
+    );
 
     // Re-encolar la comanda de COCINA con los items nuevos — SOLO si el pedido YA
     // fue enviado a cocina (se creó con "Enviar a cocina", o ya se cobró). Así la

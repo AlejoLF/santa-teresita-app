@@ -6,6 +6,12 @@ import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { cn } from '@/lib/cn';
+import {
+  FiltroPeriodo,
+  paramsPeriodo,
+  type PeriodoBusqueda,
+} from '@/components/admin/BusquedaTabla';
+import { TotalesPorConcepto, type ConceptoTotal } from '@/components/admin/TotalesPorConcepto';
 
 // Conceptos de pago a empleado. Sueldo/Jornada/Horas extra/Feriado/Vacaciones/
 // Aguinaldo son tipos de sueldo (categoría "Sueldos"); Adelanto y Comisión van
@@ -59,6 +65,8 @@ interface MovimientoEmpleado {
   categoria: { nombre: string };
   cuentaOrigen: { nombre: string } | null;
   usuario: { nombre: string };
+  /** De qué fue el pago (Jornada, Horas extra, Plus…), no la categoría contable. */
+  concepto?: string;
 }
 
 interface Detalle {
@@ -71,6 +79,7 @@ interface Detalle {
     comisiones: string;
     otros: string;
   };
+  porConcepto?: ConceptoTotal[];
 }
 
 interface Cuenta {
@@ -101,17 +110,29 @@ export default function EmpleadoDetallePage({
   const [showEditar, setShowEditar] = useState(false);
   // Etiqueta del concepto con la que se abre el modal (de la lista configurable).
   const [tipoConcepto, setTipoConcepto] = useState<string>('Sueldo');
+  // El MISMO filtro temporal que la pantalla general de empleados. Arranca en
+  // 30 días, igual que allá, para que abrir a alguien desde la lista no cambie
+  // la ventana bajo los pies.
+  const [periodo, setPeriodo] = useState<PeriodoBusqueda>('30dias');
+  const [desde, setDesde] = useState('');
+  const [hasta, setHasta] = useState('');
+  const [cargando, setCargando] = useState(true);
 
   const fetchData = useCallback(async () => {
+    setCargando(true);
     try {
-      const res = await api.get<Detalle>(`/admin/empleados/${id}`);
+      const params = paramsPeriodo(periodo, desde, hasta);
+      const res = await api.get<Detalle>(`/admin/empleados/${id}?${params.toString()}`);
       setData(res);
+      setError(null);
     } catch (e) {
       if (!(e instanceof ApiError) || e.status !== 401) {
         setError('No se pudo cargar el empleado');
       }
+    } finally {
+      setCargando(false);
     }
-  }, [id]);
+  }, [id, periodo, desde, hasta]);
 
   useEffect(() => {
     void fetchData();
@@ -152,8 +173,35 @@ export default function EmpleadoDetallePage({
         </div>
       </header>
 
-      {/* KPIs del año */}
-      <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* El mismo filtro temporal que la pantalla general. Todo lo de abajo
+          —los totales y el historial— responde a lo que se elija acá. */}
+      <section className="card p-3">
+        <FiltroPeriodo
+          periodo={periodo}
+          onPeriodo={setPeriodo}
+          desde={desde}
+          onDesde={setDesde}
+          hasta={hasta}
+          onHasta={setHasta}
+        >
+          <span className="ml-auto text-2xs text-ink-500 tabular-nums">
+            {cargando
+              ? 'buscando…'
+              : `${data.movimientos.length} pago${data.movimientos.length === 1 ? '' : 's'}`}
+          </span>
+        </FiltroPeriodo>
+      </section>
+
+      {/* Lo pagado en el período, abierto por concepto. Arriba de todo y en
+          grande: es el número que la encargada viene a buscar. */}
+      <TotalesPorConcepto
+        porConcepto={data.porConcepto ?? []}
+        total={totales.total}
+        titulo={`Pagado a ${e.nombre} en el período`}
+        cargando={cargando}
+      />
+
+      <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Sueldo base</div>
           {e.sueldoBase ? (
@@ -161,11 +209,11 @@ export default function EmpleadoDetallePage({
           ) : (
             <span className="text-ink-300 text-md">—</span>
           )}
+          <div className="text-2xs text-ink-500 mt-1">del legajo</div>
         </div>
         <div className="card p-4 min-w-0">
-          <div className="text-2xs text-ink-500 uppercase">Sueldos pagados</div>
+          <div className="text-2xs text-ink-500 uppercase">Sueldos</div>
           <MoneyAmount value={totales.sueldos} hero fit className="text-md text-basil-600" />
-          <div className="text-2xs text-ink-500 mt-1">en el año</div>
         </div>
         <div className="card p-4 min-w-0">
           <div className="text-2xs text-ink-500 uppercase">Adelantos</div>
@@ -242,7 +290,12 @@ export default function EmpleadoDetallePage({
                       })}
                     </td>
                     <td className={cn('px-4 py-2 font-medium', conceptoColor)}>
-                      {m.categoria.nombre}
+                      {m.concepto ?? m.categoria.nombre}
+                      {m.concepto && m.concepto !== m.categoria.nombre && (
+                        <div className="text-2xs font-normal text-ink-500">
+                          {m.categoria.nombre}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-2 text-ink-700 text-xs">
                       {m.cuentaOrigen?.nombre ?? '—'}
@@ -289,7 +342,7 @@ export default function EmpleadoDetallePage({
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className={cn('font-medium truncate', conceptoColor)}>
-                        {m.categoria.nombre}
+                        {m.concepto ?? m.categoria.nombre}
                       </div>
                       <div className="text-2xs font-mono text-ink-500 truncate mt-0.5">
                         {new Date(m.fechaComputo).toLocaleDateString('es-AR', {

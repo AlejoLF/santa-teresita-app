@@ -69,6 +69,16 @@ interface Dashboard {
     sesionesAbiertasViejas: number;
   };
   saldosCuentas: Array<{ id: string; nombre: string; tipo: string; saldoActual: string }>;
+  cumpleanos?: { hoy: ClienteCumple[]; manana: ClienteCumple[] };
+}
+
+interface ClienteCumple {
+  id: string;
+  nombre: string;
+  apellido: string | null;
+  telefono: string | null;
+  fechaNacimiento: string;
+  edad: number | null;
 }
 
 type DrillDownTipo = 'ventas' | 'efectivo' | 'tarjeta' | 'aportes' | 'egresos' | null;
@@ -196,6 +206,10 @@ export default function AdminDashboard() {
           })}
         </span>
       </header>
+
+      {/* Cumpleaños: el pedido es enterarse el día ANTES, para llegar a
+          prepararle algo. Los de hoy van también, por si ayer nadie miró. */}
+      <AvisoCumpleanos cumpleanos={data.cumpleanos} />
 
       {/* Filtro de período para los KPIs de ventas/cobros/movimientos */}
       <section className="card p-3 flex flex-wrap items-center gap-2">
@@ -918,5 +932,72 @@ function VentasPorHoraChart({
         })}
       </div>
     </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Cumpleaños de clientes
+// ────────────────────────────────────────────────────────────────────────
+
+/**
+ * El aviso que pidió la encargada: saber el día ANTES que un cliente cumple
+ * años, para poder tenerle algo preparado.
+ *
+ * También muestra los de hoy — si el aviso de ayer no lo vio nadie, todavía se
+ * está a tiempo. Si no cumple nadie, no ocupa lugar en la pantalla.
+ *
+ * La fecha de nacimiento se carga en la ficha del cliente (Clientes → el
+ * cliente → Editar datos).
+ */
+function AvisoCumpleanos({
+  cumpleanos,
+}: {
+  cumpleanos?: { hoy: ClienteCumple[]; manana: ClienteCumple[] };
+}) {
+  const manana = cumpleanos?.manana ?? [];
+  const hoy = cumpleanos?.hoy ?? [];
+  if (manana.length === 0 && hoy.length === 0) return null;
+
+  return (
+    <section className="rounded-lg border border-teresita-300 bg-teresita-50 px-4 py-3">
+      <div className="flex items-start gap-3">
+        <span className="text-xl leading-none">🎂</span>
+        <div className="min-w-0 space-y-2">
+          {manana.length > 0 && (
+            <div>
+              <div className="font-medium text-teresita-700 text-sm">
+                Mañana {manana.length === 1 ? 'cumple años' : 'cumplen años'}
+              </div>
+              <ListaDeCumples clientes={manana} />
+            </div>
+          )}
+          {hoy.length > 0 && (
+            <div>
+              <div className="font-medium text-teresita-700 text-sm">
+                Hoy {hoy.length === 1 ? 'cumple años' : 'cumplen años'}
+              </div>
+              <ListaDeCumples clientes={hoy} />
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ListaDeCumples({ clientes }: { clientes: ClienteCumple[] }) {
+  return (
+    <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-ink-700">
+      {clientes.map((c) => (
+        <li key={c.id}>
+          <Link href={`/admin/clientes/${c.id}`} className="hover:underline">
+            {c.nombre}
+            {c.apellido ? ` ${c.apellido}` : ''}
+          </Link>
+          {c.edad !== null && <span className="text-ink-500"> · {c.edad} años</span>}
+          {c.telefono && <span className="text-ink-500 font-mono"> · {c.telefono}</span>}
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -7,6 +7,7 @@ import {
   type CategoriaError,
 } from '../services/errores.js';
 import { aplicarDevolucion, asentarDevolucion } from '../services/banco-horas.js';
+import { agendaDeCumpleanos } from '../services/cumpleanos.js';
 import {
   facturasPendientesDe,
   planificarImputacion,
@@ -334,6 +335,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         sesionesSinAprobar,
         avisosPrecio,
         saldosCuentas,
+        cumpleanos,
       ] = await Promise.all([
         prisma.venta.aggregate({
           _sum: { total: true },
@@ -431,6 +433,10 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           where: { activa: true },
           select: { id: true, nombre: true, tipo: true, saldoActual: true },
         }),
+        // Cumpleaños de clientes: el aviso es "mañana cumple Fulano", así que
+        // viaja con el panel y no en una llamada aparte — si fuera otra vuelta
+        // más a la base, en la nube se nota.
+        agendaDeCumpleanos(ahora),
       ]);
 
       // Cobrado en efectivo del día = mostrador + Damián (excluye DELIVERATE).
@@ -681,6 +687,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           sesionesAbiertasViejas,
           avisosPrecio,
         },
+        cumpleanos,
         saldosCuentas: saldosCuentas.map((c) => ({
           id: c.id,
           nombre: c.nombre,

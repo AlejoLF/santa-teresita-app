@@ -68,6 +68,11 @@ export function useBusquedaPaginada<T>(opts: {
   const [page, setPage] = useState(1);
 
   const [items, setItems] = useState<T[]>([]);
+  // La respuesta cruda del último fetch. La usan las pantallas que además de la
+  // tabla muestran totales calculados por el server (ej. empleados: lo pagado
+  // del período discriminado por concepto) — así salen del MISMO fetch que la
+  // tabla y no pueden mostrar un período distinto al de las filas.
+  const [respuesta, setRespuesta] = useState<Record<string, unknown> | null>(null);
   const [meta, setMeta] = useState<MetaPaginacion>({ ...META_VACIA, pageSize });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +130,7 @@ export function useBusquedaPaginada<T>(opts: {
       const res = await api.get<Record<string, unknown>>(`${endpoint}?${params.toString()}`);
       if (mine !== reqId.current) return; // llegó tarde
       setItems(extraerRef.current(res));
+      setRespuesta(res);
       setMeta({
         total: Number(res.total ?? 0),
         page: Number(res.page ?? 1),
@@ -137,6 +143,7 @@ export function useBusquedaPaginada<T>(opts: {
       if (!(e instanceof ApiError) || e.status !== 401) {
         setError('No se pudieron cargar los resultados');
         setItems([]);
+        setRespuesta(null);
         setMeta({ ...META_VACIA, pageSize });
       }
     } finally {
@@ -163,6 +170,7 @@ export function useBusquedaPaginada<T>(opts: {
     hasta, setHasta,
     page, setPage,
     items, meta, loading, error,
+    respuesta,
     refetch: fetchData,
     limpiar,
     hayFiltro: !!qDebounced || periodo !== 'todo',
@@ -239,48 +247,106 @@ export function BuscadorFiltros({
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        {PERIODOS_FECHA.map((p) => (
-          <ChipPeriodo key={p.key} activo={periodo === p.key} onClick={() => onPeriodo(p.key)}>
-            {p.label}
-          </ChipPeriodo>
-        ))}
-        <span className="self-center mx-0.5 h-5 w-px bg-cream-300" aria-hidden />
-        {PERIODOS_SESION.map((p) => (
-          <ChipPeriodo key={p.key} activo={periodo === p.key} onClick={() => onPeriodo(p.key)}>
-            {p.label}
-          </ChipPeriodo>
-        ))}
-        <span className="self-center mx-0.5 h-5 w-px bg-cream-300" aria-hidden />
-        <ChipPeriodo activo={periodo === 'custom'} onClick={() => onPeriodo('custom')}>
-          Personalizado
-        </ChipPeriodo>
-
-        {periodo === 'custom' && (
-          <span className="flex items-center gap-1.5 ml-1">
-            <input
-              type="date"
-              value={desde}
-              onChange={(e) => onDesde(e.target.value)}
-              className="input py-1 text-xs"
-            />
-            <span className="text-2xs text-ink-500">a</span>
-            <input
-              type="date"
-              value={hasta}
-              onChange={(e) => onHasta(e.target.value)}
-              className="input py-1 text-xs"
-            />
-          </span>
-        )}
-
+      <FiltroPeriodo
+        periodo={periodo}
+        onPeriodo={onPeriodo}
+        desde={desde}
+        onDesde={onDesde}
+        hasta={hasta}
+        onHasta={onHasta}
+      >
         <span className="ml-auto text-2xs text-ink-500 tabular-nums">
           {loading ? 'buscando…' : `${total} resultado${total === 1 ? '' : 's'}`}
           {periodo === 'todo' && !loading && total > 0 && ' · base completa'}
         </span>
-      </div>
+      </FiltroPeriodo>
     </section>
   );
+}
+
+/**
+ * Sólo los chips de temporalidad, sin la caja de búsqueda.
+ *
+ * Existe aparte porque hay pantallas que necesitan EL MISMO filtro sin tener
+ * nada que buscar por texto — la ficha de un empleado, por ejemplo: ahí ya se
+ * sabe de quién se está hablando, lo que falta elegir es el período. Antes esas
+ * pantallas no tenían filtro ninguno, y al abrir a alguien desde la lista se
+ * perdía el que venía puesto.
+ *
+ * Es el mismo componente, no una copia: si mañana se agrega un período, aparece
+ * en los dos lados solo.
+ */
+export function FiltroPeriodo({
+  periodo,
+  onPeriodo,
+  desde,
+  onDesde,
+  hasta,
+  onHasta,
+  children,
+}: {
+  periodo: PeriodoBusqueda;
+  onPeriodo: (p: PeriodoBusqueda) => void;
+  desde: string;
+  onDesde: (v: string) => void;
+  hasta: string;
+  onHasta: (v: string) => void;
+  /** Lo que va pegado a la derecha (el contador de resultados, por ejemplo). */
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {PERIODOS_FECHA.map((p) => (
+        <ChipPeriodo key={p.key} activo={periodo === p.key} onClick={() => onPeriodo(p.key)}>
+          {p.label}
+        </ChipPeriodo>
+      ))}
+      <span className="self-center mx-0.5 h-5 w-px bg-cream-300" aria-hidden />
+      {PERIODOS_SESION.map((p) => (
+        <ChipPeriodo key={p.key} activo={periodo === p.key} onClick={() => onPeriodo(p.key)}>
+          {p.label}
+        </ChipPeriodo>
+      ))}
+      <span className="self-center mx-0.5 h-5 w-px bg-cream-300" aria-hidden />
+      <ChipPeriodo activo={periodo === 'custom'} onClick={() => onPeriodo('custom')}>
+        Personalizado
+      </ChipPeriodo>
+
+      {periodo === 'custom' && (
+        <span className="flex items-center gap-1.5 ml-1">
+          <input
+            type="date"
+            value={desde}
+            onChange={(e) => onDesde(e.target.value)}
+            className="input py-1 text-xs"
+          />
+          <span className="text-2xs text-ink-500">a</span>
+          <input
+            type="date"
+            value={hasta}
+            onChange={(e) => onHasta(e.target.value)}
+            className="input py-1 text-xs"
+          />
+        </span>
+      )}
+
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Los mismos filtros que arma el hook, listos para pegar a un fetch propio.
+ * Lo usa la pantalla que no pasa por `useBusquedaPaginada` (la ficha del
+ * empleado) para que la query salga IGUAL que la de la lista.
+ */
+export function paramsPeriodo(periodo: PeriodoBusqueda, desde: string, hasta: string) {
+  const params = new URLSearchParams({ periodo });
+  if (periodo === 'custom') {
+    if (desde) params.set('desde', new Date(desde + 'T00:00:00').toISOString());
+    if (hasta) params.set('hasta', new Date(hasta + 'T23:59:59').toISOString());
+  }
+  return params;
 }
 
 function ChipPeriodo({
