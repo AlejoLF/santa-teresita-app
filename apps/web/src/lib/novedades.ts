@@ -34,6 +34,18 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.74',
+    fecha: '25 de septiembre',
+    titulo: 'Tocá cualquier número de empleados y vas al detalle',
+    cambios: [
+      'EMPLEADOS: los montos de arriba (jornada, horas extra, plus, adelanto…) ahora son botones. Se ven en un recuadro para que se note que se pueden tocar.',
+      'Al tocar uno se abre una ventana con TODOS los pagos que forman ese número: de quién, qué día, de qué cuenta salió y la observación. Así, si un número no cierra, podés ver de qué está hecho sin salir de la pantalla.',
+      'Adentro podés seguir filtrando: por día, ayer, 7 días, 30 días, por sesión o un rango que elijas vos.',
+      'Y hay un menú desplegable con todos los empleados, para ver sólo los pagos de una persona.',
+      'También funciona tocando el número grande de arriba de todo: ahí salen todos los pagos del período juntos.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.73',
     fecha: '25 de septiembre',
     titulo: 'Pedidos largos, cumpleaños de clientes y lo pagado a cada empleado',

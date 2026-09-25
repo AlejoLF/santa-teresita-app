@@ -358,6 +358,151 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // GET /admin/empleados/pagos — los movimientos DETRÁS de un número.
+  //
+  // Cada total de la tarjeta ("Jornada $12.476.103") es clickeable y abre el
+  // detalle. Sin esto el número es un dato que hay que creer: no se puede ver
+  // de qué está hecho, ni encontrar el pago mal cargado que lo infla.
+  //
+  // Va ANTES de /admin/empleados/:id: ese espera un uuid, así que "pagos"
+  // nunca le entraría, pero dejarlo arriba evita sorpresas si algún día se
+  // afloja el schema del parámetro.
+  //
+  // El filtro por concepto se hace EN MEMORIA, no en SQL, y no es por vagancia:
+  // el concepto de los pagos viejos no es una columna, se deduce de la
+  // observación (ver services/conceptos-empleado.ts). Filtrar en SQL dejaría
+  // afuera justo el historial que la encargada quiere mirar. Se acota con el
+  // filtro temporal y un tope duro, que es lo que mantiene esto barato.
+  fastify.get(
+    '/admin/empleados/pagos',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        querystring: z.object({
+          /** Sin esto, todos los conceptos juntos. */
+          concepto: z.string().trim().min(1).max(60).optional(),
+          empleadoId: z.string().uuid().optional(),
+          periodo: periodoBusquedaSchema.optional(),
+          desde: z.string().datetime().optional(),
+          hasta: z.string().datetime().optional(),
+          sesionId: z.string().uuid().optional(),
+          ...paginacionSchema,
+        }),
+      },
+    },
+    async (req) => {
+      const q = req.query as {
+        concepto?: string;
+        empleadoId?: string;
+        periodo?: PeriodoBusqueda;
+        desde?: string;
+        hasta?: string;
+        sesionId?: string;
+        page: number;
+        pageSize: number;
+      };
+
+      const ft = await resolverFiltroTemporal({
+        periodo: q.periodo,
+        desde: q.desde,
+        hasta: q.hasta,
+        sesionId: q.sesionId,
+      });
+
+      // `entidadId` también apunta a proveedores, así que se acota a los ids
+      // de empleados de verdad.
+      const idsEmpleados = q.empleadoId
+        ? [q.empleadoId]
+        : (await prisma.empleado.findMany({ select: { id: true } })).map((e) => e.id);
+
+      // Tope duro: sin ventana de tiempo ("Todo") esto barre el historial
+      // entero. Son pagos de sueldo, no ventas, así que el volumen es chico;
+      // el tope está para que no pueda dejar de serlo sin que nos enteremos.
+      const TOPE = 5000;
+      const crudos = idsEmpleados.length
+        ? await prisma.movimiento.findMany({
+            where: {
+              entidadId: { in: idsEmpleados },
+              tipo: 'EGRESO',
+              estado: EstadoMovimiento.CONFIRMADO,
+              ...(ft.sesionCajaId
+                ? { sesionCajaId: ft.sesionCajaId }
+                : whereRangoFecha('fechaComputo', ft)),
+            },
+            select: {
+              id: true,
+              monto: true,
+              fechaComputo: true,
+              observacion: true,
+              adicionales: true,
+              entidadId: true,
+              categoria: { select: { nombre: true } },
+              cuentaOrigen: { select: { nombre: true } },
+              usuario: { select: { nombre: true } },
+            },
+            orderBy: { fechaComputo: 'desc' },
+            take: TOPE,
+          })
+        : [];
+
+      const extra = await conceptosConfigurados();
+      const conConcepto = crudos.map((m) => ({ ...m, concepto: conceptoDe(m, extra) }));
+      const filtrados = q.concepto
+        ? conConcepto.filter((m) => m.concepto === q.concepto)
+        : conConcepto;
+
+      // El nombre del empleado sólo de los que se van a devolver.
+      const pagina = filtrados.slice((q.page - 1) * q.pageSize, q.page * q.pageSize);
+      const empleados = await prisma.empleado.findMany({
+        where: { id: { in: [...new Set(pagina.map((m) => m.entidadId!).filter(Boolean))] } },
+        select: { id: true, nombre: true, apellido: true },
+      });
+      const nombrePorId = new Map(
+        empleados.map((e) => [e.id, `${e.nombre}${e.apellido ? ` ${e.apellido}` : ''}`]),
+      );
+
+      const totalMonto = filtrados.reduce((acc, m) => acc + Number(m.monto), 0);
+
+      return {
+        pagos: pagina.map((m) => ({
+          id: m.id,
+          monto: m.monto.toFixed(2),
+          fecha: m.fechaComputo,
+          concepto: m.concepto,
+          categoria: m.categoria.nombre,
+          cuenta: m.cuentaOrigen?.nombre ?? null,
+          cargadoPor: m.usuario.nombre,
+          observacion: m.observacion,
+          empleadoId: m.entidadId,
+          empleado: m.entidadId ? (nombrePorId.get(m.entidadId) ?? null) : null,
+        })),
+        totalMonto: totalMonto.toFixed(2),
+        concepto: q.concepto ?? null,
+        // `true` cuando el tope recortó: la pantalla lo dice en vez de mostrar
+        // un total que en silencio no es el total.
+        recortado: crudos.length === TOPE,
+        ...armarPaginacion(filtrados.length, q.page, q.pageSize),
+      };
+    },
+  );
+
+  // GET /admin/empleados/opciones — nombres para el desplegable del detalle.
+  //
+  // Aparte de /admin/empleados porque ése calcula los totales de cada uno: para
+  // llenar un `<select>` sería pagar toda esa cuenta para mostrar una lista de
+  // nombres.
+  fastify.get(
+    '/admin/empleados/opciones',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => {
+      const empleados = await prisma.empleado.findMany({
+        select: { id: true, nombre: true, apellido: true, activo: true },
+        orderBy: [{ activo: 'desc' }, { nombre: 'asc' }],
+      });
+      return { empleados };
+    },
+  );
+
   // GET /admin/empleados/:id — detalle con histórico
   //
   // Toma EL MISMO filtro temporal que la pantalla general (periodo/desde/hasta,

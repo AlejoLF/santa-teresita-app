@@ -199,6 +199,10 @@ export default function EmpleadoDetallePage({
         total={totales.total}
         titulo={`Pagado a ${e.nombre} en el período`}
         cargando={cargando}
+        periodo={periodo}
+        desde={desde}
+        hasta={hasta}
+        empleadoId={e.id}
       />
 
       <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
