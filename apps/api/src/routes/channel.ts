@@ -121,6 +121,41 @@ async function conBuzon<T>(fn: () => Promise<T>, siNoExiste: T): Promise<[T, boo
 
 export default async function channelRoutes(fastify: FastifyInstance) {
   /**
+   * Acá entra CUALQUIER content-type, no sólo `application/json`.
+   *
+   * Sin esto, un integrador que postea `application/x-www-form-urlencoded` —o
+   * sin content-type— se comía un **415 de Fastify antes de llegar al
+   * handler**, así que no quedaba ni un renglón en el buzón. Es exactamente el
+   * agujero que el buzón existe para tapar: del lado del local, "llegó y lo
+   * rechazamos" se veía igual que "nunca salió de RAPPI", que son problemas
+   * opuestos. Peor todavía: la pantalla diría "no llegó nada" con total
+   * seguridad, y estaría mintiendo.
+   *
+   * Se intenta parsear como JSON igual (varios integradores mandan JSON con el
+   * content-type equivocado, y si lo es puede entrar derecho por el contrato
+   * neutral); si no lo es, el cuerpo queda como texto crudo y se guarda tal
+   * cual — que es justo lo que hace falta para escribir el adaptador.
+   *
+   * El parser está ENCAPSULADO en este plugin: vale para `/channel/*` y no
+   * cambia en nada al resto de la API, donde un content-type raro sí debe ser
+   * un 415.
+   */
+  fastify.addContentTypeParser('*', { parseAs: 'string' }, (_req, cuerpo, done) => {
+    const texto = (cuerpo as string).trim();
+    if (texto.length === 0) {
+      done(null, undefined);
+      return;
+    }
+    try {
+      done(null, JSON.parse(texto));
+    } catch {
+      // No es JSON: se pasa crudo. NO es un error — el punto de esta ruta es
+      // registrar lo que sea que haya llegado.
+      done(null, texto);
+    }
+  });
+
+  /**
    * Procesa una orden ya autenticada, dejando constancia de CÓMO terminó.
    *
    * Compartido por `/channel/orders` (Bearer) y `/channel/webhook/...` (token en

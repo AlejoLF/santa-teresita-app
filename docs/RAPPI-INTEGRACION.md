@@ -1,8 +1,15 @@
 # Integración con RAPPI (y las demás plataformas)
 
-> Estado al 29/08/2026: **la ingesta funciona; falta el traductor del formato de
+> Estado al 25/09/2026: **la ingesta funciona; falta el traductor del formato de
 > RAPPI.** Este documento dice qué hay, qué falta, y exactamente qué hace falta
 > para terminarlo.
+>
+> Cambio del 25/09: el webhook ahora acepta **cualquier content-type**. Antes,
+> un integrador que posteara `application/x-www-form-urlencoded` —o sin
+> content-type— se comía un 415 de Fastify ANTES de llegar al handler, así que
+> no quedaba ni un renglón en el buzón. Era el mismo agujero que el buzón vino a
+> tapar, un nivel más abajo: la pantalla habría dicho "no llegó nada" con total
+> seguridad, y habría estado mintiendo.
 
 ## Lo que pasó en la prueba del 29/08
 
@@ -58,6 +65,9 @@ Tocalo y se abre **el cuerpo exacto que mandó RAPPI**.
 - **Si la lista quedó vacía**: el pedido nunca salió de RAPPI. El problema está
   del lado de allá — la dirección mal cargada, o el pedido de prueba que no
   dispara el aviso. Eso ya es información: descarta todo el lado nuestro.
+  (Desde el 25/09 esto es confiable de verdad: el buzón registra el cuerpo
+  venga en el formato que venga, incluso sin content-type y aunque el token
+  esté equivocado.)
 - **Si aparece con "Llegó bien, falta traducir su formato"**: perfecto, es lo
   esperado. Ese cuerpo es lo único que falta para escribir el traductor.
 
@@ -110,6 +120,9 @@ Respuestas:
 | `423` | Llegó fuera del horario configurado: no hay turno abierto donde imputarla. |
 | `501` | Llegó por el webhook, con el token correcto, pero en un formato que todavía no traducimos. |
 | `503` | `CHANNEL_INGEST_TOKEN` no está seteado: la ingesta está apagada. |
+
+En los siete casos el cuerpo queda guardado en el buzón: el registro se hace
+ANTES de validar el token y ANTES de mirar la forma del body.
 
 ### El SKU es `Producto.codigo`
 
