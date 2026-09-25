@@ -34,6 +34,19 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.73',
+    fecha: '25 de septiembre',
+    titulo: 'Pedidos largos, cumpleaños de clientes y lo pagado a cada empleado',
+    cambios: [
+      'PEDIDOS GRANDES: los pedidos con muchos artículos ya entran de una. Antes, pasados unos cuantos renglones, saltaba "la base de datos rechazó la operación" y había que partirlo en dos o tres. No hay tope de artículos.',
+      'CUMPLEAÑOS: en la ficha de cada cliente (Clientes → el cliente → Editar datos) ahora se puede cargar la fecha de cumpleaños. También al crear uno nuevo.',
+      'El día ANTERIOR, al abrir Inicio, aparece arriba un aviso: "Mañana cumple años Fulano", con el teléfono a mano para poder prepararle algo. Los de hoy también se muestran, por si el aviso de ayer no lo vio nadie.',
+      'EMPLEADOS: al abrir a un empleado ahora están los mismos filtros de la pantalla general (hoy, ayer, 7 días, 30 días, por sesión, o personalizado). Antes mostraba el año entero y no se podía acotar.',
+      'Y arriba de todo, en las dos pantallas, está lo pagado en el período ABIERTO POR CONCEPTO: cuánto de jornada, cuánto de horas extra, cuánto de plus, cuánto de adelanto. Los números cambian con el filtro que elijas.',
+      'Los pagos que ya venías cargando también aparecen discriminados — no hay que volver a cargar nada.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.72',
     fecha: '21 de septiembre',
     titulo: 'Percepciones al cargar una factura a mano',

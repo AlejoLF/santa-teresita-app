@@ -369,6 +369,7 @@ function FormNuevoCliente({
   const [telefono, setTelefono] = useState('');
   const [email, setEmail] = useState('');
   const [cuit, setCuit] = useState('');
+  const [cumple, setCumple] = useState('');
   const [observaciones, setObservaciones] = useState('');
   const [creando, setCreando] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -384,6 +385,7 @@ function FormNuevoCliente({
         telefono: telefono || undefined,
         email: email || undefined,
         cuitCuil: cuit || undefined,
+        fechaNacimiento: cumple || undefined,
         observaciones: observaciones || undefined,
       });
       onCreated(created.id);
@@ -478,6 +480,22 @@ function FormNuevoCliente({
               />
             </div>
           )}
+
+          <div>
+            <label className="block text-xs font-medium text-ink-700 mb-1">
+              Cumpleaños (opcional)
+            </label>
+            <input
+              type="date"
+              value={cumple}
+              onChange={(e) => setCumple(e.target.value)}
+              className="input"
+              max={new Date().toISOString().slice(0, 10)}
+            />
+            <p className="text-2xs text-ink-500 mt-1">
+              El panel avisa el día anterior, para tener tiempo de prepararle algo.
+            </p>
+          </div>
 
           <div>
             <label className="block text-xs font-medium text-ink-700 mb-1">

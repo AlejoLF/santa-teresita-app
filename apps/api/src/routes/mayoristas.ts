@@ -4,7 +4,7 @@ import { prisma } from '@sta/db/client';
 import type { Prisma } from '@sta/db';
 import { RolUsuario, EstadoMovimiento, TipoCategoriaMovimiento } from '@sta/db';
 import { subtotalItem } from '@sta/shared';
-import { recordAudit } from '../services/audit.js';
+import { recordAudit, recordAuditBatch } from '../services/audit.js';
 import { encolarTicketRemito } from '../services/impresion.js';
 import { getOrCreateSesionActual, FueraDeHorarioError } from '../services/sesion-caja.js';
 import {
@@ -1021,26 +1021,29 @@ export default async function mayoristasRoutes(fastify: FastifyInstance) {
           valorNuevo: { total: upd.total.toFixed(2), items: upd.items.length },
           tx,
         });
-        for (const prev of previos) {
-          await recordAudit({
+        // Los dos en tanda: editar un remito grande borra N renglones y crea
+        // otros N, y de a uno eso son 6 viajes a la base por renglón dentro de
+        // la transacción. Las bajas van antes que las altas, como estaban.
+        await recordAuditBatch(
+          tx,
+          previos.map((prev) => ({
             tabla: 'remito_items',
             registroId: prev.id,
             accion: 'DELETE',
             usuarioId: req.usuario!.id,
             valorAnterior: { remitoId },
-            tx,
-          });
-        }
-        for (const it of upd.items) {
-          await recordAudit({
+          })),
+        );
+        await recordAuditBatch(
+          tx,
+          upd.items.map((it) => ({
             tabla: 'remito_items',
             registroId: it.id,
             accion: 'INSERT',
             usuarioId: req.usuario!.id,
             valorNuevo: { remitoId, nombre: it.nombreSnapshot },
-            tx,
-          });
-        }
+          })),
+        );
         return upd;
       });
       return actualizado;

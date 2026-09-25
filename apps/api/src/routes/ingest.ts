@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { Prisma } from '@sta/db';
 import { prisma } from '@sta/db/client';
 import { config } from '../config.js';
-import { recordAudit } from '../services/audit.js';
+import { recordAudit, recordAuditBatch } from '../services/audit.js';
 import { buscarProveedorParecido, normalizarNombre } from '../services/proveedor-match.js';
 import { getProveedorSinIdentificar } from '../services/proveedor-sin-identificar.js';
 
@@ -317,16 +317,19 @@ export default async function ingestRoutes(fastify: FastifyInstance) {
           //
           // Van DESPUES del audit de la factura (mayor `secuencia`), que es el
           // orden que respeta la FK item -> factura al replicar.
-          for (const it of f.items) {
-            await recordAudit({
+          //
+          // En tanda: una factura de muchos renglones no tiene por que costar
+          // tres viajes a la base por renglon dentro de la transaccion.
+          await recordAuditBatch(
+            tx,
+            f.items.map((it) => ({
               tabla: 'facturas_recibidas_items',
               registroId: it.id,
               accion: 'INSERT',
               usuarioId: null,
               contexto: { fuente: 'ingest-ocr', facturaId: f.id },
-              tx,
-            });
-          }
+            })),
+          );
           return f;
         });
 

@@ -11,6 +11,7 @@ import {
   BuscadorFiltros,
   Paginacion,
 } from '@/components/admin/BusquedaTabla';
+import { TotalesPorConcepto, type ConceptoTotal } from '@/components/admin/TotalesPorConcepto';
 
 interface Empleado {
   id: string;
@@ -159,6 +160,15 @@ export default function EmpleadosListPage() {
           {error ?? b.error}
         </div>
       )}
+
+      {/* Arriba de la tabla, como pidió la encargada: lo pagado en el período
+          elegido, abierto por concepto. Es de TODOS los empleados que matchean
+          la búsqueda, no sólo los de esta página. */}
+      <TotalesPorConcepto
+        porConcepto={(b.respuesta?.porConcepto as ConceptoTotal[] | undefined) ?? []}
+        total={b.respuesta?.totalPagado as string | undefined}
+        cargando={b.loading}
+      />
 
       <section className="card overflow-hidden">
         <table className="w-full text-sm hidden md:table">

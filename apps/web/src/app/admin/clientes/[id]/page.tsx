@@ -64,6 +64,30 @@ const TIPO_LABEL: Record<Cliente['tipo'], { label: string; cls: string }> = {
   PLATAFORMA: { label: 'Plataforma', cls: 'bg-saffron-100 text-saffron-600' },
 };
 
+/**
+ * El cumpleaños como "12 de junio (39)".
+ *
+ * La columna es DATE y llega como '1985-06-12T00:00:00.000Z': se formatea en
+ * UTC a propósito. Con la TZ del navegador, todo cliente argentino aparecería
+ * cumpliendo un día antes.
+ */
+function formatearCumple(iso: string): string {
+  const dia = new Date(iso).toLocaleDateString('es-AR', {
+    day: 'numeric',
+    month: 'long',
+    timeZone: 'UTC',
+  });
+  const anio = Number(iso.slice(0, 4));
+  if (anio < 1900) return dia;
+  const hoy = new Date();
+  // Todavía no los cumplió este año → un año menos.
+  const yaCumplio =
+    hoy.getMonth() + 1 > Number(iso.slice(5, 7)) ||
+    (hoy.getMonth() + 1 === Number(iso.slice(5, 7)) && hoy.getDate() >= Number(iso.slice(8, 10)));
+  const edad = hoy.getFullYear() - anio - (yaCumplio ? 0 : 1);
+  return `${dia} (${edad})`;
+}
+
 export default function ClienteDetallePage({
   params,
 }: {
@@ -130,6 +154,9 @@ export default function ClienteDetallePage({
               {c.telefono && <span className="text-ink-700">📞 {c.telefono}</span>}
               {c.email && <span className="text-ink-500">{c.email}</span>}
               {c.cuitCuil && <span className="text-ink-500 font-mono">CUIT {c.cuitCuil}</span>}
+              {c.fechaNacimiento && (
+                <span className="text-ink-500">🎂 {formatearCumple(c.fechaNacimiento)}</span>
+              )}
               {!c.activo && (
                 <span className="text-2xs text-pomodoro-600 font-medium">INACTIVO</span>
               )}
@@ -407,6 +434,10 @@ function ModalEditarCliente({
   const [telefono, setTelefono] = useState(cliente.telefono ?? '');
   const [email, setEmail] = useState(cliente.email ?? '');
   const [cuit, setCuit] = useState(cliente.cuitCuil ?? '');
+  // La columna es DATE: viene como '1985-06-12T00:00:00.000Z'. Los primeros
+  // diez caracteres YA son el día correcto; pasarla por Date la correría al
+  // día anterior en cualquier huso al oeste de Greenwich.
+  const [cumple, setCumple] = useState(cliente.fechaNacimiento?.slice(0, 10) ?? '');
   const [observaciones, setObservaciones] = useState(cliente.observaciones ?? '');
   const [activo, setActivo] = useState(cliente.activo);
   const [guardando, setGuardando] = useState(false);
@@ -423,6 +454,7 @@ function ModalEditarCliente({
         telefono: telefono || null,
         email: email || null,
         cuitCuil: cuit || null,
+        fechaNacimiento: cumple || null,
         observaciones: observaciones || null,
         activo,
       });
@@ -498,6 +530,19 @@ function ModalEditarCliente({
               onChange={(e) => setCuit(e.target.value)}
               className="input font-mono"
             />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-700 mb-1">Cumpleaños</label>
+            <input
+              type="date"
+              value={cumple}
+              onChange={(e) => setCumple(e.target.value)}
+              className="input"
+              max={new Date().toISOString().slice(0, 10)}
+            />
+            <p className="text-2xs text-ink-500 mt-1">
+              El panel lo avisa el día anterior. Dejalo vacío si no lo sabés.
+            </p>
           </div>
           <div>
             <label className="block text-xs font-medium text-ink-700 mb-1">Observaciones</label>

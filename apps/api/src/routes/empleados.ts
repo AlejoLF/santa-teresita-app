@@ -19,6 +19,7 @@ import {
   nombreArchivoExport,
 } from '../services/export-busqueda.js';
 import { ReglaNegocioError } from '../services/errores.js';
+import { totalesPorConcepto, conceptoDe } from '../services/conceptos-empleado.js';
 
 /**
  * CRUD de empleados + carga de movimientos de personal (sueldos, adelantos, comisiones).
@@ -44,6 +45,20 @@ async function exigirCategoria(id: string): Promise<void> {
   });
   if (!cat) throw new ReglaNegocioError('Esa categoría laboral no existe.', 404);
   if (!cat.activo) throw new ReglaNegocioError('Esa categoría laboral está desactivada.');
+}
+
+/**
+ * Los conceptos de pago que hay cargados en la lista configurable, incluidos
+ * los que agregó la encargada desde Configuración. Se los pasamos al resolver
+ * para que un concepto propio ("Plus por feriado", "Premio") también se
+ * reconozca en las observaciones de los pagos viejos.
+ */
+async function conceptosConfigurados(): Promise<string[]> {
+  const ops = await prisma.opcionConfigurable.findMany({
+    where: { dominio: 'concepto_pago_empleado' },
+    select: { etiqueta: true },
+  });
+  return ops.map((o) => o.etiqueta);
 }
 
 const PUESTO_LABEL: Record<string, string> = {
@@ -152,6 +167,45 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
             },
           })
         : [];
+
+      // Totales del PERÍODO discriminados por concepto (jornada, horas extra,
+      // plus…), para todos los empleados que matchean la búsqueda — NO sólo los
+      // doce de la página. Es el número grande de arriba: si cambiara al pasar
+      // de página sería inútil.
+      //
+      // Va sobre los ids filtrados y no sobre `entidadId != null` a secas
+      // porque `entidadId` también apunta a proveedores.
+      // La lista de empleados es chica (una decena), así que pedir los ids de
+      // TODOS los que matchean no cuesta nada y evita razonar sobre si la
+      // página actual ya los tiene a todos.
+      const idsFiltrados =
+        ids.length === total
+          ? ids
+          : (await prisma.empleado.findMany({ where, select: { id: true } })).map((e) => e.id);
+      const movsConcepto = idsFiltrados.length
+        ? await prisma.movimiento.findMany({
+            where: {
+              entidadId: { in: idsFiltrados },
+              tipo: 'EGRESO',
+              estado: EstadoMovimiento.CONFIRMADO,
+              ...(ft.sesionCajaId
+                ? { sesionCajaId: ft.sesionCajaId }
+                : whereRangoFecha('fechaComputo', ft)),
+            },
+            select: {
+              monto: true,
+              observacion: true,
+              adicionales: true,
+              categoria: { select: { nombre: true } },
+            },
+          })
+        : [];
+      const porConcepto = totalesPorConcepto(
+        movsConcepto,
+        (m) => Number(m.monto),
+        await conceptosConfigurados(),
+      );
+      const totalPagado = movsConcepto.reduce((acc, m) => acc + Number(m.monto), 0);
 
       const categorias = await prisma.categoriaMovimiento.findMany({
         where: { id: { in: [...new Set(movs.map((m) => m.categoriaId))] } },
@@ -291,6 +345,10 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
           totalCobrado: f.total.toFixed(2),
           saldoSueldo: f.saldoSueldo.toFixed(2),
         })),
+        // Los totales del período, discriminados por concepto. Van al nivel
+        // superior para que la pantalla los lea del mismo fetch que la tabla.
+        porConcepto,
+        totalPagado: totalPagado.toFixed(2),
         // La paginación va en el NIVEL SUPERIOR, no anidada en `meta`: es lo que
         // lee `useBusquedaPaginada` (res.total, res.page…) y lo que devuelven
         // las otras tablas. Anidada, la pantalla mostraba "0 empleados" con
@@ -301,6 +359,14 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
   );
 
   // GET /admin/empleados/:id — detalle con histórico
+  //
+  // Toma EL MISMO filtro temporal que la pantalla general (periodo/desde/hasta,
+  // incluidas las sesiones de caja). Antes sólo aceptaba un `desde` suelto y
+  // defaulteaba a "desde el 1 de enero": la encargada podía filtrar en la lista
+  // de empleados pero al abrir a uno perdía el filtro y veía el año entero.
+  //
+  // `desde` a secas se sigue aceptando por compatibilidad con clientes viejos
+  // (un .exe sin actualizar), y en ese caso manda él.
   fastify.get(
     '/admin/empleados/:id',
     {
@@ -308,26 +374,48 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
       schema: {
         params: z.object({ id: z.string().uuid() }),
         querystring: z.object({
+          periodo: periodoBusquedaSchema.optional(),
           desde: z.string().datetime().optional(),
+          hasta: z.string().datetime().optional(),
+          sesionId: z.string().uuid().optional(),
         }),
       },
     },
     async (req, reply) => {
       const params = req.params as { id: string };
-      const q = req.query as { desde?: string };
+      const q = req.query as {
+        periodo?: PeriodoBusqueda;
+        desde?: string;
+        hasta?: string;
+        sesionId?: string;
+      };
 
       const empleado = await prisma.empleado.findUnique({ where: { id: params.id } });
       if (!empleado) return reply.code(404).send({ error: 'Empleado no encontrado' });
 
-      const desde = q.desde
-        ? new Date(q.desde)
-        : new Date(new Date().getFullYear(), 0, 1); // Default: este año
+      // Sin periodo y sin desde: este año, como venía siendo. Con periodo, el
+      // resolver compartido decide (y 'todo' quiere decir todo, sin ventana).
+      const ft =
+        q.periodo || q.sesionId
+          ? await resolverFiltroTemporal({
+              periodo: q.periodo,
+              desde: q.desde,
+              hasta: q.hasta,
+              sesionId: q.sesionId,
+            })
+          : {
+              sesionCajaId: null,
+              desde: q.desde ? new Date(q.desde) : new Date(new Date().getFullYear(), 0, 1),
+              hasta: null,
+            };
 
       const movimientos = await prisma.movimiento.findMany({
         where: {
           entidadId: params.id,
           tipo: 'EGRESO',
-          fechaComputo: { gte: desde },
+          ...(ft.sesionCajaId
+            ? { sesionCajaId: ft.sesionCajaId }
+            : whereRangoFecha('fechaComputo', ft)),
         },
         include: {
           categoria: { select: { nombre: true } },
@@ -354,6 +442,16 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
           { total: 0, sueldos: 0, adelantos: 0, comisiones: 0, otros: 0 },
         );
 
+      // Discriminado por CONCEPTO (jornada, horas extra, plus…), que es lo que
+      // la encargada eligió al cargar cada pago. `totales` de arriba agrupa por
+      // categoría contable y mete seis conceptos distintos dentro de "Sueldos".
+      const confirmados = movimientos.filter((m) => m.estado === EstadoMovimiento.CONFIRMADO);
+      const porConcepto = totalesPorConcepto(
+        confirmados,
+        (m) => Number(m.monto),
+        await conceptosConfigurados(),
+      );
+
       return {
         empleado: {
           ...empleado,
@@ -362,6 +460,9 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
         movimientos: movimientos.map((m) => ({
           ...m,
           monto: m.monto.toString(),
+          // Para que la fila diga de qué fue el pago sin depender de leer el
+          // prefijo de la observación a ojo.
+          concepto: conceptoDe(m),
         })),
         totales: {
           total: totales.total.toFixed(2),
@@ -369,6 +470,12 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
           adelantos: totales.adelantos.toFixed(2),
           comisiones: totales.comisiones.toFixed(2),
           otros: totales.otros.toFixed(2),
+        },
+        porConcepto,
+        periodo: {
+          desde: ft.desde,
+          hasta: ft.hasta,
+          porSesion: !!ft.sesionCajaId,
         },
       };
     },
@@ -730,6 +837,12 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
               observacion,
               estado: EstadoMovimiento.CONFIRMADO,
               usuarioId: req.usuario!.id,
+              // El concepto elegido, guardado como DATO y no sólo como prefijo
+              // de la observación: es lo que permite después discriminar
+              // cuánto se pagó de jornada, de horas extra, de plus. La
+              // categoría contable agrupa seis conceptos en "Sueldos" y sola
+              // no alcanza. Ver services/conceptos-empleado.ts.
+              adicionales: { conceptoEmpleado: etiqueta } as never,
             },
           });
           await tx.pago.create({

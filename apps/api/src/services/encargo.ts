@@ -13,7 +13,7 @@ import type { EncargoNuevo } from '@sta/shared';
 import { subtotalItem } from '@sta/shared';
 import { whereRangoDiaUtc, type FiltroTemporal } from './filtro-temporal.js';
 import { getOrCreateSesionActual, siguienteNumeroOrdenTurno } from './sesion-caja.js';
-import { recordAudit } from './audit.js';
+import { recordAudit, recordAuditBatch } from './audit.js';
 import { encolarComandaEncargo, esDestinoImpresion } from './impresion.js';
 import { agregarItemsAVenta } from './venta.js';
 import {
@@ -695,16 +695,18 @@ export async function generarRemitoDeEncargo(
     },
     tx,
   });
-  for (const it of remito.items) {
-    await recordAudit({
+  // En tanda: un remito de muchos renglones no tiene por qué costar tres
+  // viajes a la base por renglón dentro de la transacción.
+  await recordAuditBatch(
+    tx,
+    remito.items.map((it) => ({
       tabla: 'remito_items',
       registroId: it.id,
       accion: 'INSERT',
       usuarioId,
       valorNuevo: { remitoId: remito.id, nombre: it.nombreSnapshot },
-      tx,
-    });
-  }
+    })),
+  );
 
   return { id: remito.id, numero: remito.numero, total: remito.total.toFixed(2) };
 }

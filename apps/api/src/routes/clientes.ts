@@ -4,6 +4,7 @@ import { prisma } from '@sta/db/client';
 import { RolUsuario, EstadoVenta } from '@sta/db';
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
+import { agendaDeCumpleanos, cumplenEl, correrDias, hoyEnArgentina } from '../services/cumpleanos.js';
 
 /**
  * CRUD de clientes y direcciones.
@@ -88,6 +89,46 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // GET /admin/clientes/cumpleanos — quién cumple años mañana (y hoy).
+  //
+  // Va ANTES de /admin/clientes/:id a propósito: ese otro espera un uuid, así
+  // que "cumpleanos" nunca le entraría, pero dejarlo arriba evita sorpresas si
+  // algún día se afloja el schema del parámetro.
+  //
+  // Lo puede pedir cualquiera con sesión, no sólo admin: el aviso es para la
+  // encargada y el mostrador, y no expone nada que no esté ya en la ficha del
+  // cliente.
+  fastify.get(
+    '/admin/clientes/cumpleanos',
+    {
+      preHandler: fastify.requireAuth(),
+      schema: {
+        querystring: z.object({
+          // Para mirar otro día puntual (y para poder probarlo sin esperar al
+          // cumpleaños de nadie). Sin esto: hoy y mañana, hora argentina.
+          fecha: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/, 'La fecha va como AAAA-MM-DD')
+            .optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const q = req.query as { fecha?: string };
+      const base = q.fecha ?? hoyEnArgentina();
+      const manana = correrDias(base, 1);
+      if (q.fecha) {
+        return {
+          hoy: await cumplenEl(base),
+          manana: await cumplenEl(manana),
+          fechaHoy: base,
+          fechaManana: manana,
+        };
+      }
+      return { ...(await agendaDeCumpleanos()), fechaHoy: base, fechaManana: manana };
+    },
+  );
+
   // GET /admin/clientes/:id — detalle con direcciones + historial de ventas
   fastify.get(
     '/admin/clientes/:id',
@@ -153,7 +194,8 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
           telefono: z.string().max(40).optional(),
           email: z.string().email().optional(),
           cuitCuil: z.string().max(20).optional(),
-          fechaNacimiento: z.string().optional(),
+          // Sólo el día, sin hora: es un DATE. El '' del form vale por "no sé".
+          fechaNacimiento: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'El cumpleaños va como AAAA-MM-DD').or(z.literal('')).optional(),
           observaciones: z.string().max(500).optional(),
         }),
       },
@@ -177,7 +219,7 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
           telefono: body.telefono ?? null,
           email: body.email ?? null,
           cuitCuil: body.cuitCuil ?? null,
-          fechaNacimiento: body.fechaNacimiento ? new Date(body.fechaNacimiento) : null,
+          fechaNacimiento: fechaDeNacimiento(body.fechaNacimiento),
           observaciones: body.observaciones ?? null,
         },
       });
@@ -206,7 +248,7 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
           telefono: z.string().max(40).nullable().optional(),
           email: z.string().email().nullable().optional(),
           cuitCuil: z.string().max(20).nullable().optional(),
-          fechaNacimiento: z.string().nullable().optional(),
+          fechaNacimiento: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'El cumpleaños va como AAAA-MM-DD').or(z.literal('')).nullable().optional(),
           observaciones: z.string().max(500).nullable().optional(),
           activo: z.boolean().optional(),
         }),
@@ -219,8 +261,10 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
       if (!before) return reply.code(404).send({ error: 'Cliente no encontrado' });
 
       const data: Record<string, unknown> = { ...body };
-      if (body.fechaNacimiento && typeof body.fechaNacimiento === 'string') {
-        data.fechaNacimiento = new Date(body.fechaNacimiento);
+      // Vaciar el campo en el form manda '' o null: las dos cosas quieren decir
+      // "borrá el cumpleaños". Sin esto, el '' llegaba tal cual a Prisma.
+      if ('fechaNacimiento' in body) {
+        data.fechaNacimiento = fechaDeNacimiento(body.fechaNacimiento as string | null);
       }
 
       const updated = await prisma.cliente.update({
@@ -485,4 +529,15 @@ export default async function clientesRoutes(fastify: FastifyInstance) {
       };
     },
   );
+}
+
+/**
+ * 'AAAA-MM-DD' → Date a mediodía UTC. La columna es `@db.Date`, así que Prisma
+ * se queda sólo con el día; pasar por el mediodía y no por la medianoche evita
+ * que cualquier corrimiento de huso lo tire al día anterior. Vacío o nulo
+ * borran el dato.
+ */
+function fechaDeNacimiento(valor: string | null | undefined): Date | null {
+  if (!valor) return null;
+  return new Date(`${valor}T12:00:00Z`);
 }

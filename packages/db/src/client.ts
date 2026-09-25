@@ -10,10 +10,26 @@ const logLevels =
     ? (['error', 'warn'] as const)
     : (['error', 'warn', 'info'] as const);
 
+/**
+ * Cuánto puede durar una transacción interactiva antes de que Prisma la corte.
+ *
+ * El default de Prisma son 5 s y acá NO estaba configurado. Una venta de
+ * treinta renglones encadenaba decenas de viajes a la base dentro de una sola
+ * transacción; contra la base en la nube eso cruzaba los 5 s, Prisma cortaba
+ * (P2028, `Transaction already closed`) y a la cajera le salía "la base de
+ * datos rechazó la operación" sin más pista. Incidente real: 24/09/2026.
+ *
+ * El arreglo de fondo es que el audit NO cueste un viaje por renglón (ver
+ * `services/audit.ts`, `recordAuditBatch`). Esto es la red de seguridad: que
+ * un pico de latencia no vuelva a cortar un pedido por la mitad.
+ */
+const TX_TIMEOUT_MS = Number(process.env.STA_TX_TIMEOUT_MS ?? 30_000);
+
 const primaryClient =
   globalThis.__prismaClient ??
   new PrismaClient({
     log: logLevels.map((level) => ({ emit: 'event', level })),
+    transactionOptions: { timeout: TX_TIMEOUT_MS, maxWait: 10_000 },
   });
 
 if (process.env.NODE_ENV !== 'production') {
