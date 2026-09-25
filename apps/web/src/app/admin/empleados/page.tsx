@@ -168,6 +168,9 @@ export default function EmpleadosListPage() {
         porConcepto={(b.respuesta?.porConcepto as ConceptoTotal[] | undefined) ?? []}
         total={b.respuesta?.totalPagado as string | undefined}
         cargando={b.loading}
+        periodo={b.periodo}
+        desde={b.desde}
+        hasta={b.hasta}
       />
 
       <section className="card overflow-hidden">
