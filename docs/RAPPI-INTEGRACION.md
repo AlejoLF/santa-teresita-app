@@ -91,6 +91,12 @@ En este orden. Cada paso se ve en la pantalla de Integraciones.
 
 ### Si *Listar tiendas* dice "404 Not found appClient of client id …"
 
+> **Estado 26/09:** pasó con los dos dominios de DEV (`microservices.dev` y
+> `api.dev`), con el login funcionando. Se le pidió a RAPPI por el Integrations
+> Manager que asocie la tienda a la integración. **Bloqueado del lado de RAPPI**
+> hasta que respondan; cuando lo hagan, el paso siguiente es *Listar tiendas*
+> otra vez y seguir con la puesta en marcha desde el paso 2.
+
 Pasó el 26/09, con el login ya funcionando. Es la respuesta documentada de
 `GET /stores-pa` cuando el `clientId` de la integración **no tiene un App
 Client** (una integración con tiendas) asociado en ese ambiente. Coincide con
