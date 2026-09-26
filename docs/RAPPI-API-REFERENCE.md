@@ -233,6 +233,95 @@ Por tienda hay además: `POST /webhook`, `GET /webhook/{EVENT}`,
 - `ORDER_EVENT_CANCEL`: HTTP 200, y liberar la orden. Payload:
   `{ "event": "canceled_with_charge", "order_id": "106", "store_id": "900109448" }`
 
+## Payloads de los demás eventos
+
+No hay header que diga qué evento es: **se identifica por la URL** en la que RAPPI
+lo entrega (se configura una URL por evento). Los cuerpos:
+
+```jsonc
+// PING — responder 2xx con {"status":"OK","description":"Store on"}.
+// `status` es obligatorio: null o distinto de "OK" = tienda no disponible.
+{ "store_id": 999 }
+
+// ORDER_EVENT_CANCEL
+{ "event": "canceled_with_charge", "order_id": "106", "store_id": "900109448" }
+
+// MENU_APPROVED
+{ "store_id": "900109448", "message": "Menu Approved" }
+
+// MENU_REJECTED
+{ "store_id": "900109448" }
+
+// STORE_CONNECTIVITY
+{ "external_store_id": "999", "enabled": false, "message": "The Store is not enabled to operate" }
+
+// STORE_PROVISIONING_STATUS
+{ "batchId": "…", "integrationId": "…", "operation": "PROVISION",
+  "results": [ { "storeId": "10", "status": "ACTIVE", "httpCode": 201 },
+               { "storeId": "11", "status": "FAILED", "errorMessage": "Store already exists", "httpCode": 409 } ],
+  "timestamp": "2026-04-21T10:00:00Z" }
+```
+
+`NEW_ORDER_SCHEDULED` tiene la misma forma que `NEW_ORDER` más `"action": "scheduled"`,
+`place_at` con la hora agendada, y los montos en cero.
+
+## Menú
+
+`POST {COUNTRY_DOMAIN}/api/v2/restaurants-integrations-public-api/menu` — crea o
+reemplaza el menú de UNA tienda. RAPPI lo valida en forma síncrona:
+
+| Código | |
+|-|-|
+| 200 | aceptado, queda pendiente de validación (después llega `MENU_APPROVED` / `MENU_REJECTED`) |
+| 400 | estructura inválida — el detalle dice qué |
+| 404 | la tienda no existe |
+| 424 | ítems duplicados |
+
+```jsonc
+{
+  "storeId": "900105814",
+  "items": [
+    {
+      "name": "Sorrentinos de jamón y queso",   // obligatorio
+      "description": "…",                        // obligatorio
+      "sku": "3000",                             // obligatorio — nuestro Producto.codigo
+      "type": "PRODUCT",                         // obligatorio
+      "price": 8500,                             // obligatorio, ENTERO
+      "imageUrl": "https://…",                   // opcional
+      "sortingPosition": 1,                      // opcional
+      "combo": false,                            // opcional
+      "category": {                              // obligatorio
+        "id": "pastas-rellenas", "name": "Pastas rellenas",
+        "minQty": 0, "maxQty": 0, "sortingPosition": 1
+      },
+      "children": [                              // los modificadores
+        {
+          "name": "Salsa bolognesa", "description": "…", "sku": "MOD-SALSA-BOL",
+          "type": "TOPPING", "price": 0, "maxLimit": 1,
+          "category": { "id": "salsa", "name": "Salsa", "minQty": 1, "maxQty": 1, "sortingPosition": 1 },
+          "children": []
+        }
+      ]
+    }
+  ]
+}
+```
+
+`GET /menu/approved/{storeId}` devuelve sólo el código de estado (no hay cuerpo
+documentado). `GET /menu` lista los menús creados.
+
+> Hay una API de menú NUEVA (`/restaurants/menu/v1/stores/{storeId}/store-menu`),
+> con otra estructura (menus / categories / items separados). El checklist de
+> certificación acepta cualquiera de las dos para "Enviar menú"; se usa la legacy
+> porque es la que tiene el cuerpo documentado entero.
+
+## Órdenes — la API nueva
+
+Existe también `/restaurants/orders/v1/stores/{storeId}/orders/{orderId}/{take|ready-for-pickup}`
+y `…/cancel_type/{cancelType}/reject` (body `{description, additional_info}`, responde
+202). **El checklist nombra las rutas legacy** (`PUT /orders/{orderId}/take`), así que
+es lo que se implementa.
+
 ## El payload de NEW_ORDER
 
 Lo que hacía falta para escribir el adaptador:
