@@ -108,6 +108,10 @@ Quedó para más adelante. Cuando se decida, es un tilde en la pantalla.
   entrar (el mapeo es sólo por `Producto.codigo`).
 - **Pedidos agendados** (`NEW_ORDER_SCHEDULED`) se anotan y no se crean: el pedido
   real llega como `NEW_ORDER` cuando RAPPI lo suelta.
+- **El buzón acepta cualquier content-type** (desde el 25/09). Antes, un
+  integrador que posteara form-encoded —o sin content-type— se comía un 415 de
+  Fastify ANTES de llegar al handler y no quedaba ni un renglón: la pantalla
+  habría dicho "no llegó nada" con total seguridad, y habría estado mintiendo.
 - **PING no se guarda en el buzón** (sería ruido cada pocos minutos); el panel
   muestra cuándo fue el último.
 - **Fuera de horario** el pedido sigue rebotando con 423, como cualquier canal.
