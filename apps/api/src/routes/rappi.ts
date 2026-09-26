@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import {
   ambienteRappi,
   credencialesRappi,
+  diagnosticoEntornoRappi,
   dominiosRappi,
   getRappiConfig,
   secretoWebhookRappi,
@@ -130,6 +131,7 @@ export default async function rappiRoutes(fastify: FastifyInstance) {
       credencialesConfiguradas: Boolean(credencialesRappi()),
       firmaConfigurada: Boolean(secretoWebhookRappi()),
       ingestaConfigurada: Boolean(config.CHANNEL_INGEST_TOKEN),
+      entorno: diagnosticoEntornoRappi(),
       config: cfg,
       webhooks: { ...urls, ultimoPingAt: ultimoPing() },
       catalogo: { publicables: totalProductos - sinCodigo, sinCodigo, porPesoSinCantidad },

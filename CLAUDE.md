@@ -269,6 +269,10 @@ Ver SPEC §1.5. Punteo:
   calcula sobre el **cuerpo crudo** (`req.rawBody`, capturado en un hook
   `preParsing` del plugin de canal): un parse + stringify la invalida.
   Todo lo saliente a RAPPI está apagado si faltan `RAPPI_CLIENT_ID`/`_SECRET`.
+  Y las `RAPPI_*` van **sin validación en `config.ts`** a propósito: un valor
+  mal cargado en Railway no puede impedir que el API arranque (Railway dejaría
+  el deploy anterior corriendo y la pantalla diría "faltan" sin motivo). Se
+  analizan en `services/rappi/config.ts` y el panel muestra qué está mal.
 
 - **Repartidor en tickets: se infiere del canal** (`repartidorPorCanal()` en
   `services/impresion.ts`). RAPPI/PYA/MELI/DELIVERATE no requieren asignación
