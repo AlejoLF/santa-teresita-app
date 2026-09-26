@@ -11,6 +11,59 @@
 > tapar, un nivel más abajo: la pantalla habría dicho "no llegó nada" con total
 > seguridad, y habría estado mintiendo.
 
+## Lo que falta de verdad (26/09/2026)
+
+El panorama cambió al abrir el **Integrations Manager**: RAPPI no es sólo "nos
+mandan el pedido". Es una integración de socio con un checklist de certificación
+de **15 capacidades, 0 adoptadas**, y tres marcadas REQUERIDO.
+
+La documentación completa de su API está transcrita en
+**[RAPPI-API-REFERENCE.md](RAPPI-API-REFERENCE.md)** — dominios, autenticación,
+endpoints, firma HMAC y el payload de `NEW_ORDER`.
+
+### El checklist
+
+| Grupo | Capacidad | Endpoint | Estado |
+|-|-|-|-|
+| Tiendas | **Enable/disable** ⭐ | `PUT /stores-pa/{id}/status` | ✗ |
+| Tiendas | Listar | `GET /stores-pa` | ✗ |
+| Tiendas | Horarios | `POST /api/rest-ops-utils/store/schedule/{id}` | ✗ |
+| Menú | Enviar menú | `POST /menu` | ✗ |
+| Menú | Estado del menú | `GET /menu/approved/{id}` o webhook | ✗ |
+| Menú | Disponibilidad | `PUT /availability/stores/items` | ✗ |
+| Webhooks | Recibir órdenes | webhook `NEW_ORDER` | parcial |
+| Webhooks | **Cancelación** ⭐ | webhook `ORDER_EVENT_CANCEL` | ✗ |
+| Webhooks | PING | webhook `PING` | ✗ |
+| Webhooks | Validar firma HMAC | header `Rappi-Signature` | ✗ |
+| Onboarding | Auto-onboarding | `POST /clients/{id}/webhooks` + provisioning | ✗ |
+| Órdenes | **Tomar** ⭐ | `PUT /orders/{id}/take` | ✗ |
+| Órdenes | Rechazar | `PUT /orders/{id}/reject` | ✗ |
+| Órdenes | Lista para retiro | `POST /orders/{id}/ready-for-pickup` | ✗ |
+| Órdenes | Tomar en <6 min | (métrica sobre lo anterior) | ✗ |
+
+⭐ = REQUERIDO
+
+**Lo único que existe hoy es el buzón y la creación de la venta.** Todo lo
+saliente —llamar a la API de ellos— está sin escribir, y ahí es donde el
+checklist mira.
+
+### Por qué la prueba del 29/08 no dejó nada
+
+Además del content-type (ver abajo), el propio checklist lo dice: *"El cliente no
+tiene tiendas asociadas"*. No hay tienda aprovisionada; RAPPI no tiene a dónde
+mandar el pedido. El buzón vacío no era un problema del buzón.
+
+### Una decisión de negocio, no técnica
+
+*Tomar órdenes dentro de los 6 minutos*: RAPPI **cancela sola** lo que no se toma
+a tiempo. Son dos caminos opuestos y hay que elegir uno antes de escribir la
+fase de órdenes:
+
+- **Automático al llegar el `NEW_ORDER`**: no se vence nunca, pero la cocina
+  queda comprometida antes de que una persona lo mire.
+- **Que la cajera confirme**: hay control, pero una demora en el mostrador
+  cancela pedidos sola.
+
 ## Lo que pasó en la prueba del 29/08
 
 Se cargó el integrador de RAPPI apuntando al endpoint de Railway, se generó un
