@@ -22,6 +22,13 @@ interface Estado {
   credencialesConfiguradas: boolean;
   firmaConfigurada: boolean;
   ingestaConfigurada: boolean;
+  /** Lo que el server encontró raro en sus variables RAPPI_*, y desde cuándo corre. */
+  entorno: {
+    problemas: Array<{ variable: string; problema: string; grave: boolean }>;
+    version: string;
+    arrancoAt: string;
+    rol: string;
+  };
   config: {
     storeId: string | null;
     storeNombre: string | null;
@@ -74,6 +81,22 @@ function hora(iso: string): string {
   return new Date(iso).toLocaleString('es-AR', {
     timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
+}
+
+function fechaHora(iso: string): string {
+  return new Date(iso).toLocaleString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+/** "hace 3 min" / "hace 2 h" / "hace 5 días", para que se lea sin hacer cuentas. */
+function hace(iso: string): string {
+  const min = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
+  if (min < 1) return 'recién';
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 48) return `hace ${h} h`;
+  return `hace ${Math.round(h / 24)} días`;
 }
 
 function Copiable({ valor, etiqueta }: { valor: string; etiqueta: string }) {
@@ -173,6 +196,10 @@ export function PanelRappi() {
             Lo que RAPPI nos pide para certificar: cada botón es un ítem de su lista. Ambiente{' '}
             <strong>{estado.ambiente === 'dev' ? 'de prueba (DEV)' : 'PRODUCCIÓN'}</strong>.
           </p>
+          <p className="text-xs text-ink-500 mt-1">
+            El server que responde es la versión <span className="font-mono">{estado.entorno.version}</span> y arrancó el{' '}
+            {fechaHora(estado.entorno.arrancoAt)} ({hace(estado.entorno.arrancoAt)}). Si cambiaste variables después de esa hora, ese cambio todavía no está corriendo.
+          </p>
         </div>
         <Button variant="secondary" onClick={() => void cargar()}>Actualizar</Button>
       </div>
@@ -186,13 +213,27 @@ export function PanelRappi() {
         <Chip ok={storeId ? true : null} texto={storeId ? `tienda ${cfg?.storeNombre ?? storeId}` : 'sin tienda elegida'} />
         <Chip ok={estado.webhooks.ultimoPingAt ? true : null} texto={estado.webhooks.ultimoPingAt ? `último PING ${hora(estado.webhooks.ultimoPingAt)}` : 'RAPPI todavía no hizo PING'} />
       </div>
-      {!estado.credencialesConfiguradas ? (
-        <div className="rounded-lg border border-pomodoro-600/30 bg-pomodoro-100 p-3 text-sm text-ink-700">
-          <strong>Todo lo que va hacia RAPPI está apagado.</strong> Faltan <code className="font-mono">RAPPI_CLIENT_ID</code> y{' '}
-          <code className="font-mono">RAPPI_CLIENT_SECRET</code> en el server (Railway). Son las credenciales que da RAPPI para el ambiente{' '}
-          <strong>{estado.ambiente}</strong>. Los pedidos que RAPPI mande igual entran.
+      {estado.entorno.problemas.length > 0 && (
+        <div className={cn('rounded-lg border p-3 text-sm text-ink-700', estado.entorno.problemas.some((p) => p.grave) ? 'border-pomodoro-600/30 bg-pomodoro-100' : 'border-saffron-600/30 bg-saffron-100')}>
+          {!estado.credencialesConfiguradas && (
+            <p className="mb-2"><strong>Todo lo que va hacia RAPPI está apagado.</strong> Los pedidos que RAPPI mande igual entran.</p>
+          )}
+          <p className="mb-1">En las variables del server ({estado.entorno.rol === 'cloud' ? 'Railway → el servicio de la API → Variables' : 'el .env del server'}):</p>
+          <ul className="list-disc pl-5 space-y-0.5">
+            {estado.entorno.problemas.map((p, i) => (
+              <li key={i} className={p.grave ? '' : 'text-ink-500'}>
+                <code className="font-mono">{p.variable}</code> {p.problema}
+              </li>
+            ))}
+          </ul>
+          {!estado.credencialesConfiguradas && (
+            <p className="mt-2 text-xs text-ink-500">
+              Si en Railway las ves cargadas: fijate que estén en el servicio de la API (no en otro servicio ni sólo como variables compartidas del proyecto), con el nombre exacto, y que el último deploy en <em>Deployments</em> esté en verde — si falló, sigue corriendo el anterior. La hora de arranque de arriba dice qué deploy es el que está respondiendo.
+            </p>
+          )}
         </div>
-      ) : (
+      )}
+      {estado.credencialesConfiguradas && (
         <div>
           <Button variant="secondary" size="sm" disabled={ocupado !== null} onClick={() => void accion('cred', () => api.post('/admin/rappi/credenciales/probar', {}))}>
             {ocupado === 'cred' ? 'Probando…' : 'Probar credenciales'}

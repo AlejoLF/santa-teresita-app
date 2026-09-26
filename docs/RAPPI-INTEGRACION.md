@@ -29,6 +29,13 @@ Secretos y ambiente, en el entorno del server (Railway) — **nunca en la base**
 | `RAPPI_AMBIENTE` | `dev` (sandbox + simulador) o `prod`. Elige el dominio. |
 | `CHANNEL_INGEST_TOKEN` | El de siempre: va en la URL de los webhooks. |
 
+Un valor mal cargado en cualquiera de las `RAPPI_*` **no tira el API**: se lee lo
+que se pueda (se sacan espacios y comillas, `DEV` vale como `dev`) y lo que no se
+entiende se **muestra en el panel con nombre y motivo**. Es a propósito: son
+variables de una integración opcional, y si el API se negara a arrancar por
+ellas, Railway dejaría corriendo el deploy anterior y la pantalla diría "faltan"
+sin ninguna pista. Ver *Si la pantalla dice que faltan las variables*.
+
 Lo operativo, en `configuracion_sistema` (clave `rappi_config`), editable desde la
 pantalla: la tienda elegida, el `clientId` de la integración, si se toman las
 órdenes solas, el tiempo de cocina que se declara, y el estado del último menú.
@@ -81,6 +88,28 @@ En este orden. Cada paso se ve en la pantalla de Integraciones.
 6. **Certificar**: en el Integrations Manager, *Testear* cada capacidad. Todas
    miran que hayamos hecho al menos una llamada exitosa en los últimos 30 días.
 7. **Producción**: nuevas credenciales, `RAPPI_AMBIENTE=prod`, y repetir 2–4.
+
+### Si la pantalla dice que faltan las variables
+
+Y en Railway se ven cargadas. Pasó el 26/09. En orden:
+
+1. **Mirá la línea gris de arriba del panel**: "El server que responde es la
+   versión X y arrancó el DD/MM HH:MM". Si esa hora es **anterior** a cuando
+   tocaste las variables, el proceso que responde no las tiene: el deploy con
+   las variables nuevas no llegó a reemplazarlo. Railway → *Deployments*: si el
+   último está en rojo, abrí el log y buscá el motivo. Si está en verde, apretá
+   *Actualizar* en el panel — a veces sólo es que el deploy tardó.
+2. **Que estén en el servicio de la API**, no en otro servicio del proyecto ni
+   sólo como *Shared Variables* del proyecto (ésas hay que agregarlas al
+   servicio para que las vea). Y en el *environment* que está deployado.
+3. **El nombre exacto**: `RAPPI_CLIENT_ID`, `RAPPI_CLIENT_SECRET`,
+   `RAPPI_WEBHOOK_SECRET`, `RAPPI_AMBIENTE`. Mayúsculas, guión bajo, sin
+   espacios. Un espacio o unas comillas alrededor del valor no rompen nada:
+   se limpian y el panel lo avisa.
+4. **El panel lista cada variable con su problema** ("está seteada pero VACÍA",
+   "está entre comillas", `vale "produccion" y sólo puede ser dev o prod`). Si
+   dice "no está seteada", el proceso que responde directamente no la tiene:
+   volvé al punto 1.
 
 ## Qué falta decidir
 

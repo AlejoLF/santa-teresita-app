@@ -70,19 +70,27 @@ const ConfigSchema = z.object({
   // Credenciales de la integración: las da RAPPI por ambiente (las de DEV no
   // sirven en producción ni al revés). Si faltan, todo lo SALIENTE a RAPPI
   // está apagado; el buzón entrante sigue andando igual.
-  RAPPI_CLIENT_ID: z.string().min(1).optional(),
-  RAPPI_CLIENT_SECRET: z.string().min(1).optional(),
+  //
+  // A PROPÓSITO sin validación acá (ni min, ni enum, ni url): son variables de
+  // una integración OPCIONAL, y un valor mal cargado NO puede tirar el API
+  // entero al arrancar. Si lo hiciera, Railway deja corriendo el deploy
+  // anterior y la pantalla dice "faltan las variables" sin ninguna pista de
+  // por qué (incidente real, 26/09). Lo que está mal se analiza en
+  // `services/rappi/config.ts` y se muestra con nombre y motivo en el panel.
+  RAPPI_CLIENT_ID: z.string().optional(),
+  RAPPI_CLIENT_SECRET: z.string().optional(),
   // El secreto con el que RAPPI firma los webhooks (header `Rappi-Signature`).
   // Es el mismo que se manda al suscribir el webhook. Si falta, la firma no se
   // exige — y la pantalla de Integraciones lo dice con todas las letras.
-  RAPPI_WEBHOOK_SECRET: z.string().min(16).optional(),
+  RAPPI_WEBHOOK_SECRET: z.string().optional(),
   // Contra qué RAPPI se habla: 'dev' (sandbox + simulador) o 'prod'. Va en el
-  // entorno y no en la base a propósito: está atado a las credenciales.
-  RAPPI_AMBIENTE: z.enum(['dev', 'prod']).default('dev'),
+  // entorno y no en la base a propósito: está atado a las credenciales. Si no
+  // está o está mal escrito, se usa dev (y el panel lo marca).
+  RAPPI_AMBIENTE: z.string().optional(),
   // Overrides de dominio, para tests (un RAPPI falso local) o un proxy. En
   // producción NO se setean: el ambiente elige el dominio.
-  RAPPI_BASE_LEGACY_URL: z.string().url().optional(),
-  RAPPI_BASE_NUEVO_URL: z.string().url().optional(),
+  RAPPI_BASE_LEGACY_URL: z.string().optional(),
+  RAPPI_BASE_NUEVO_URL: z.string().optional(),
 });
 
 const parsed = ConfigSchema.safeParse(process.env);
