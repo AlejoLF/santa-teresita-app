@@ -89,6 +89,34 @@ En este orden. Cada paso se ve en la pantalla de Integraciones.
    miran que hayamos hecho al menos una llamada exitosa en los últimos 30 días.
 7. **Producción**: nuevas credenciales, `RAPPI_AMBIENTE=prod`, y repetir 2–4.
 
+### Si *Listar tiendas* dice "404 Not found appClient of client id …"
+
+Pasó el 26/09, con el login ya funcionando. Es la respuesta documentada de
+`GET /stores-pa` cuando el `clientId` de la integración **no tiene un App
+Client** (una integración con tiendas) asociado en ese ambiente. Coincide con
+lo que decía el Integrations Manager desde el 29/08: "El cliente no tiene
+tiendas asociadas". No es un problema nuestro ni de las credenciales.
+
+Dos cosas, en orden:
+
+1. **El dominio.** Hasta el 26/09 los endpoints legacy en DEV iban a
+   `microservices.dev.rappi.com` (la tabla del portal); desde entonces van a
+   `api.dev.rappi.com` (lo que usan todos los ejemplos de la referencia). Si con
+   el nuevo sigue dando lo mismo, no es el dominio.
+2. **La asociación la hace RAPPI.** Hay dos caminos:
+   - **Pedirla**: escribir al soporte de integradores / al TAM desde el
+     Integrations Manager, diciendo que `GET /stores-pa` en DEV responde `404
+     Not found appClient of client id <el clientId>`, y que hace falta asociar
+     la tienda (Santa Teresita Pastas, La Plata) a la integración, en DEV para
+     certificar y después en producción.
+   - **Self-onboarding**: la guía nueva de RAPPI (portal → *Self-Onboarding*)
+     lo permite sin TAM por tienda, pero exige **dos tokens**: el nuestro (el de
+     siempre) más un **token del comercio**, que sale de un login OAuth2 con
+     PKCE del dueño en Portal Partners (`login.partners.dev.rappi.com` en DEV),
+     con un `redirect_uri` que igual hay que registrar con el TAM. Nuestro
+     botón *Aprovisionar* manda sólo el token nuestro, así que hoy **no alcanza**
+     para este caso: haría falta implementar ese login del comercio.
+
 ### Si la pantalla dice que faltan las variables
 
 Y en Railway se ven cargadas. Pasó el 26/09. En orden:
