@@ -20,7 +20,7 @@ Para `/api/v2/restaurants-integrations-public-api/...` (los "legacy"):
 
 | País | Dominio |
 |-|-|
-| **Desarrollo** | `https://microservices.dev.rappi.com` |
+| **Desarrollo** | `https://api.dev.rappi.com` (ver nota) |
 | **Argentina** | `https://services.rappi.com.ar` |
 | Uruguay | `https://services.rappi.com.uy` |
 | Chile | `https://services.rappi.cl` |
@@ -30,6 +30,15 @@ Para `/api/v2/restaurants-integrations-public-api/...` (los "legacy"):
 | Perú | `https://services.rappi.pe` |
 | Ecuador | `https://services.rappi.com.ec` |
 | Costa Rica | `https://services.rappi.co.cr` |
+
+> **Nota sobre DEV.** La tabla "Country Domains" del portal dice
+> `https://microservices.dev.rappi.com` para desarrollo, pero **todos** los
+> ejemplos de la referencia de la API (`GET https://api.dev.rappi.com/api/v2/
+> restaurants-integrations-public-api/stores-pa`, etc.) y la guía de
+> self-onboarding ("For development, use `https://api.dev.rappi.com`") usan
+> `api.dev.rappi.com` también para los endpoints legacy. En la primera prueba
+> real (26/09), `microservices.dev` respondió `404 Not found appClient…` con un
+> login válido. El código usa `api.dev`; `RAPPI_BASE_LEGACY_URL` lo cambia.
 
 Para `/restaurants/{orders|menu|auth}/v1/...` (los "nuevos"):
 
@@ -98,6 +107,16 @@ Base: `{COUNTRY_DOMAIN}/api/v2/restaurants-integrations-public-api`
 ```
 
 `PUT /stores-pa/{storeId}/status` → `{ "message": "The store {storeid} was changed to integrated {true} successfully." }`
+
+Errores documentados de `/stores-pa`:
+
+| Status | Cuerpo | Qué significa |
+|-|-|-|
+| 401 | `{ "message": "Invalid token" }` | token vencido o del otro ambiente |
+| 404 | `{ "message": "Not found appClient of client id {clientId}" }` | el `clientId` de la integración **no tiene un App Client asociado** en ese ambiente. No es un problema de credenciales (el login anduvo): es que RAPPI todavía no asoció la integración a una tienda. Lo resuelve RAPPI (el TAM), o el self-onboarding con el token del comercio. |
+| 400 | `{ "message": "The stores {storeId} don't belong to the appClient of client id {clientId}" }` | la tienda existe pero no es de esta integración |
+
+
 
 ### Horarios
 

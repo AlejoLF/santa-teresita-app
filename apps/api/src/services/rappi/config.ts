@@ -22,7 +22,15 @@ import { getCached, invalidate } from '../../lib/cache.js';
 const DOMINIOS = {
   dev: {
     // Endpoints `/api/v2/restaurants-integrations-public-api/...`
-    legacy: 'https://microservices.dev.rappi.com',
+    //
+    // La tabla de dominios del portal dice `microservices.dev.rappi.com` para
+    // DEV, pero TODOS los ejemplos de la referencia de la API y la guía de
+    // self-onboarding usan `api.dev.rappi.com` también para estos endpoints.
+    // Contra `microservices.dev` la primera prueba real (26/09) dio
+    // `404 Not found appClient of client id …` con un login que sí andaba;
+    // se prueba primero el dominio de los ejemplos. `RAPPI_BASE_LEGACY_URL`
+    // permite volver al otro sin tocar código.
+    legacy: 'https://api.dev.rappi.com',
     // Endpoints `/restaurants/{orders|menu|auth}/v1/...`
     nuevo: 'https://api.dev.rappi.com',
   },
