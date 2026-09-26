@@ -1,4 +1,4 @@
-import { llamarRappi } from './cliente.js';
+import { llamarRappi, RappiError } from './cliente.js';
 import { getConfigHorarios } from '../horarios.js';
 
 /**
@@ -23,7 +23,16 @@ export async function listarTiendas(): Promise<TiendaRappi[]> {
     contexto: 'listar tiendas',
   });
   if (!r.ok || !Array.isArray(r.body)) {
-    throw new Error(`RAPPI no devolvió la lista de tiendas (${r.status}).`);
+    // RappiError, no Error: así el panel dice "RAPPI respondió 404: …" con el
+    // cuerpo, en vez de un STA-SRV opaco que obliga a ir a buscar el registro.
+    const detalle = r.body !== null ? JSON.stringify(r.body).slice(0, 300) : (r.texto ?? '').slice(0, 300);
+    throw new RappiError(
+      r.ok
+        ? `RAPPI respondió ${r.status} al listar tiendas, pero no con una lista: ${detalle || '(vacío)'}`
+        : `RAPPI respondió ${r.status} al listar tiendas${detalle ? `: ${detalle}` : ''}`,
+      r.status,
+      r.body ?? r.texto,
+    );
   }
   return r.body.map((t) => ({
     integrationId: String(t.integrationId ?? ''),

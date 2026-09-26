@@ -1,5 +1,6 @@
 import { prisma } from '@sta/db/client';
 import { CanalListaPrecios } from '@sta/db';
+import { ReglaNegocioError } from '../errores.js';
 import { llamarRappi } from './cliente.js';
 import { getRappiConfig, setRappiConfig } from './config.js';
 
@@ -111,7 +112,7 @@ export async function armarMenuRappi(storeId: string): Promise<{ menu: MenuRappi
     where: { canalDefault: CanalListaPrecios.RAPPI, activa: true },
     orderBy: { nombre: 'asc' },
   });
-  if (!lista) throw new Error('No hay una lista de precios activa para el canal RAPPI.');
+  if (!lista) throw new ReglaNegocioError('No hay una lista de precios activa para el canal RAPPI.');
   const ajuste = Number(lista.ajustePctDefault);
 
   const [productos, aplicables, grupos, deltas, combos] = await Promise.all([
@@ -297,7 +298,7 @@ export async function estadoMenu(storeId: string) {
 export async function setDisponibilidad(args: { prender: string[]; apagar: string[] }) {
   const cfg = await getRappiConfig();
   const storeIntegrationId = cfg.storeIntegrationId ?? cfg.storeId;
-  if (!storeIntegrationId) throw new Error('Primero elegí la tienda de RAPPI.');
+  if (!storeIntegrationId) throw new ReglaNegocioError('Primero elegí la tienda de RAPPI.');
   const r = await llamarRappi({
     arbol: 'legacy',
     metodo: 'PUT',
