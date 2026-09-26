@@ -33,7 +33,15 @@ export type ResultadoRecepcion =
   | 'FUERA_DE_HORARIO'
   | 'SIN_ADAPTADOR'
   | 'DUPLICADO'
-  | 'ERROR';
+  | 'ERROR'
+  // ── Eventos de webhook de RAPPI que no son un pedido ──
+  | 'FIRMA_INVALIDA'
+  | 'CANCELACION'
+  | 'MENU_APROBADO'
+  | 'MENU_RECHAZADO'
+  | 'TIENDA_CONECTIVIDAD'
+  | 'APROVISIONAMIENTO'
+  | 'EVENTO_INFORMATIVO';
 
 /**
  * Headers, con los secretos tapados.

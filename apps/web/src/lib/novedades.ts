@@ -34,6 +34,18 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.75',
+    fecha: '26 de septiembre',
+    titulo: 'RAPPI: el sistema ya habla con RAPPI',
+    cambios: [
+      'INTEGRACIONES: en Configuración → Integraciones hay un panel nuevo de RAPPI. Desde ahí se elige la tienda, se manda el menú (se arma solo desde el catálogo con los precios de la lista RAPPI), se cargan las direcciones que RAPPI necesita y se ven los pedidos.',
+      'Cuando entra un pedido de RAPPI se crea la venta y sale la comanda a la cocina, como con cualquier pedido. Si RAPPI lo cancela, la venta se anula sola y la cocina recibe la cancelación.',
+      'Cada pedido de RAPPI hay que TOMARLO para que RAPPI no lo cancele a los 6 minutos: hay un botón "Tomar" en el panel, y un tilde para que se tomen solos. El tilde arranca apagado — lo decide Julio.',
+      'Todo lo que le mandamos a RAPPI y lo que nos contesta queda anotado abajo del panel, para saber qué pasó cuando algo no anda.',
+      'Esto todavía está en ambiente de PRUEBA de RAPPI: falta cargar las credenciales y certificar. No cambia nada del mostrador.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.74',
     fecha: '25 de septiembre',
     titulo: 'Tocá cualquier número de empleados y vas al detalle',

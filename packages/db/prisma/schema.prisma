@@ -2049,3 +2049,38 @@ model RecepcionCanal {
   @@index([resultado, recibidoAt])
   @@map("recepciones_canal")
 }
+
+/// Registro de cada llamada SALIENTE a la API de una plataforma (RAPPI hoy;
+/// Pedidos YA / MELI cuando se integren). Es el espejo del buzón
+/// (`RecepcionCanal`): aquél guarda lo que nos mandan, éste lo que mandamos.
+///
+/// Existe por la misma razón: sin registro, "RAPPI no tomó el pedido" no se
+/// puede distinguir de "nunca lo llamamos" ni de "lo llamamos y rechazó". Y las
+/// llamadas automáticas (tomar la orden al recibirla) pasan sin que nadie mire.
+///
+/// NUNCA guarda el token ni las credenciales: el login no registra el cuerpo.
+model LlamadaCanal {
+  id         String   @id @default(uuid()) @db.Uuid
+  hechoAt    DateTime @default(now()) @map("hecho_at")
+  plataforma String   @db.VarChar(30)
+  metodo     String   @db.VarChar(10)
+  /// Ruta sin el dominio (el dominio lo decide el ambiente).
+  ruta       String   @db.VarChar(300)
+  /// Para qué se hizo, en criollo: "tomar orden 1308613474", "listar tiendas".
+  contexto   String?  @db.VarChar(160)
+  /// Null si no hubo respuesta (timeout, DNS, conexión rechazada).
+  status     Int?
+  ok         Boolean
+  ms         Int
+  requestBody   Json?   @map("request_body") @db.JsonB
+  responseBody  Json?   @map("response_body") @db.JsonB
+  /// La respuesta cuando no era JSON.
+  responseTexto String? @map("response_texto")
+  error         String?
+  /// La venta del local a la que corresponde, cuando la hay.
+  ventaId       String? @map("venta_id") @db.Uuid
+
+  @@index([hechoAt])
+  @@index([plataforma, ok, hechoAt])
+  @@map("llamadas_canal")
+}

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/cn';
+import { PanelRappi } from '@/components/admin/integraciones/PanelRappi';
 
 /**
  * Configuración → Integraciones.
@@ -141,6 +142,8 @@ export default function IntegracionesPage() {
 
   return (
     <div className="space-y-6 max-w-4xl">
+      <PanelRappi />
+
       <section className="card p-5">
         <div className="flex items-start justify-between gap-3 mb-1">
           <h2 className="font-display text-lg text-teresita-700">Pedidos de plataformas</h2>

@@ -14,6 +14,24 @@ import {
   type CanalPlataforma,
 } from '../services/venta-canal.js';
 import { registrarRecepcion } from '../services/recepcion-canal.js';
+import { Readable } from 'node:stream';
+import { verificarFirmaRappi } from '../services/rappi/firma.js';
+import {
+  esCancelacionRappi,
+  esNuevaOrdenRappi,
+  nuevaOrdenANeutral,
+} from '../services/rappi/adaptador.js';
+import { getRappiConfig, secretoWebhookRappi, setRappiConfig } from '../services/rappi/config.js';
+import { registrarPing } from '../services/rappi/webhooks.js';
+import { tomarOrden } from '../services/rappi/ordenes.js';
+import { USUARIO_CANALES_ID } from '../services/venta-canal.js';
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /** El cuerpo tal cual llegó, byte por byte. Lo necesita la firma HMAC. */
+    rawBody?: string;
+  }
+}
 
 /**
  * Ingesta de ÓRDENES de canal (integradores RAPPI / Pedidos YA / Mercado Libre).
@@ -156,6 +174,23 @@ export default async function channelRoutes(fastify: FastifyInstance) {
   });
 
   /**
+   * Guarda el cuerpo CRUDO antes de que se parsee. La firma de RAPPI se calcula
+   * sobre esos bytes exactos: un parse + stringify reordena claves y cambia
+   * espacios, el hash da distinto y se rechaza una firma válida. Se hace acá,
+   * en un hook, y no en el parser, para que valga con cualquier content-type
+   * sin tocar el parser de JSON del resto de la API.
+   */
+  fastify.addHook('preParsing', async (req, _reply, payload) => {
+    const trozos: Buffer[] = [];
+    for await (const trozo of payload) trozos.push(Buffer.isBuffer(trozo) ? trozo : Buffer.from(trozo));
+    const crudo = Buffer.concat(trozos);
+    req.rawBody = crudo.toString('utf8');
+    const s = Readable.from([crudo]) as Readable & { receivedEncodedLength?: number };
+    s.receivedEncodedLength = crudo.length;
+    return s;
+  });
+
+  /**
    * Procesa una orden ya autenticada, dejando constancia de CÓMO terminó.
    *
    * Compartido por `/channel/orders` (Bearer) y `/channel/webhook/...` (token en
@@ -173,6 +208,7 @@ export default async function channelRoutes(fastify: FastifyInstance) {
     req: FastifyRequest,
     reply: FastifyReply,
     cuerpo: unknown,
+    opts: { alCrear?: (venta: { id: string; numero: number }) => void } = {},
   ): Promise<FastifyReply> {
     const parsed = OrdenCanalSchema.safeParse(cuerpo);
     if (!parsed.success) {
@@ -204,6 +240,7 @@ export default async function channelRoutes(fastify: FastifyInstance) {
         idExternoCanal: orden.idExternoCanal,
         ventaId: venta.id,
       });
+      if (!duplicate) opts.alCrear?.({ id: venta.id, numero: venta.numero });
       return reply.code(duplicate ? 200 : 201).send({
         id: venta.id,
         numero: venta.numero,
@@ -300,30 +337,272 @@ export default async function channelRoutes(fastify: FastifyInstance) {
    * registrado igual —que es el punto: para escribir el adaptador de una
    * plataforma hay que ver lo que manda de verdad, no lo que uno supone.
    */
+  /**
+   * El token de la URL. Devuelve `false` si ya respondió (503 o 401), con la
+   * recepción registrada.
+   */
+  async function autenticarWebhook(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    plataforma: string,
+    token: string,
+  ): Promise<boolean> {
+    if (!config.CHANNEL_INGEST_TOKEN) {
+      await registrarRecepcion(req, {
+        resultado: 'SIN_TOKEN_CONFIGURADO',
+        status: 503,
+        detalle:
+          'CHANNEL_INGEST_TOKEN no está seteado en el server: la ingesta de plataformas ' +
+          'está apagada y rechaza TODO lo que llega.',
+        canal: plataforma.toUpperCase(),
+      });
+      await reply.code(503).send({ error: 'Ingesta de canal deshabilitada' });
+      return false;
+    }
+    if (!secretoOk(token, config.CHANNEL_INGEST_TOKEN)) {
+      await registrarRecepcion(req, {
+        resultado: 'TOKEN_INVALIDO',
+        status: 401,
+        detalle: `El token de la URL no es el configurado (llegaron ${token.length} chars).`,
+        canal: plataforma.toUpperCase(),
+      });
+      await reply.code(401).send({ error: 'Token inválido' });
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * La firma HMAC de RAPPI (header `Rappi-Signature`). Sólo se exige si hay
+   * `RAPPI_WEBHOOK_SECRET` en el server; sin él se acepta todo, y la pantalla
+   * de Integraciones lo dice. Con él, un webhook sin firma o con firma
+   * equivocada se rechaza con 401 — y queda registrado, porque "RAPPI mandó y
+   * lo rechazamos por la firma" es exactamente lo que hay que poder ver.
+   */
+  async function firmaRappiOk(req: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+    const secreto = secretoWebhookRappi();
+    if (!secreto) return true;
+    const header = req.headers['rappi-signature'];
+    const v = verificarFirmaRappi(
+      Array.isArray(header) ? header[0] : header,
+      req.rawBody ?? '',
+      secreto,
+    );
+    if (v.ok) return true;
+    const motivo =
+      v.motivo === 'SIN_HEADER'
+        ? 'no trae el header Rappi-Signature (¿el webhook se suscribió sin secret?)'
+        : v.motivo === 'HEADER_MALFORMADO'
+          ? 'el header Rappi-Signature no tiene la forma t=…,sign=…'
+          : 'la firma no coincide con RAPPI_WEBHOOK_SECRET (¿es otro secret, o cambió?)';
+    await registrarRecepcion(req, {
+      resultado: 'FIRMA_INVALIDA',
+      status: 401,
+      detalle: `Firma rechazada: ${motivo}.`,
+      canal: 'RAPPI',
+    });
+    await reply.code(401).send({ error: 'Firma inválida' });
+    return false;
+  }
+
+  /**
+   * Tomar la orden en RAPPI apenas entra, si el dueño lo dejó prendido. Va
+   * DESPUÉS de responder el webhook: RAPPI exige el 200 en menos de 5 s y la
+   * llamada de vuelta no tiene por qué contar en ese tiempo.
+   */
+  function programarTomaAutomatica(idExterno: string, ventaId: string): void {
+    setImmediate(() => {
+      void (async () => {
+        try {
+          const cfg = await getRappiConfig();
+          if (!cfg.tomarAutomatico) return;
+          await tomarOrden(idExterno, {
+            tiempoCocinaMin: cfg.tiempoCocinaMin,
+            ventaId,
+            usuarioId: USUARIO_CANALES_ID,
+          });
+        } catch (e) {
+          // Queda en el registro de llamadas; acá sólo se evita que reviente.
+          console.error('[rappi] no se pudo tomar la orden automáticamente:', e);
+        }
+      })();
+    });
+  }
+
+  /** NEW_ORDER (y NEW_ORDER_SCHEDULED, que sólo se anota). */
+  async function manejarNuevaOrdenRappi(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
+    const body = req.body;
+    if (!esNuevaOrdenRappi(body)) {
+      await registrarRecepcion(req, {
+        resultado: 'BODY_INVALIDO',
+        status: 400,
+        detalle: 'Llegó a la URL de pedidos nuevos pero no tiene `order_detail.order_id`.',
+        canal: 'RAPPI',
+      });
+      return reply.code(400).send({ error: 'No es un NEW_ORDER de RAPPI' });
+    }
+    if (body.action === 'scheduled') {
+      // Aviso anticipado de un pedido agendado, con los montos en cero. El
+      // pedido real llega como NEW_ORDER cuando RAPPI lo suelta; crearlo ahora
+      // mandaría la comanda a la cocina horas antes.
+      await registrarRecepcion(req, {
+        resultado: 'EVENTO_INFORMATIVO',
+        status: 200,
+        detalle: `Pedido agendado para ${body.order_detail.place_at ?? '?'} — entra cuando RAPPI lo suelte.`,
+        canal: 'RAPPI',
+        idExternoCanal: String(body.order_detail.order_id),
+      });
+      return reply.code(200).send({ recibido: true, agendado: true });
+    }
+    const orden = await nuevaOrdenANeutral(body);
+    return procesarOrden(req, reply, orden, {
+      alCrear: (v) => programarTomaAutomatica(orden.idExternoCanal, v.id),
+    });
+  }
+
+  /** ORDER_EVENT_CANCEL (y NEW_ORDER_SCHEDULED_CANCELLED). SIEMPRE 200: que no exista la venta es información. */
+  async function manejarCancelacionRappi(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
+    const body = req.body;
+    if (!esCancelacionRappi(body)) {
+      await registrarRecepcion(req, {
+        resultado: 'BODY_INVALIDO',
+        status: 400,
+        detalle: 'Llegó a la URL de cancelaciones pero no tiene `event` + `order_id`.',
+        canal: 'RAPPI',
+      });
+      return reply.code(400).send({ error: 'No es un ORDER_EVENT_CANCEL de RAPPI' });
+    }
+    const idExterno = String(body.order_id);
+    const out = await anularVentaCanal({
+      canal: 'RAPPI',
+      idExternoCanal: idExterno,
+      motivo: `Cancelada por RAPPI (${body.event})`,
+    });
+    await registrarRecepcion(req, {
+      resultado: 'CANCELACION',
+      status: 200,
+      detalle:
+        out.resultado === 'ANULADA'
+          ? `Venta #${out.venta.numero} anulada, ${out.pagosReversados} pago(s) reversado(s), comanda de cancelación a la cocina`
+          : out.resultado === 'YA_ANULADA'
+            ? `La venta #${out.venta.numero} ya estaba anulada`
+            : 'No había venta para ese pedido (nunca entró, o se rechazó)',
+      canal: 'RAPPI',
+      idExternoCanal: idExterno,
+      ventaId: out.resultado === 'NO_ENCONTRADA' ? null : out.venta.id,
+    });
+    return reply.code(200).send({ resultado: out.resultado });
+  }
+
+  /** PING: 200 con `status: "OK"` en menos de 3 s. No se guarda en el buzón (sería ruido). */
+  function manejarPing(reply: FastifyReply): FastifyReply {
+    registrarPing();
+    return reply.code(200).send({ status: 'OK', description: 'Store on' });
+  }
+
+  async function manejarMenuRappi(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
+    const b = (req.body ?? {}) as { message?: unknown; store_id?: unknown };
+    const msg = typeof b.message === 'string' ? b.message : '';
+    // MENU_APPROVED trae `message: "Menu Approved"`; MENU_REJECTED sólo `store_id`.
+    const aprobado = /approv/i.test(msg) || (!msg && false);
+    const estado = aprobado ? 'APROBADO' : 'RECHAZADO';
+    await setRappiConfig({ menu: { estado, estadoAt: new Date().toISOString() } });
+    await registrarRecepcion(req, {
+      resultado: aprobado ? 'MENU_APROBADO' : 'MENU_RECHAZADO',
+      status: 200,
+      detalle: aprobado ? 'RAPPI aprobó el menú' : `RAPPI rechazó el menú${msg ? `: ${msg}` : ''}`,
+      canal: 'RAPPI',
+    });
+    return reply.code(200).send({ recibido: true, estado });
+  }
+
+  async function manejarInformativoRappi(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    resultado: 'TIENDA_CONECTIVIDAD' | 'APROVISIONAMIENTO' | 'EVENTO_INFORMATIVO',
+  ): Promise<FastifyReply> {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    let detalle: string;
+    if (resultado === 'TIENDA_CONECTIVIDAD') {
+      detalle = `Tienda ${String(b.external_store_id ?? '?')}: ${b.enabled ? 'habilitada' : 'DESHABILITADA'}${b.message ? ` — ${String(b.message)}` : ''}`;
+    } else if (resultado === 'APROVISIONAMIENTO') {
+      const results = Array.isArray(b.results) ? (b.results as Array<Record<string, unknown>>) : [];
+      detalle = `${String(b.operation ?? 'PROVISION')}: ${results
+        .map((r) => `${String(r.storeId)} → ${String(r.status)}${r.errorMessage ? ` (${String(r.errorMessage)})` : ''}`)
+        .join(', ') || 'sin resultados'}`;
+    } else {
+      detalle = `Evento informativo${b.event ? ` ${String(b.event)}` : ''}`;
+    }
+    await registrarRecepcion(req, {
+      resultado,
+      status: 200,
+      detalle,
+      canal: 'RAPPI',
+      idExternoCanal: typeof b.order_id === 'string' || typeof b.order_id === 'number' ? String(b.order_id) : null,
+    });
+    return reply.code(200).send({ recibido: true });
+  }
+
+  /**
+   * POST /channel/webhook/rappi/:token/:evento — una URL por evento.
+   *
+   * RAPPI no manda ningún header que diga QUÉ evento es: el cuerpo de un PING
+   * es `{ store_id }` y el de MENU_REJECTED también. Con una URL por evento el
+   * sistema sabe qué le llegó sin adivinar por la forma, que es justo lo que
+   * hay que evitar en la puerta por la que entra la plata.
+   */
+  fastify.post(
+    '/channel/webhook/rappi/:token/:evento',
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const { token, evento } = req.params as { token: string; evento: string };
+      if (!(await autenticarWebhook(req, reply, 'rappi', token))) return reply;
+      if (!(await firmaRappiOk(req, reply))) return reply;
+      switch (evento) {
+        case 'ping':
+          return manejarPing(reply);
+        case 'new-order':
+          return manejarNuevaOrdenRappi(req, reply);
+        case 'cancel':
+          return manejarCancelacionRappi(req, reply);
+        case 'menu':
+          return manejarMenuRappi(req, reply);
+        case 'store':
+          return manejarInformativoRappi(req, reply, 'TIENDA_CONECTIVIDAD');
+        case 'provisioning':
+          return manejarInformativoRappi(req, reply, 'APROVISIONAMIENTO');
+        case 'other':
+          return manejarInformativoRappi(req, reply, 'EVENTO_INFORMATIVO');
+        default:
+          await registrarRecepcion(req, {
+            resultado: 'BODY_INVALIDO',
+            status: 404,
+            detalle: `No existe el evento "${evento}" en la URL. Los válidos: ping, new-order, cancel, menu, store, provisioning, other.`,
+            canal: 'RAPPI',
+          });
+          return reply.code(404).send({ error: `Evento desconocido: ${evento}` });
+      }
+    },
+  );
+
   fastify.post(
     '/channel/webhook/:plataforma/:token',
     async (req: FastifyRequest, reply: FastifyReply) => {
       const { plataforma, token } = req.params as { plataforma: string; token: string };
+      if (!(await autenticarWebhook(req, reply, plataforma, token))) return reply;
 
-      if (!config.CHANNEL_INGEST_TOKEN) {
-        await registrarRecepcion(req, {
-          resultado: 'SIN_TOKEN_CONFIGURADO',
-          status: 503,
-          detalle:
-            'CHANNEL_INGEST_TOKEN no está seteado en el server: la ingesta de plataformas ' +
-            'está apagada y rechaza TODO lo que llega.',
-          canal: plataforma.toUpperCase(),
-        });
-        return reply.code(503).send({ error: 'Ingesta de canal deshabilitada' });
-      }
-      if (!secretoOk(token, config.CHANNEL_INGEST_TOKEN)) {
-        await registrarRecepcion(req, {
-          resultado: 'TOKEN_INVALIDO',
-          status: 401,
-          detalle: `El token de la URL no es el configurado (llegaron ${token.length} chars).`,
-          canal: plataforma.toUpperCase(),
-        });
-        return reply.code(401).send({ error: 'Token inválido' });
+      // RAPPI con una sola URL (si el portal no deja una por evento): se
+      // reconoce lo que se puede por la forma. PING vale sólo si el cuerpo es
+      // ÚNICAMENTE `{ store_id }`; cualquier otra cosa desconocida sigue siendo
+      // 501, nunca un 200 que RAPPI tome por "recibido".
+      if (plataforma.toLowerCase() === 'rappi') {
+        if (!(await firmaRappiOk(req, reply))) return reply;
+        const b = req.body;
+        if (esNuevaOrdenRappi(b)) return manejarNuevaOrdenRappi(req, reply);
+        if (esCancelacionRappi(b)) return manejarCancelacionRappi(req, reply);
+        if (b && typeof b === 'object' && !Array.isArray(b)) {
+          const claves = Object.keys(b as object);
+          if (claves.length === 1 && claves[0] === 'store_id') return manejarPing(reply);
+        }
       }
 
       // ¿Ya viene en el contrato neutral? Entonces es una orden y se procesa.

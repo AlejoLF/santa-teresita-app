@@ -1,15 +1,135 @@
 # Integración con RAPPI (y las demás plataformas)
 
-> Estado al 25/09/2026: **la ingesta funciona; falta el traductor del formato de
-> RAPPI.** Este documento dice qué hay, qué falta, y exactamente qué hace falta
-> para terminarlo.
+> Estado al 26/09/2026: **las 15 capacidades del checklist están implementadas;
+> falta certificarlas contra el RAPPI real.** Este documento dice qué hay, cómo
+> ponerlo en marcha, y qué queda por decidir.
 >
-> Cambio del 25/09: el webhook ahora acepta **cualquier content-type**. Antes,
-> un integrador que posteara `application/x-www-form-urlencoded` —o sin
-> content-type— se comía un 415 de Fastify ANTES de llegar al handler, así que
-> no quedaba ni un renglón en el buzón. Era el mismo agujero que el buzón vino a
-> tapar, un nivel más abajo: la pantalla habría dicho "no llegó nada" con total
-> seguridad, y habría estado mintiendo.
+> La API de RAPPI está transcrita en **[RAPPI-API-REFERENCE.md](RAPPI-API-REFERENCE.md)**.
+
+## Cómo está armado
+
+Dos direcciones, dos módulos:
+
+| Dirección | Dónde | Qué |
+|-|-|-|
+| **RAPPI → nosotros** | `routes/channel.ts` + `services/rappi/adaptador.ts`, `firma.ts` | Los webhooks: pedidos nuevos, cancelaciones, PING, menú, tienda. Una URL por evento, firma HMAC, y todo queda en el buzón (`recepciones_canal`). |
+| **Nosotros → RAPPI** | `services/rappi/cliente.ts`, `tiendas.ts`, `ordenes.ts`, `menu.ts`, `webhooks.ts` + `routes/rappi.ts` | Llamadas a su API: tiendas, menú, tomar/rechazar/lista, suscripción de webhooks, aprovisionamiento. Cada llamada queda en `llamadas_canal`. |
+
+Todo lo saliente se dispara desde **Admin → Configuración → Integraciones**, con
+sesión de admin. Cada botón es un ítem del checklist.
+
+### Configuración
+
+Secretos y ambiente, en el entorno del server (Railway) — **nunca en la base**:
+
+| Variable | Qué es |
+|-|-|
+| `RAPPI_CLIENT_ID` / `RAPPI_CLIENT_SECRET` | Las credenciales que da RAPPI, **por ambiente**. Sin ellas, lo saliente está apagado (los pedidos entran igual). |
+| `RAPPI_WEBHOOK_SECRET` | Con el que RAPPI firma los webhooks. Es el mismo que se manda al suscribirlos. Sin él, la firma no se exige y la pantalla lo avisa. |
+| `RAPPI_AMBIENTE` | `dev` (sandbox + simulador) o `prod`. Elige el dominio. |
+| `CHANNEL_INGEST_TOKEN` | El de siempre: va en la URL de los webhooks. |
+
+Lo operativo, en `configuracion_sistema` (clave `rappi_config`), editable desde la
+pantalla: la tienda elegida, el `clientId` de la integración, si se toman las
+órdenes solas, el tiempo de cocina que se declara, y el estado del último menú.
+
+## El checklist, capacidad por capacidad
+
+| Grupo | Capacidad | Cómo se cumple | Estado |
+|-|-|-|-|
+| Tiendas | **Enable/disable** ⭐ | botón *Activar/Desactivar integración* → `PUT /stores-pa/{id}/status` | listo |
+| Tiendas | Listar | botón *Listar tiendas* → `GET /stores-pa` (si hay una sola, se elige sola) | listo |
+| Tiendas | Horarios | botón *Enviar horarios* → manda los turnos de `sesiones_horarios`, token de *utils* | listo (dominio a confirmar: ver nota) |
+| Menú | Enviar menú | botón *Enviar menú* → `POST /menu` armado desde el catálogo | listo |
+| Menú | Estado del menú | botón *Consultar aprobación* → `GET /menu/approved/{id}`, y el webhook `MENU_APPROVED` | listo |
+| Menú | Disponibilidad | `PUT /admin/rappi/menu/disponibilidad` → `PUT /availability/stores/items` | listo (sin botón todavía: se llama por API) |
+| Webhooks | Recibir órdenes | `…/rappi/<token>/new-order` → adaptador → venta + comanda, 200 en < 5 s | listo |
+| Webhooks | **Cancelación** ⭐ | `…/cancel` → anula la venta, reversa pagos, comanda de cancelación | listo |
+| Webhooks | PING | `…/ping` → `{status:"OK"}`; el panel muestra el último | listo |
+| Webhooks | Validar firma HMAC | `Rappi-Signature` sobre el cuerpo crudo; sin firma o mal firmado → 401 registrado | listo |
+| Onboarding | Auto-onboarding | *Suscribir por API* (`POST /clients/{id}/webhooks`) + *Aprovisionar* (`POST /stores/provisioning`) | listo |
+| Órdenes | **Tomar** ⭐ | botón *Tomar* o el switch de tomar automático → `PUT /orders/{id}/take[/min]` | listo |
+| Órdenes | Rechazar | botón *Rechazar* con motivo → `PUT /orders/{id}/reject` | listo |
+| Órdenes | Lista para retiro | botón *Lista* → `POST /orders/{id}/ready-for-pickup` | listo |
+| Órdenes | Tomar en < 6 min | métrica de RAPPI sobre lo anterior; con el switch prendido no se vence nunca | depende de la decisión de abajo |
+
+⭐ = REQUERIDO
+
+> **Nota sobre los horarios**: el endpoint es `/api/rest-ops-utils/store/schedule/{id}`
+> y el portal no dice contra qué dominio. Se asume el legacy (`services.*`), por el
+> prefijo `/api/`. Si contesta 404, el registro lo muestra y es cambiar una línea en
+> `services/rappi/tiendas.ts`.
+
+## Cómo se pone en marcha
+
+En este orden. Cada paso se ve en la pantalla de Integraciones.
+
+1. **Credenciales.** Cargar `RAPPI_CLIENT_ID`, `RAPPI_CLIENT_SECRET`, `RAPPI_WEBHOOK_SECRET`
+   y `RAPPI_AMBIENTE=dev` en Railway. Botón *Probar credenciales*.
+2. **Tienda.** *Listar tiendas*. Si hay una, queda elegida. Si el checklist dice
+   "el cliente no tiene tiendas asociadas", *Aprovisionar*. Después *Activar
+   integración* y *Abrir tienda*.
+3. **Webhooks.** O se pegan las URLs por evento en el portal (módulo Webhooks,
+   con el mismo `secret` que `RAPPI_WEBHOOK_SECRET`), o se carga el `clientId` de
+   la integración y se usa *Suscribir por API* en cada evento. **Desde la versión
+   en la nube**: desde el `.exe` las URLs son de esa computadora.
+4. **Menú.** *Vista previa* (dice qué queda afuera y por qué), *Enviar menú*, y
+   esperar el `MENU_APPROVED` (o *Consultar aprobación*).
+5. **Probar con el simulador** del portal (ambiente DEV: *Orders → Simulator*).
+   El pedido tiene que aparecer como venta y salir la comanda. *Tomar* desde el
+   panel, o dejar el switch prendido.
+6. **Certificar**: en el Integrations Manager, *Testear* cada capacidad. Todas
+   miran que hayamos hecho al menos una llamada exitosa en los últimos 30 días.
+7. **Producción**: nuevas credenciales, `RAPPI_AMBIENTE=prod`, y repetir 2–4.
+
+## Qué falta decidir
+
+**Tomar las órdenes automáticamente o no.** RAPPI cancela sola lo que no se toma
+en 6 minutos. El switch existe y arranca APAGADO:
+
+- **Prendido**: la orden se toma apenas entra. Nunca se vence, pero la cocina queda
+  comprometida sin que nadie la mire.
+- **Apagado**: hay que tocar *Tomar* en el panel para cada pedido. Hay control, pero
+  una demora en el mostrador cancela pedidos sola.
+
+Quedó para más adelante. Cuando se decida, es un tilde en la pantalla.
+
+## Cosas a saber
+
+- **Los precios son los nuestros.** El pedido se valúa con la lista de precios
+  RAPPI del sistema, no con lo que dice el cuerpo de RAPPI (decisión de alpha.39:
+  precios server-side). El cuerpo entero queda en `payloadExterno` para comparar.
+  Si el menú publicado está al día, coinciden; si no, la diferencia se ve ahí.
+- **Productos por peso.** RAPPI vende unidades. Un producto por kilo se publica
+  como "una unidad = `cantidadDefault`" (p. ej. 500 g) y cuando vuelve se
+  convierte al revés. Sin cantidad por defecto no se publica; la vista previa
+  lo lista.
+- **Combos no se publican todavía.** Un pedido con sku de combo no tendría cómo
+  entrar (el mapeo es sólo por `Producto.codigo`).
+- **Pedidos agendados** (`NEW_ORDER_SCHEDULED`) se anotan y no se crean: el pedido
+  real llega como `NEW_ORDER` cuando RAPPI lo suelta.
+- **El buzón acepta cualquier content-type** (desde el 25/09). Antes, un
+  integrador que posteara form-encoded —o sin content-type— se comía un 415 de
+  Fastify ANTES de llegar al handler y no quedaba ni un renglón: la pantalla
+  habría dicho "no llegó nada" con total seguridad, y habría estado mintiendo.
+- **PING no se guarda en el buzón** (sería ruido cada pocos minutos); el panel
+  muestra cuándo fue el último.
+- **Fuera de horario** el pedido sigue rebotando con 423, como cualquier canal.
+  RAPPI lo va a cancelar por OCC a los 6 minutos.
+
+## Verificación
+
+`t-rappi.mjs` (suite manual) contra un RAPPI falso local que implementa lo que
+la documentación dice y anota cada llamada: 14 secciones, ~100 comprobaciones.
+Cubre el token (una sola vez, header `x-authorization: Bearer: …`), las tres de
+tiendas, el menú armado desde el catálogo con precios de la lista RAPPI, la
+firma sobre el cuerpo crudo (válida, ausente, equivocada, y con espacios
+raros), `NEW_ORDER` → venta con el topping resuelto al id real y el cliente
+creado, el duplicado, tomar automático (y que NO se tome con el switch apagado),
+productos por peso en las dos direcciones, agendado, cancelación, menú
+aprobado/rechazado, conectividad, aprovisionamiento, la URL única, tomar/
+rechazar/lista desde el panel, suscripción por API, que el registro no filtre
+secretos, y que un vendedor no vea el panel.
 
 ## Lo que pasó en la prueba del 29/08
 
