@@ -65,6 +65,24 @@ const ConfigSchema = z.object({
   //   venta en el POS (canal de plataforma). Token distinto del de facturas →
   //   blast radius separado. Si falta, el endpoint responde 503 (deshabilitado).
   CHANNEL_INGEST_TOKEN: z.string().min(24).optional(),
+
+  // ── RAPPI (docs/RAPPI-API-REFERENCE.md) ──
+  // Credenciales de la integración: las da RAPPI por ambiente (las de DEV no
+  // sirven en producción ni al revés). Si faltan, todo lo SALIENTE a RAPPI
+  // está apagado; el buzón entrante sigue andando igual.
+  RAPPI_CLIENT_ID: z.string().min(1).optional(),
+  RAPPI_CLIENT_SECRET: z.string().min(1).optional(),
+  // El secreto con el que RAPPI firma los webhooks (header `Rappi-Signature`).
+  // Es el mismo que se manda al suscribir el webhook. Si falta, la firma no se
+  // exige — y la pantalla de Integraciones lo dice con todas las letras.
+  RAPPI_WEBHOOK_SECRET: z.string().min(16).optional(),
+  // Contra qué RAPPI se habla: 'dev' (sandbox + simulador) o 'prod'. Va en el
+  // entorno y no en la base a propósito: está atado a las credenciales.
+  RAPPI_AMBIENTE: z.enum(['dev', 'prod']).default('dev'),
+  // Overrides de dominio, para tests (un RAPPI falso local) o un proxy. En
+  // producción NO se setean: el ambiente elige el dominio.
+  RAPPI_BASE_LEGACY_URL: z.string().url().optional(),
+  RAPPI_BASE_NUEVO_URL: z.string().url().optional(),
 });
 
 const parsed = ConfigSchema.safeParse(process.env);

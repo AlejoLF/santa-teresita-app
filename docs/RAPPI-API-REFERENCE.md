@@ -205,6 +205,31 @@ Rappi-Signature: t=123456,sign=<hash>
 > `JSON.parse` + `JSON.stringify` reordena claves y cambia espacios: el hash da
 > distinto y la firma válida se rechaza.
 
+### Aprovisionar tiendas (Auto-onboarding)
+
+```
+POST {COUNTRY_DOMAIN}/api/v2/restaurants-integrations-public-api/stores/provisioning
+
+{ "stores": [ {
+  "store_id": "900105814",            // obligatorio
+  "name": "Santa Teresita",           // obligatorio
+  "status": "ACTIVE",                 // opcional: ACTIVE | INACTIVE
+  "ping_active": true,                // opcional, default true
+  "get_menu_active": true,            // opcional, default true
+  "cancellation_events": true,        // opcional, default true
+  "other_events": true,               // opcional, default true
+  "store_integration_id": "999"       // opcional: NUESTRO id para esa tienda
+} ] }
+```
+
+Responde **202** con `{ batch_id, accepted: [{store_id, integration_id}],
+rejected: [{store_id, reason}] }` — `reason` es uno de `not_owned`,
+`invalid_integration_id`, `missing_name`, `invalid_status`. El resultado final
+llega después por el webhook `STORE_PROVISIONING_STATUS`.
+
+`POST /stores/deprovisioning` con `{ "stores": [{ "store_id": "…" }] }` hace lo
+inverso (razones: `not_owned`, `not_integrated`, `has_integrated_children`).
+
 ### Suscribirse
 
 A nivel integración (es lo que pide *Auto-onboarding*):

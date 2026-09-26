@@ -22,6 +22,9 @@ problemas estructurales.
 - [docs/CLOUD-DB.md](docs/CLOUD-DB.md) / [docs/CLOUD-ANALYTICS.md](docs/CLOUD-ANALYTICS.md) — Supabase: schema, sync, vistas de analytics.
 - [docs/ACCESO-REMOTO-S1.md](docs/ACCESO-REMOTO-S1.md) — acceso remoto al server S1.
 - [docs/N8N-FACTURAS-OCR.md](docs/N8N-FACTURAS-OCR.md) — OCR de facturas vía N8N + bot Telegram.
+- [docs/RAPPI-INTEGRACION.md](docs/RAPPI-INTEGRACION.md) — **integración con RAPPI**: el checklist
+  de certificación (15 capacidades), cómo se pone en marcha, qué falta decidir.
+  [docs/RAPPI-API-REFERENCE.md](docs/RAPPI-API-REFERENCE.md) es su API transcrita.
 - [docs/MIGRACION-INNOVO.md](docs/MIGRACION-INNOVO.md) — migración de datos desde Innovo Suite.
 - [docs/POSNETS.md](docs/POSNETS.md) — posnets y medios de pago.
 - [docs/PRODUCTIZACION-Y-VENTA.md](docs/PRODUCTIZACION-Y-VENTA.md) — análisis estratégico de vender el POS como producto (mercado ES/AR/PT, regulación Veri*Factu/AT, pricing, arquitectura SaaS multi-tenant, capacidad Supabase medida, features IA). Research 2026-06-06.
@@ -259,6 +262,14 @@ Ver SPEC §1.5. Punteo:
   `lib/api.ts` setea el header solo si hay body; `server.ts` además parsea
   body vacío como `undefined` (red de seguridad para cualquier cliente).
 
+- **RAPPI: el header de autenticación es `x-authorization: Bearer: <token>`** —
+  no `Authorization`, y CON dos puntos después de Bearer. Con el header normal
+  todo da 401 y uno se vuelve loco con las credenciales. Está en
+  `services/rappi/cliente.ts`; no lo "corrijas". Y la firma de sus webhooks se
+  calcula sobre el **cuerpo crudo** (`req.rawBody`, capturado en un hook
+  `preParsing` del plugin de canal): un parse + stringify la invalida.
+  Todo lo saliente a RAPPI está apagado si faltan `RAPPI_CLIENT_ID`/`_SECRET`.
+
 - **Repartidor en tickets: se infiere del canal** (`repartidorPorCanal()` en
   `services/impresion.ts`). RAPPI/PYA/MELI/DELIVERATE no requieren asignación
   manual. Prioridad: empleado interno asignado > empresa explícita > inferido
@@ -328,7 +339,7 @@ Detalle en [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md). Resumen:
 |-|-|-|
 | 1 | Resolver pendientes del cliente (PREGUNTAS.md) | Producción |
 | 2 | Sync/aprobación de precios: `excel-sync.ts` sigue atado a disco + parsers Python (el resto del Excel ya va por Drive API) | Aprobación de cambios masivos |
-| 3 | Webhooks reales de RAPPI/PYA/MELI (la ingesta existe, falta el push de las plataformas) | Integración delivery automática |
+| 3 | RAPPI: certificar las 15 capacidades contra el RAPPI real (código listo, faltan credenciales en Railway y el simulador). PYA/MELI: sólo el puente neutral | Integración delivery automática |
 | 4 | Hash-chain audit triggers en Postgres (no solo app-level) | Forensic strength |
 | 5 | Cola real para impresión (hoy DB + polling cada 3s) | Throughput alto |
 | 6 | Tests E2E con Playwright | Calidad |
