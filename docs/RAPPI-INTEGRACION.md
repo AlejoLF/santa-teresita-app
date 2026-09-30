@@ -235,6 +235,19 @@ Quedó para más adelante. Cuando se decida, es un tilde en la pantalla.
 
 ## Cosas a saber
 
+- **El secret del webhook son DOS claves separadas por coma.** RAPPI lo
+  entrega así ("K1,K2") y firma con una de ellas. Si en `RAPPI_WEBHOOK_SECRET`
+  quedó el texto entero, el sistema acepta la firma hecha con K1, con K2 o con
+  el texto entero (incidente 30/09: se verificaba sólo contra el texto entero y
+  todos los tests daban "Firma inválida"). Y el secret que RAPPI tiene para el
+  webhook de la tienda —el que se ve en su módulo Webhooks— tiene que ser el
+  mismo que el de Railway; si no, la firma nunca va a coincidir.
+- **El evento de prueba de NEW_ORDER del portal no es un pedido**: manda
+  `{order_id, store_id, total, status}` sin `order_detail`. Si viene firmado
+  por RAPPI, se responde 200 (lo que el test exige) y queda en el buzón como
+  BODY_INVALIDO con status 200 y "no se creó ninguna venta". Sin firma exigida
+  sigue siendo 400.
+
 - **NEW_ORDER responde 200 al instante y la venta se crea en segundo plano.**
   RAPPI exige el 200 en menos de 5 segundos, y crear una venta desde Railway
   contra Supabase (decenas de consultas a otro continente) puede tardar más.
