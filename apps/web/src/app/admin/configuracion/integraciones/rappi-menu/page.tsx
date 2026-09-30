@@ -125,9 +125,10 @@ export default function RappiMenuPage() {
         <div>
           <h2 className="font-display text-lg text-teresita-700">Menú de RAPPI → productos del POS</h2>
           <p className="text-sm text-ink-500 max-w-2xl">
-            El menú se maneja en la web de RAPPI. Acá se dice qué producto o sabor nuestro es cada cosa de RAPPI, para
-            que los pedidos se cuenten bien. El precio es siempre el de RAPPI. Lo que llega sin traducir entra igual
-            (como "RAPPI — sin traducir") y queda acá como pendiente; al traducirlo, las ventas anteriores se corrigen solas.
+            El menú se maneja en la web de RAPPI. Acá se dice qué producto nuestro es cada cosa de RAPPI (y, si hace
+            falta, con qué sabor o tipo), para que los pedidos se cuenten bien. Nada se traduce solo: las sugerencias son
+            sólo sugerencias. El precio es siempre el de RAPPI. Lo que llega sin traducir entra igual (como "RAPPI — sin
+            traducir") y queda acá como pendiente; al traducirlo, las ventas anteriores se corrigen solas.
           </p>
           <Link href="/admin/configuracion/integraciones" className="text-xs text-teresita-700 underline">← volver a Integraciones</Link>
         </div>
@@ -220,9 +221,23 @@ function Fila({ t, grupos, ocupado, onDecidir }: { t: Traduccion; grupos: GrupoP
         ) : traducido && (t.producto || t.opcion) ? (
           <div>
             <div className="text-sm text-ink-900">
-              → {t.producto ? <>{t.producto.nombre}{t.producto.codigo && <span className="font-mono text-xs text-ink-500"> {t.producto.codigo}</span>}</> : <>{t.opcion!.nombre} <span className="text-xs text-ink-500">({t.opcion!.grupo})</span></>}
+              → {t.producto ? <>{t.producto.nombre}{t.producto.codigo && <span className="font-mono text-xs text-ink-500"> {t.producto.codigo}</span>}{t.opcion && <> + <strong>{t.opcion.nombre}</strong> <span className="text-xs text-ink-500">({t.opcion.grupo})</span></>}</> : <>{t.opcion!.nombre} <span className="text-xs text-ink-500">({t.opcion!.grupo})</span></>}
               {auto && <span className="ml-2 text-2xs rounded-full bg-saffron-100 text-saffron-600 px-1.5 py-0.5" title="Se tradujo sola: revisá que esté bien">automática</span>}
             </div>
+            {t.tipo === 'PRODUCTO' && t.producto && (
+              <label className="text-xs text-ink-700 flex items-center gap-2 mt-1">
+                sabor / tipo
+                <select className="input w-auto max-w-[16rem]" disabled={ocupado} value={t.opcion?.id ?? ''}
+                  onChange={(e) => onDecidir({ opcionId: e.target.value || null })}>
+                  <option value="">ninguno</option>
+                  {grupos.map((g) => (
+                    <optgroup key={g.id} label={g.nombre}>
+                      {g.opciones.filter((o) => o.activa).map((o) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+            )}
             {t.producto?.porPeso && (
               <label className="text-xs text-ink-700 flex items-center gap-2">
                 gramos por unidad de RAPPI

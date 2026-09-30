@@ -19,9 +19,11 @@ import { ReglaNegocioError } from './errores.js';
  *   - Cuando la encargada traduce algo que ya había entrado como comodín, las
  *     ventas anteriores se corrigen (el ítem pasa al producto real, mismo
  *     precio y nombre), así el conteo queda bien desde el primer pedido.
- *   - Dos traducciones automáticas, marcadas para que se puedan revisar: el
- *     sku de RAPPI es un código nuestro (AUTO_SKU) o el nombre es exactamente
- *     igual (AUTO_NOMBRE).
+ *   - NADA se traduce solo (pedido del 30/09: la primera versión traducía por
+ *     nombre exacto y eligió mal). Todo lo nuevo queda PENDIENTE; la pantalla
+ *     ofrece sugerencias, pero decide la encargada.
+ *   - Un producto de RAPPI puede traducirse a un producto nuestro MÁS un
+ *     sabor/tipo (opcionId): "Ravioles de ricota" de RAPPI = Ravioles + Ricota.
  */
 
 export type PlataformaCanal = 'RAPPI' | 'PEDIDOS_YA' | 'MERCADO_LIBRE';
@@ -125,8 +127,8 @@ export async function productoComodin(plataforma: PlataformaCanal): Promise<stri
 
 /**
  * Anota cada producto/topping tal como lo mandó la plataforma (nombre, sku,
- * precio, cuántas veces se vio). No toca lo que la encargada ya decidió. Para
- * las filas NUEVAS intenta la traducción automática.
+ * precio, cuántas veces se vio). No toca lo que la encargada ya decidió. Lo
+ * nuevo queda PENDIENTE: no se traduce nada solo.
  */
 export async function registrarVistos(
   plataforma: PlataformaCanal,
@@ -174,10 +176,8 @@ export async function registrarVistos(
   }
 
   if (nuevas.length) {
-    const auto = await traduccionesAutomaticas(nuevas);
     for (const v of nuevas) {
       const k = claveDe(v.tipo, v.idExterno);
-      const a = auto.get(k);
       const creada = await prisma.traduccionCanal.create({
         data: {
           plataforma,
@@ -191,82 +191,10 @@ export async function registrarVistos(
           origen,
           vecesVisto: origen === 'PEDIDO' ? 1 : 0,
           vistoAt: ahora,
-          ...(a
-            ? {
-                estado: 'TRADUCIDO',
-                origenTraduccion: a.origen,
-                productoId: a.productoId ?? null,
-                opcionId: a.opcionId ?? null,
-              }
-            : { estado: 'PENDIENTE' }),
+          estado: 'PENDIENTE',
         },
       });
       out.set(k, creada);
-    }
-  }
-  return out;
-}
-
-/** AUTO_SKU (el sku es un código nuestro) o AUTO_NOMBRE (mismo nombre exacto, único). */
-async function traduccionesAutomaticas(
-  vistos: VistoExterno[],
-): Promise<Map<string, { origen: 'AUTO_SKU' | 'AUTO_NOMBRE'; productoId?: string; opcionId?: string }>> {
-  const out = new Map<string, { origen: 'AUTO_SKU' | 'AUTO_NOMBRE'; productoId?: string; opcionId?: string }>();
-  const productosVistos = vistos.filter((v) => v.tipo === 'PRODUCTO');
-  const toppingsVistos = vistos.filter((v) => v.tipo === 'TOPPING');
-
-  if (productosVistos.length) {
-    const skus = [...new Set(productosVistos.map((v) => v.sku?.trim()).filter((s): s is string => Boolean(s)))];
-    const porSku = skus.length
-      ? await prisma.producto.findMany({ where: { activo: true, codigo: { in: skus } }, select: { id: true, codigo: true } })
-      : [];
-    const skuAId = new Map(porSku.map((p) => [p.codigo as string, p.id]));
-    const activos = await prisma.producto.findMany({ where: { activo: true }, select: { id: true, nombre: true, codigo: true } });
-    const porNombre = new Map<string, string[]>();
-    for (const p of activos) {
-      const n = normalizarNombre(p.nombre);
-      if (!n) continue;
-      porNombre.set(n, [...(porNombre.get(n) ?? []), p.id]);
-    }
-    const comodines = new Set(Object.values(CODIGO_COMODIN));
-    for (const v of productosVistos) {
-      const k = claveDe(v.tipo, v.idExterno);
-      const sku = v.sku?.trim();
-      if (sku && skuAId.has(sku) && !comodines.has(sku)) {
-        out.set(k, { origen: 'AUTO_SKU', productoId: skuAId.get(sku) });
-        continue;
-      }
-      const cands = porNombre.get(normalizarNombre(v.nombre)) ?? [];
-      if (cands.length === 1) out.set(k, { origen: 'AUTO_NOMBRE', productoId: cands[0] });
-    }
-  }
-
-  if (toppingsVistos.length) {
-    const skus = [...new Set(toppingsVistos.map((v) => v.sku?.trim()).filter((s): s is string => Boolean(s)))];
-    const opciones = await prisma.opcionModificador.findMany({
-      where: { activa: true },
-      select: { id: true, nombre: true, codigo: true },
-    });
-    const porSku = new Map<string, string>();
-    for (const o of opciones) {
-      if (o.codigo && skus.includes(o.codigo)) porSku.set(o.codigo, o.id);
-      if (skus.includes(o.id)) porSku.set(o.id, o.id);
-    }
-    const porNombre = new Map<string, string[]>();
-    for (const o of opciones) {
-      const n = normalizarNombre(o.nombre);
-      if (!n) continue;
-      porNombre.set(n, [...(porNombre.get(n) ?? []), o.id]);
-    }
-    for (const v of toppingsVistos) {
-      const k = claveDe(v.tipo, v.idExterno);
-      const sku = v.sku?.trim();
-      if (sku && porSku.has(sku)) {
-        out.set(k, { origen: 'AUTO_SKU', opcionId: porSku.get(sku) });
-        continue;
-      }
-      const cands = porNombre.get(normalizarNombre(v.nombre)) ?? [];
-      if (cands.length === 1) out.set(k, { origen: 'AUTO_NOMBRE', opcionId: cands[0] });
     }
   }
   return out;
@@ -420,7 +348,11 @@ export async function listarTraducciones(plataforma: PlataformaCanal, f: FiltroT
 export interface DecisionTraduccion {
   /** Para tipo PRODUCTO. null = sacar la traducción. */
   productoId?: string | null;
-  /** Para tipo TOPPING. null = sacar la traducción. */
+  /**
+   * Para tipo TOPPING: la opción nuestra (null = sacar la traducción).
+   * Para tipo PRODUCTO: el sabor/tipo que se aplica al producto (opcional;
+   * null = sin sabor).
+   */
   opcionId?: string | null;
   /** IGNORAR para que no cuente; PENDIENTE para volver a dejarlo sin decidir. */
   estado?: EstadoTraduccion;
@@ -450,7 +382,7 @@ export async function decidirTraduccion(
     Object.assign(data, { estado: 'PENDIENTE', productoId: null, opcionId: null, origenTraduccion: null });
   } else if (actual.tipo === 'PRODUCTO') {
     if (decision.productoId === null) {
-      Object.assign(data, { estado: 'PENDIENTE', productoId: null, origenTraduccion: null });
+      Object.assign(data, { estado: 'PENDIENTE', productoId: null, opcionId: null, origenTraduccion: null });
     } else if (decision.productoId) {
       const p = await prisma.producto.findUnique({ where: { id: decision.productoId }, select: { id: true, codigo: true } });
       if (!p) throw new ReglaNegocioError('Ese producto no existe.');
@@ -458,6 +390,18 @@ export async function decidirTraduccion(
         throw new ReglaNegocioError('El comodín no es una traducción: elegí el producto real.');
       }
       Object.assign(data, { estado: 'TRADUCIDO', productoId: p.id, origenTraduccion: 'MANUAL' });
+    }
+    // El sabor/tipo que acompaña al producto. Sólo tiene sentido con un
+    // producto traducido (ya sea el de esta decisión o el que ya estaba).
+    if (decision.opcionId !== undefined) {
+      const hayProducto = decision.productoId ?? actual.productoId;
+      if (decision.opcionId === null || !hayProducto) {
+        data.opcionId = null;
+      } else {
+        const o = await prisma.opcionModificador.findUnique({ where: { id: decision.opcionId }, select: { id: true } });
+        if (!o) throw new ReglaNegocioError('Ese sabor no existe.');
+        data.opcionId = o.id;
+      }
     }
   } else if (actual.tipo === 'TOPPING') {
     if (decision.opcionId === null) {

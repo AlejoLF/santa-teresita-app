@@ -172,7 +172,8 @@ export async function nuevaOrdenANeutral(p: NuevaOrdenRappi): Promise<OrdenCanal
   ]);
 
   const productoIds = [...trad.values()].filter((t) => t.tipo === 'PRODUCTO' && t.productoId).map((t) => t.productoId as string);
-  const opcionIds = [...trad.values()].filter((t) => t.tipo === 'TOPPING' && t.opcionId).map((t) => t.opcionId as string);
+  // Opciones: las de los toppings traducidos Y el sabor/tipo de los productos traducidos.
+  const opcionIds = [...trad.values()].filter((t) => t.opcionId).map((t) => t.opcionId as string);
   const [productos, opciones] = await Promise.all([
     productoIds.length
       ? prisma.producto.findMany({ where: { id: { in: productoIds } }, select: { id: true, unidadPrecio: true, cantidadDefault: true, activo: true } })
@@ -202,6 +203,18 @@ export async function nuevaOrdenANeutral(p: NuevaOrdenRappi): Promise<OrdenCanal
 
     let extras = 0;
     const modificadores: ModificadorAplicado[] = [];
+    // El sabor/tipo que la traducción le asigna al producto ("Ravioles de
+    // ricota" de RAPPI = Ravioles + Ricota). No suma precio: ya está en el de RAPPI.
+    const sabor = traducido && t?.opcionId ? opcionPorId.get(t.opcionId) : undefined;
+    if (sabor) {
+      modificadores.push({
+        grupoId: sabor.grupo.id,
+        grupoNombre: sabor.grupo.nombre,
+        opcionId: sabor.id,
+        opcionNombre: sabor.nombre,
+        deltaPrecio: '0',
+      });
+    }
     for (const s of it.subitems ?? []) {
       const ts = trad.get(claveTraduccion('TOPPING', idExternoDe(s)));
       if (ts?.estado === 'IGNORAR') continue;

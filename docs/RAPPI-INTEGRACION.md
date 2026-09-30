@@ -61,9 +61,12 @@ precios de allá son otros, y todavía no se unifican. Lo que hace el POS es
   sale con ese nombre. Queda una fila PENDIENTE en la pantalla. Al traducirla,
   los ítems de los últimos 90 días que entraron con el comodín para ese id
   **se corrigen solos** al producto real (mismo precio y nombre; auditado).
-- Dos traducciones automáticas, marcadas "automática" para revisarlas: el sku
-  de RAPPI es un código nuestro (`AUTO_SKU`) o el nombre es exactamente igual
-  (`AUTO_NOMBRE`).
+- **Nada se traduce solo.** La primera versión traducía por nombre exacto y
+  eligió mal (30/09): quedó una migración de datos que devolvió eso a
+  pendiente. La pantalla sugiere (palabras en común), la encargada decide.
+- Un producto de RAPPI se traduce a un producto nuestro **más un sabor/tipo
+  opcional** (`opcionId`): "Ravioles de ricota" de RAPPI = Ravioles + Ricota.
+  El sabor entra como modificador del ítem, sin sumar precio.
 - **Traer el menú de RAPPI** (`GET /store/{id}/menu/current`) registra todo lo
   que RAPPI vende hoy para traducirlo *antes* del primer pedido.
 - Un producto marcado **IGNORAR** (por ejemplo "Envío") no entra en la venta.
