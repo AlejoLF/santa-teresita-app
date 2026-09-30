@@ -440,6 +440,7 @@ model Producto {
   preciosPorLista  PrecioPorLista[]
   historialPrecios HistorialPrecio[]
   itemsVenta       ItemVenta[]
+  traduccionesCanal TraduccionCanal[]
   componentesCombo ComponenteCombo[]       @relation("ComponenteFijo")
   opcionesCombo    OpcionComponenteCombo[]
 
@@ -484,6 +485,7 @@ model OpcionModificador {
 
   grupo          GrupoModificador      @relation(fields: [grupoId], references: [id], onDelete: Cascade)
   deltasPorLista DeltaOpcionPorLista[]
+  traduccionesCanal TraduccionCanal[]
 
   @@index([grupoId, activa])
   @@map("opciones_modificador")
@@ -2083,4 +2085,58 @@ model LlamadaCanal {
   @@index([hechoAt])
   @@index([plataforma, ok, hechoAt])
   @@map("llamadas_canal")
+}
+
+/// Traducción del menú de una plataforma al catálogo del POS.
+///
+/// El menú de RAPPI lo maneja la encargada en la web de RAPPI (decisión del
+/// 30/09: los productos y combos de allá son muy distintos de los de acá, y
+/// todavía no se unifican). Los pedidos llegan con los ítems de RAPPI y hay que
+/// contarlos como algo del POS: cada producto/topping de RAPPI (por su id de
+/// RAPPI) se traduce a un Producto / OpcionModificador nuestro. El PRECIO es el
+/// de RAPPI (viene en el pedido), nunca el de nuestra lista.
+///
+/// Lo que llega y no tiene traducción NO se pierde: la venta entra con el
+/// producto comodín ("RAPPI — sin traducir", nombre y precio de RAPPI) y acá
+/// queda una fila PENDIENTE para que la encargada la traduzca desde el panel.
+model TraduccionCanal {
+  id           String   @id @default(uuid()) @db.Uuid
+  plataforma   String   @db.VarChar(30)
+  /// PRODUCTO | TOPPING
+  tipo         String   @db.VarChar(20)
+  /// El id que la plataforma le da al producto/topping (estable). Es la clave.
+  idExterno    String   @map("id_externo") @db.VarChar(120)
+  /// Lo último que se vio de él en la plataforma, para reconocerlo en la pantalla.
+  nombreExterno    String   @map("nombre_externo") @db.VarChar(200)
+  skuExterno       String?  @map("sku_externo") @db.VarChar(120)
+  categoriaExterna String?  @map("categoria_externa") @db.VarChar(200)
+  precioExterno    Decimal? @map("precio_externo") @db.Decimal(18, 2)
+
+  /// PENDIENTE (llegó y nadie lo tradujo) · TRADUCIDO · IGNORAR (no se cuenta:
+  /// p. ej. el envío o un "sin cubiertos").
+  estado String @default("PENDIENTE") @db.VarChar(20)
+  /// Cómo se decidió: MANUAL (la encargada) · AUTO_SKU (el sku de RAPPI es
+  /// nuestro código) · AUTO_NOMBRE (mismo nombre exacto). Los AUTO se muestran
+  /// marcados para que se puedan revisar.
+  origenTraduccion String? @map("origen_traduccion") @db.VarChar(20)
+  productoId String? @map("producto_id") @db.Uuid
+  opcionId   String? @map("opcion_id") @db.Uuid
+  /// Para productos por peso: cuánto es UNA unidad de RAPPI (en la unidad de
+  /// `Producto.cantidadDefault`, gramos). Null = el cantidadDefault del producto.
+  cantidadPorUnidad Decimal? @map("cantidad_por_unidad") @db.Decimal(12, 3)
+
+  /// MENU (lo trajo la importación del menú) · PEDIDO (apareció en un pedido).
+  origen     String   @default("PEDIDO") @db.VarChar(20)
+  vecesVisto Int      @default(0) @map("veces_visto")
+  vistoAt    DateTime @default(now()) @map("visto_at")
+  creadoAt   DateTime @default(now()) @map("creado_at")
+  actualizadoAt  DateTime @default(now()) @updatedAt @map("actualizado_at")
+  actualizadoPor String?  @map("actualizado_por") @db.VarChar(120)
+
+  producto Producto?          @relation(fields: [productoId], references: [id])
+  opcion   OpcionModificador? @relation(fields: [opcionId], references: [id])
+
+  @@unique([plataforma, tipo, idExterno])
+  @@index([plataforma, estado])
+  @@map("traducciones_canal")
 }

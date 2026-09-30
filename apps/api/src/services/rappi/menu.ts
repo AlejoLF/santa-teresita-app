@@ -3,6 +3,7 @@ import { CanalListaPrecios } from '@sta/db';
 import { ReglaNegocioError } from '../errores.js';
 import { llamarRappi } from './cliente.js';
 import { getRappiConfig, setRappiConfig } from './config.js';
+import { registrarVistos, type VistoExterno } from '../traduccion-canal.js';
 
 /**
  * Capacidades de "Menú" del checklist: publicar el menú desde NUESTRO
@@ -307,4 +308,101 @@ export async function setDisponibilidad(args: { prender: string[]; apagar: strin
     contexto: `disponibilidad: prender ${args.prender.length}, apagar ${args.apagar.length}`,
   });
   return { ok: r.ok, status: r.status, respuesta: r.body ?? r.texto };
+}
+
+// ─── El menú que RAPPI tiene hoy (para traducirlo) ───────────────────────
+
+interface MenuActualRappi {
+  storeId?: string;
+  products?: Array<{
+    id?: string | number;
+    name?: string;
+    price?: number;
+    partnerSku?: string | null;
+    toppings?: Array<{
+      id?: string | number;
+      name?: string;
+      price?: number;
+      partnerSku?: string | null;
+      category?: { id?: string | number; name?: string } | null;
+    }>;
+  }>;
+}
+
+/**
+ * `GET /store/{RAPPI_ID}/menu/current`: lo que RAPPI está vendiendo de esta
+ * tienda, con los ids que después vienen en los pedidos. Se registra todo en
+ * traducciones_canal (origen MENU) para que la encargada pueda traducirlo
+ * ANTES del primer pedido, en vez de ir descubriéndolo pedido a pedido.
+ */
+export async function importarMenuRappi(): Promise<{
+  ok: boolean;
+  status: number;
+  productos: number;
+  toppings: number;
+  nuevos: number;
+  detalle: string;
+}> {
+  const cfg = await getRappiConfig();
+  if (!cfg.storeId) throw new ReglaNegocioError('Primero elegí la tienda de RAPPI (botón "Listar tiendas").');
+  const r = await llamarRappi<MenuActualRappi | MenuActualRappi[]>({
+    arbol: 'legacy',
+    metodo: 'GET',
+    ruta: `${LEGACY}/store/${encodeURIComponent(cfg.storeId)}/menu/current`,
+    contexto: `traer el menú actual de la tienda ${cfg.storeId}`,
+  });
+  if (!r.ok) {
+    return {
+      ok: false,
+      status: r.status,
+      productos: 0,
+      toppings: 0,
+      nuevos: 0,
+      detalle: `RAPPI respondió ${r.status} al pedir el menú${r.texto ? `: ${r.texto.slice(0, 200)}` : r.body ? `: ${JSON.stringify(r.body).slice(0, 200)}` : ''}`,
+    };
+  }
+  const tiendas = Array.isArray(r.body) ? r.body : r.body ? [r.body] : [];
+  const vistos: VistoExterno[] = [];
+  const toppingsVistos = new Set<string>();
+  for (const t of tiendas) {
+    for (const prod of t.products ?? []) {
+      const id = prod.id !== undefined && prod.id !== null ? String(prod.id) : '';
+      if (!id) continue;
+      vistos.push({
+        tipo: 'PRODUCTO',
+        idExterno: id,
+        nombre: prod.name?.trim() || id,
+        sku: prod.partnerSku ?? null,
+        precio: typeof prod.price === 'number' ? prod.price : null,
+      });
+      for (const top of prod.toppings ?? []) {
+        const tid = top.id !== undefined && top.id !== null ? String(top.id) : '';
+        if (!tid || toppingsVistos.has(tid)) continue;
+        toppingsVistos.add(tid);
+        vistos.push({
+          tipo: 'TOPPING',
+          idExterno: tid,
+          nombre: top.name?.trim() || tid,
+          sku: top.partnerSku ?? null,
+          categoria: top.category?.name ?? null,
+          precio: typeof top.price === 'number' ? top.price : null,
+        });
+      }
+    }
+  }
+  const antes = await prisma.traduccionCanal.count({ where: { plataforma: 'RAPPI' } });
+  await registrarVistos('RAPPI', vistos, 'MENU');
+  const despues = await prisma.traduccionCanal.count({ where: { plataforma: 'RAPPI' } });
+  const productos = vistos.filter((v) => v.tipo === 'PRODUCTO').length;
+  return {
+    ok: true,
+    status: r.status,
+    productos,
+    toppings: toppingsVistos.size,
+    nuevos: despues - antes,
+    detalle:
+      productos === 0
+        ? 'RAPPI respondió pero sin productos: ¿el menú de la tienda está vacío en su web?'
+        : `${productos} productos y ${toppingsVistos.size} extras traídos de RAPPI (${despues - antes} nuevos).`,
+  };
 }

@@ -1,6 +1,14 @@
 import { prisma } from '@sta/db/client';
 import type { ModificadorAplicado } from '@sta/shared';
-import type { OrdenCanal } from '../venta-canal.js';
+import type { ItemCanal, OrdenCanal } from '../venta-canal.js';
+import {
+  claveTraduccion,
+  marcaItemExterno,
+  normalizarNombre,
+  productoComodin,
+  registrarVistos,
+  type VistoExterno,
+} from '../traduccion-canal.js';
 
 /**
  * El traductor del `NEW_ORDER` de RAPPI al contrato neutral del sistema.
@@ -17,10 +25,11 @@ import type { OrdenCanal } from '../venta-canal.js';
  *   customer                   → cliente
  *   delivery_information       → entrega (forma no documentada: se copia lo que haya)
  *
- * PRECIOS: no se usan los de RAPPI. `crearVentaCanal` valúa con la lista de
- * precios del canal RAPPI, como cualquier venta (decisión de alpha.39: precios
- * server-side, nunca del cliente). El cuerpo entero queda en `payloadExterno`,
- * así que el total de RAPPI se puede comparar después.
+ * PRODUCTOS Y PRECIOS (decisión del 30/09): el menú vive en RAPPI. Cada ítem se
+ * traduce por su id de RAPPI a un producto nuestro (services/traduccion-canal.ts)
+ * y el precio es el de RAPPI. Lo que no tiene traducción entra con el comodín
+ * y queda pendiente — el pedido nunca se rechaza por un producto desconocido.
+ * El cuerpo entero queda en `payloadExterno`.
  */
 
 export interface ItemRappi {
@@ -79,57 +88,6 @@ export function esCancelacionRappi(
   return typeof b.event === 'string' && (typeof b.order_id === 'string' || typeof b.order_id === 'number');
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Un topping de RAPPI → un modificador nuestro.
- *
- * Para que se COBRE, `opcionId` tiene que ser el id real de la
- * `OpcionModificador` (así lo busca `deltaDeModificadores`). Cuando publicamos
- * el menú, el sku de cada topping es el `codigo` de la opción si lo tiene, o su
- * id. Acá se deshace ese camino. Si no se encuentra, el modificador igual va
- * (se ve en la comanda), pero con delta 0 — es mejor que perder el sabor.
- */
-async function resolverToppings(
-  items: ItemRappi[],
-): Promise<Map<string, { id: string; nombre: string; grupoId: string; grupoNombre: string; delta: string }>> {
-  const skus = new Set<string>();
-  for (const it of items) for (const s of it.subitems ?? []) if (s.sku) skus.add(String(s.sku));
-  if (skus.size === 0) return new Map();
-
-  const lista = [...skus];
-  const porId = lista.filter((s) => UUID_RE.test(s));
-  const porCodigo = lista.filter((s) => !UUID_RE.test(s));
-  const opciones = await prisma.opcionModificador.findMany({
-    where: {
-      OR: [
-        ...(porId.length ? [{ id: { in: porId } }] : []),
-        ...(porCodigo.length ? [{ codigo: { in: porCodigo } }] : []),
-      ],
-    },
-    select: {
-      id: true,
-      nombre: true,
-      codigo: true,
-      deltaPrecio: true,
-      grupo: { select: { id: true, nombre: true } },
-    },
-  });
-  const out = new Map<string, { id: string; nombre: string; grupoId: string; grupoNombre: string; delta: string }>();
-  for (const o of opciones) {
-    const v = {
-      id: o.id,
-      nombre: o.nombre,
-      grupoId: o.grupo.id,
-      grupoNombre: o.grupo.nombre,
-      delta: o.deltaPrecio.toString(),
-    };
-    out.set(o.id, v);
-    if (o.codigo) out.set(o.codigo, v);
-  }
-  return out;
-}
-
 function esRetiro(deliveryMethod: string | undefined): boolean {
   return /pick|take|retir|marketplace_pickup/i.test(deliveryMethod ?? '');
 }
@@ -155,69 +113,144 @@ function direccionDe(info: Record<string, unknown> | null | undefined): {
   };
 }
 
-/**
- * RAPPI vende UNIDADES; acá hay productos que se venden por peso. El menú los
- * publica como "una unidad = `cantidadDefault`" (p. ej. 500 g), así que cuando
- * vuelven 2 unidades hay que convertirlas a 2 × 500 g — que es la cantidad que
- * `crearVenta` espera para un producto POR_KILO/POR_GRAMO. Sin esto, dos
- * unidades entrarían como DOS GRAMOS.
- */
-async function factorCantidadPorSku(skus: string[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  if (skus.length === 0) return out;
-  const productos = await prisma.producto.findMany({
-    where: { codigo: { in: skus } },
-    select: { codigo: true, unidadPrecio: true, cantidadDefault: true },
-  });
-  for (const p of productos) {
-    if (!p.codigo) continue;
-    const porPeso = p.unidadPrecio === 'POR_KILO' || p.unidadPrecio === 'POR_GRAMO';
-    const cd = p.cantidadDefault ? Number(p.cantidadDefault) : 0;
-    out.set(p.codigo, porPeso && cd > 0 ? cd : 1);
-  }
-  return out;
+/** La clave estable de un ítem de RAPPI: su id; si no viene, el sku; si no, el nombre. */
+function idExternoDe(it: ItemRappi): string {
+  const id = it.id !== undefined && it.id !== null && String(it.id).trim() ? String(it.id).trim() : '';
+  if (id) return id;
+  const sku = it.sku ? String(it.sku).trim() : '';
+  if (sku) return `sku:${sku}`;
+  return `nombre:${normalizarNombre(it.name ?? '')}`;
 }
 
+/** El precio unitario que RAPPI le cobró al cliente por este ítem (con descuento, si lo hubo). */
+function precioUnitarioDe(it: ItemRappi): number {
+  const c = [it.unit_price_with_discount, it.price].find((v) => typeof v === 'number' && Number.isFinite(v));
+  return typeof c === 'number' ? c : 0;
+}
+
+/**
+ * El pedido de RAPPI, traducido al catálogo:
+ *
+ *   - cada producto de RAPPI (por su id) va al Producto que la encargada le
+ *     asignó; si no tiene traducción, entra con el comodín "RAPPI — sin
+ *     traducir" con el nombre de RAPPI, y queda PENDIENTE en la pantalla de
+ *     traducciones. El pedido NUNCA se rechaza por eso;
+ *   - el precio es el de RAPPI (unidad + sus extras), no el de nuestra lista;
+ *   - los toppings traducidos van como el modificador real; los demás, como
+ *     etiqueta con el nombre de RAPPI (se ven en la comanda igual);
+ *   - un producto marcado IGNORAR (p. ej. "envío") no entra en la venta;
+ *   - por peso: una unidad de RAPPI = `cantidadPorUnidad` de la traducción o
+ *     el `cantidadDefault` del producto (así 2 unidades no son 2 gramos).
+ */
 export async function nuevaOrdenANeutral(p: NuevaOrdenRappi): Promise<OrdenCanal> {
   const od = p.order_detail;
-  const itemsRappi = (od.items ?? []).filter(
-    (it) => !it.type || /product/i.test(it.type),
-  );
-  const [toppings, factores] = await Promise.all([
-    resolverToppings(itemsRappi),
-    factorCantidadPorSku([...new Set(itemsRappi.map((it) => String(it.sku ?? '')).filter(Boolean))]),
+  const itemsRappi = (od.items ?? []).filter((it) => !it.type || /product/i.test(it.type));
+
+  const vistos: VistoExterno[] = [];
+  for (const it of itemsRappi) {
+    vistos.push({
+      tipo: 'PRODUCTO',
+      idExterno: idExternoDe(it),
+      nombre: it.name?.trim() || String(it.sku ?? ''),
+      sku: it.sku ? String(it.sku) : null,
+      precio: precioUnitarioDe(it),
+    });
+    for (const s of it.subitems ?? []) {
+      vistos.push({
+        tipo: 'TOPPING',
+        idExterno: idExternoDe(s),
+        nombre: s.name?.trim() || String(s.sku ?? ''),
+        sku: s.sku ? String(s.sku) : null,
+        categoria: s.categoryDescription ?? null,
+        precio: precioUnitarioDe(s),
+      });
+    }
+  }
+  const [trad, comodinId] = await Promise.all([
+    registrarVistos('RAPPI', vistos, 'PEDIDO'),
+    productoComodin('RAPPI'),
   ]);
 
-  const items = itemsRappi.map((it) => {
-    const modificadores: ModificadorAplicado[] = (it.subitems ?? []).map((s) => {
-      const sku = s.sku ? String(s.sku) : '';
-      const conocido = sku ? toppings.get(sku) : undefined;
-      return conocido
-        ? {
-            grupoId: conocido.grupoId,
-            grupoNombre: conocido.grupoNombre,
-            opcionId: conocido.id,
-            opcionNombre: conocido.nombre,
-            deltaPrecio: conocido.delta,
-          }
-        : {
-            // Desconocido para el catálogo: se muestra igual, no se cobra.
-            grupoId: String(s.toppingCategoryId ?? 'rappi'),
-            grupoNombre: s.categoryDescription?.trim() || 'Extra',
-            opcionId: sku || String(s.id ?? s.name ?? 'topping'),
-            opcionNombre: s.name?.trim() || sku || 'Extra',
-            deltaPrecio: '0',
-          };
-    });
-    const sku = String(it.sku ?? '');
+  const productoIds = [...trad.values()].filter((t) => t.tipo === 'PRODUCTO' && t.productoId).map((t) => t.productoId as string);
+  const opcionIds = [...trad.values()].filter((t) => t.tipo === 'TOPPING' && t.opcionId).map((t) => t.opcionId as string);
+  const [productos, opciones] = await Promise.all([
+    productoIds.length
+      ? prisma.producto.findMany({ where: { id: { in: productoIds } }, select: { id: true, unidadPrecio: true, cantidadDefault: true, activo: true } })
+      : [],
+    opcionIds.length
+      ? prisma.opcionModificador.findMany({ where: { id: { in: opcionIds } }, select: { id: true, nombre: true, grupo: { select: { id: true, nombre: true } } } })
+      : [],
+  ]);
+  const productoPorId = new Map(productos.map((x) => [x.id, x]));
+  const opcionPorId = new Map(opciones.map((x) => [x.id, x]));
+
+  const items: ItemCanal[] = [];
+  for (const it of itemsRappi) {
+    const idExterno = idExternoDe(it);
+    const t = trad.get(claveTraduccion('PRODUCTO', idExterno));
+    if (t?.estado === 'IGNORAR') continue;
+    const productoReal = t?.estado === 'TRADUCIDO' && t.productoId ? productoPorId.get(t.productoId) : undefined;
+    const traducido = Boolean(productoReal && productoReal.activo);
     const unidades = Number(it.quantity ?? 1) || 1;
-    return {
-      codigo: sku,
-      cantidad: unidades * (factores.get(sku) ?? 1),
-      ...(it.comments?.trim() && { observacion: it.comments.trim().slice(0, 500) }),
+    let factor = 1;
+    if (traducido && productoReal) {
+      const porPeso = productoReal.unidadPrecio === 'POR_KILO' || productoReal.unidadPrecio === 'POR_GRAMO';
+      const cpu = t?.cantidadPorUnidad ? Number(t.cantidadPorUnidad) : 0;
+      const cd = productoReal.cantidadDefault ? Number(productoReal.cantidadDefault) : 0;
+      factor = cpu > 0 ? cpu : porPeso && cd > 0 ? cd : 1;
+    }
+
+    let extras = 0;
+    const modificadores: ModificadorAplicado[] = [];
+    for (const s of it.subitems ?? []) {
+      const ts = trad.get(claveTraduccion('TOPPING', idExternoDe(s)));
+      if (ts?.estado === 'IGNORAR') continue;
+      const precioTopping = precioUnitarioDe(s) * (Number(s.quantity ?? 1) || 1);
+      extras += precioTopping;
+      const opcion = ts?.estado === 'TRADUCIDO' && ts.opcionId ? opcionPorId.get(ts.opcionId) : undefined;
+      modificadores.push(
+        opcion
+          ? {
+              grupoId: opcion.grupo.id,
+              grupoNombre: opcion.grupo.nombre,
+              opcionId: opcion.id,
+              opcionNombre: opcion.nombre,
+              deltaPrecio: precioTopping.toFixed(2),
+            }
+          : {
+              grupoId: String(s.toppingCategoryId ?? 'rappi'),
+              grupoNombre: s.categoryDescription?.trim() || 'Extra',
+              opcionId: `rappi:${idExternoDe(s)}`,
+              opcionNombre: s.name?.trim() || String(s.sku ?? 'Extra'),
+              deltaPrecio: precioTopping.toFixed(2),
+            },
+      );
+    }
+    // El precio de la línea, con los extras adentro: lo que RAPPI le cobró al
+    // cliente por cada unidad de este ítem. Si el producto nuestro se vende por
+    // peso, `cantidad` va en gramos y el precio unitario es por kilo (o por
+    // gramo), así que se convierte para que el subtotal dé unidades × precio
+    // de RAPPI: 2 × $4000 por "250 g" = 500 g a $16.000/kg = $8000.
+    const precioPorUnidadRappi = precioUnitarioDe(it) + extras;
+    const porKilo = productoReal?.unidadPrecio === 'POR_KILO';
+    const precioUnitario =
+      Math.round(((factor !== 1 ? precioPorUnidadRappi / factor : precioPorUnidadRappi) * (porKilo && factor !== 1 ? 1000 : 1)) * 100) / 100;
+    const comentario = it.comments?.trim() ?? '';
+    const observacion = traducido
+      ? comentario
+      : `${marcaItemExterno('RAPPI', idExterno)}${comentario ? ` ${comentario}` : ''}`;
+
+    items.push({
+      codigo: (it.sku ? String(it.sku) : idExterno).slice(0, 40),
+      productoId: traducido && productoReal ? productoReal.id : comodinId,
+      cantidad: unidades * factor,
+      nombreCanal: (it.name?.trim() || String(it.sku ?? 'Producto RAPPI')).slice(0, 160),
+      precioUnitarioCanal: precioUnitario,
+      pendiente: !traducido,
+      ...(observacion && { observacion: observacion.slice(0, 500) }),
       ...(modificadores.length && { modificadores }),
-    };
-  });
+    });
+  }
 
   const nombre = [p.customer?.first_name, p.customer?.last_name]
     .map((s) => (s ?? '').trim())
@@ -226,10 +259,12 @@ export async function nuevaOrdenANeutral(p: NuevaOrdenRappi): Promise<OrdenCanal
   const telefono = p.customer?.phone_number?.trim();
 
   const totalRappi = od.totals?.total_order;
+  const sinTraducir = items.filter((i) => i.pendiente).length;
   const observaciones = [
     `RAPPI #${od.order_id}`,
     od.payment_method ? `pagó ${od.payment_method}` : null,
     typeof totalRappi === 'number' ? `total RAPPI $${totalRappi}` : null,
+    sinTraducir ? `${sinTraducir} ítem(s) sin traducir` : null,
     p.action === 'scheduled' && od.place_at ? `AGENDADO para ${od.place_at}` : null,
   ]
     .filter(Boolean)

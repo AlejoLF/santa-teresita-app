@@ -170,6 +170,10 @@ Ver SPEC §1.5. Punteo:
 - Sin stock control en fase 1.
 - Bot WhatsApp es fase 2.
 - Aesthetic: "Trattoria refinada" — verde Teresita + cremoso + serif Fraunces.
+- **El menú de RAPPI vive en RAPPI** (30/09): el POS no publica su catálogo;
+  los pedidos se **traducen** (`traducciones_canal`) y el precio es el de RAPPI.
+  Lo no traducido entra con el comodín y queda pendiente, nunca se rechaza.
+  Ver docs/RAPPI-INTEGRACION.md.
 
 ## Invariantes / gotchas (no romper sin entender por qué)
 
