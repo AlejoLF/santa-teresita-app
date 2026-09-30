@@ -123,6 +123,28 @@ Dos cosas, en orden:
      botón *Aprovisionar* manda sólo el token nuestro, así que hoy **no alcanza**
      para este caso: haría falta implementar ese login del comercio.
 
+### Si el test de webhooks dice "No entregado · HTTP 404 · {"detail":"Not Found"}"
+
+Pasó el 30/09. Ese `{"detail":"Not Found"}` **no lo devuelve nuestra API**: es
+la respuesta de FastAPI, y viene del servicio `rappi-integrador` de Railway —
+otra app ("Rappi Integrator Webhook", del intento del 29/08) que sólo tiene
+`POST /webhook/rappi` y no tiene nada que ver con el POS. Los webhooks estaban
+apuntando ahí.
+
+Las URLs que RAPPI tiene que tener son las de la **sección 2 del panel**
+(Admin → Configuración → Integraciones → RAPPI): una por evento, con la clave
+adentro, todas contra la API. Con `API_WEBHOOK_URL` seteada en el servicio `api`
+de Railway (su dominio público, sin barra final), el panel las muestra con ese
+dominio; sin ella, las muestra con el host desde el que se abrió (el del web en
+Vercel, que reenvía `/api/v1` a la API y también funciona).
+
+Una prueba desde cualquier simulador se ve al instante en el buzón del panel
+(sección de recepciones), con el status que devolvimos y el motivo. Ojo: un
+simulador que no manda el cuerpo real de RAPPI (por ejemplo `{order_id, total,
+status}` sin `order_detail`) recibe 400 en `/new-order` a propósito — no se crea
+una venta con un pedido que no tiene ítems — y queda anotado como
+`BODY_INVALIDO`. Para `/ping` cualquier cuerpo recibe 200.
+
 ### Si la pantalla dice que faltan las variables
 
 Y en Railway se ven cargadas. Pasó el 26/09. En orden:

@@ -11,6 +11,14 @@ const ConfigSchema = z.object({
   //   del X-Forwarded-For pero confiando SOLO en N hops, así el cliente no
   //   puede falsificar su IP real y esquivar rate-limit/lockout. Railway = 1.
   API_TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+  // API_WEBHOOK_URL: cómo llegan a esta API desde afuera (el dominio público
+  //   del servicio en Railway, sin barra final). Es lo que la pantalla de
+  //   Integraciones muestra como URL de webhook para RAPPI/PYA. Si falta, se
+  //   usa el host con el que llegó el request (desde la nube, el del web, que
+  //   reenvía /api/v1 a la API; desde el .exe, 127.0.0.1 — inútil para afuera).
+  //   OJO: no es API_PUBLIC_URL — ésa ya existe y es la URL LOCAL del API que
+  //   el .exe le pasa al agente de impresión (127.0.0.1).
+  API_WEBHOOK_URL: z.string().optional(),
   LOG_LEVEL: z.string().default('info'),
   DATABASE_URL: z.string().min(1),
   AUTH_SECRET: z.string().min(32, 'AUTH_SECRET debe tener al menos 32 chars'),

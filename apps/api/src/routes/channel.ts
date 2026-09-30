@@ -22,6 +22,7 @@ import {
   nuevaOrdenANeutral,
 } from '../services/rappi/adaptador.js';
 import { getRappiConfig, secretoWebhookRappi, setRappiConfig } from '../services/rappi/config.js';
+import { basePublica } from '../lib/url-publica.js';
 import { registrarPing } from '../services/rappi/webhooks.js';
 import { tomarOrden } from '../services/rappi/ordenes.js';
 import { USUARIO_CANALES_ID } from '../services/venta-canal.js';
@@ -843,10 +844,7 @@ export default async function channelRoutes(fastify: FastifyInstance) {
       // El host con el que llegó el request ES el que la plataforma tiene que
       // usar: si esto se ve desde el .exe (127.0.0.1) la URL de ahí no le sirve
       // a RAPPI, y decirlo es más útil que inventar un dominio.
-      const proto = (req.headers['x-forwarded-proto'] as string) ?? 'https';
-      const host = (req.headers['x-forwarded-host'] as string) ?? req.headers.host ?? '';
-      const base = `${proto}://${host}/api/v1`;
-      const esLocal = /^(127\.0\.0\.1|localhost|\[?::1\]?)(:|$)/.test(host);
+      const { base, esLocal } = basePublica(req);
 
       const [totalProductos, sinCodigo, sesion] = await Promise.all([
         prisma.producto.count({ where: { activo: true } }),

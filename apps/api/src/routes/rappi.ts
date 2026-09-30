@@ -36,6 +36,7 @@ import {
   type EventoWebhook,
 } from '../services/rappi/webhooks.js';
 import { ReglaNegocioError } from '../services/errores.js';
+import { basePublica } from '../lib/url-publica.js';
 
 /**
  * El panel de RAPPI: Admin → Configuración → Integraciones.
@@ -55,10 +56,7 @@ function urlsWebhook(req: { headers: Record<string, unknown> }): {
   esLocal: boolean;
   porEvento: Record<string, string> | null;
 } {
-  const proto = (req.headers['x-forwarded-proto'] as string) ?? 'https';
-  const host = (req.headers['x-forwarded-host'] as string) ?? (req.headers.host as string) ?? '';
-  const base = `${proto}://${host}/api/v1`;
-  const esLocal = /^(127\.0\.0\.1|localhost|\[?::1\]?)(:|$)/.test(host);
+  const { base, esLocal } = basePublica(req);
   const token = config.CHANNEL_INGEST_TOKEN;
   if (!token) return { base, esLocal, porEvento: null };
   const raiz = `${base}/channel/webhook/rappi/${token}`;
