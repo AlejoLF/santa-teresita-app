@@ -349,7 +349,13 @@ export function PanelRappi({ tick = 0, onActualizar }: { tick?: number; onActual
                     : `${estado.traducciones.pendientes} sin traducir`} />
               )}
               <a href="/admin/configuracion/integraciones/rappi-menu" className="btn btn-secondary btn-sm">Traducir el menú de RAPPI →</a>
+              <Button variant="secondary" size="sm" disabled={ocupado !== null || !storeId} onClick={() => void accion('menuest', () => api.get('/admin/rappi/menu/estado'))}>Consultar estado del menú en RAPPI</Button>
             </div>
+            <Resultado r={r('menuest')} />
+            <p className="text-2xs text-ink-500">
+              Para la certificación: "Consultar estado del menú" cuenta con una consulta; "Disponibilidad de productos" cuenta al prender o apagar
+              algo desde la pantalla de traducción (botones "apagar en RAPPI" / "prender en RAPPI").
+            </p>
           </div>
         ) : (
           <div className="space-y-2">

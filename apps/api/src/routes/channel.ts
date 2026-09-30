@@ -214,7 +214,18 @@ export default async function channelRoutes(fastify: FastifyInstance) {
     req: FastifyRequest,
     reply: FastifyReply,
     cuerpo: unknown,
-    opts: { alCrear?: (venta: { id: string; numero: number }) => void } = {},
+    opts: {
+      alCrear?: (venta: { id: string; numero: number }) => void;
+      /**
+       * Responder 200 apenas el pedido tiene forma válida y crear la venta
+       * DESPUÉS, en segundo plano. Es para RAPPI: exige el 200 en menos de 5
+       * segundos, y crear una venta desde Railway contra Supabase (decenas de
+       * consultas a otro continente) puede tardar más que eso. El resultado
+       * real queda en el buzón igual; para RAPPI el pedido "llegó", y lo que
+       * cuenta después es tomarlo o rechazarlo.
+       */
+      responderAntes?: boolean;
+    } = {},
   ): Promise<FastifyReply> {
     const parsed = OrdenCanalSchema.safeParse(cuerpo);
     if (!parsed.success) {
@@ -234,6 +245,26 @@ export default async function channelRoutes(fastify: FastifyInstance) {
     }
     const orden = parsed.data as OrdenCanal;
 
+    if (opts.responderAntes) {
+      await reply.code(200).send({ recibido: true, idExternoCanal: orden.idExternoCanal, procesando: true });
+      setImmediate(() => {
+        ejecutarOrden(req, orden, opts).catch((e) => {
+          console.error('[canal] falló el procesamiento en segundo plano:', e);
+        });
+      });
+      return reply;
+    }
+    const r = await ejecutarOrden(req, orden, opts);
+    if (r.error) throw r.error;
+    return reply.code(r.status).send(r.body);
+  }
+
+  /** Crea la venta y deja constancia en el buzón. Nunca tira: devuelve qué responder. */
+  async function ejecutarOrden(
+    req: FastifyRequest,
+    orden: OrdenCanal,
+    opts: { alCrear?: (venta: { id: string; numero: number }) => void },
+  ): Promise<{ status: number; body: unknown; error?: unknown }> {
     try {
       const { venta, duplicate, sinTraducir } = await crearVentaCanal(orden);
       await registrarRecepcion(req, {
@@ -249,13 +280,10 @@ export default async function channelRoutes(fastify: FastifyInstance) {
         ventaId: venta.id,
       });
       if (!duplicate) opts.alCrear?.({ id: venta.id, numero: venta.numero });
-      return reply.code(duplicate ? 200 : 201).send({
-        id: venta.id,
-        numero: venta.numero,
-        estado: venta.estado,
-        duplicate,
-        sinTraducir,
-      });
+      return {
+        status: duplicate ? 200 : 201,
+        body: { id: venta.id, numero: venta.numero, estado: venta.estado, duplicate, sinTraducir },
+      };
     } catch (e) {
       if (e instanceof MapeoIncompletoError) {
         const detalle = `SKUs que no existen en el catálogo: ${e.skusFaltantes.join(', ')}`;
@@ -266,9 +294,7 @@ export default async function channelRoutes(fastify: FastifyInstance) {
           canal: orden.canal,
           idExternoCanal: orden.idExternoCanal,
         });
-        return reply
-          .code(422)
-          .send({ error: 'SKUs sin mapear en el catálogo', skusFaltantes: e.skusFaltantes });
+        return { status: 422, body: { error: 'SKUs sin mapear en el catálogo', skusFaltantes: e.skusFaltantes } };
       }
       if (e instanceof FueraDeHorarioError) {
         await registrarRecepcion(req, {
@@ -280,11 +306,10 @@ export default async function channelRoutes(fastify: FastifyInstance) {
           canal: orden.canal,
           idExternoCanal: orden.idExternoCanal,
         });
-        return reply.code(423).send({
-          error: 'Fuera del horario de atención configurado',
-          codigo: 'FUERA_DE_HORARIO',
-          resolucion: e.resolucion,
-        });
+        return {
+          status: 423,
+          body: { error: 'Fuera del horario de atención configurado', codigo: 'FUERA_DE_HORARIO', resolucion: e.resolucion },
+        };
       }
       await registrarRecepcion(req, {
         resultado: 'ERROR',
@@ -293,7 +318,7 @@ export default async function channelRoutes(fastify: FastifyInstance) {
         canal: orden.canal,
         idExternoCanal: orden.idExternoCanal,
       });
-      throw e;
+      return { status: 500, body: { error: 'No se pudo crear la venta' }, error: e };
     }
   }
 
@@ -466,6 +491,7 @@ export default async function channelRoutes(fastify: FastifyInstance) {
     const orden = await nuevaOrdenANeutral(body);
     return procesarOrden(req, reply, orden, {
       alCrear: (v) => programarTomaAutomatica(orden.idExternoCanal, v.id),
+      responderAntes: true,
     });
   }
 
