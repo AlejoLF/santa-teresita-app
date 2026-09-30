@@ -195,6 +195,21 @@ export function secretoWebhookRappi(): string | null {
 }
 
 /**
+ * Las claves con las que puede venir firmado un webhook. RAPPI entrega el
+ * secreto como dos claves separadas por coma ("K1,K2") y firma con una de
+ * ellas; si en el entorno quedó el texto entero, se aceptan las dos y también
+ * el texto entero (por si RAPPI firmara con lo que se le mandó tal cual).
+ */
+export function secretosWebhookRappi(): string[] {
+  const crudo = entorno().webhookSecret;
+  if (!crudo) return [];
+  const partes = crudo.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
+  const claves = new Set<string>(partes);
+  if (partes.length > 1) claves.add(crudo);
+  return [...claves];
+}
+
+/**
  * Lo que el panel muestra cuando algo del entorno no está bien: cada variable
  * con su problema, más desde cuándo corre este proceso y con qué versión —
  * porque la pregunta de fondo, cuando "cargué las variables y no da bien", es

@@ -32,18 +32,29 @@ export function parsearHeaderFirma(header: string): { t: string; sign: string } 
   return { t: partes.t, sign: partes.sign };
 }
 
+/**
+ * `secreto` puede ser una clave o varias: RAPPI entrega el secreto del webhook
+ * como DOS claves separadas por coma (incidente 30/09: con las dos pegadas en
+ * `RAPPI_WEBHOOK_SECRET`, RAPPI firmaba con una y acá se verificaba contra
+ * el texto entero → "Firma inválida" en todos los tests). Vale si coincide
+ * con cualquiera.
+ */
 export function verificarFirmaRappi(
   header: string | undefined,
   cuerpoCrudo: string,
-  secreto: string,
+  secreto: string | string[],
 ): VerificacionFirma {
   if (!header) return { ok: false, motivo: 'SIN_HEADER' };
   const parsed = parsearHeaderFirma(header);
   if (!parsed) return { ok: false, motivo: 'HEADER_MALFORMADO' };
-  const esperado = firmarRappi(secreto, parsed.t, cuerpoCrudo);
   const recibido = parsed.sign.toLowerCase();
-  // Comparación en tiempo constante: no filtrar por timing cuánto coincide.
-  if (recibido.length !== esperado.length) return { ok: false, motivo: 'NO_COINCIDE' };
-  const iguales = timingSafeEqual(Buffer.from(recibido, 'utf8'), Buffer.from(esperado, 'utf8'));
-  return iguales ? { ok: true } : { ok: false, motivo: 'NO_COINCIDE' };
+  const claves = Array.isArray(secreto) ? secreto : [secreto];
+  let ok = false;
+  for (const clave of claves) {
+    const esperado = firmarRappi(clave, parsed.t, cuerpoCrudo);
+    // Comparación en tiempo constante: no filtrar por timing cuánto coincide.
+    if (recibido.length !== esperado.length) continue;
+    if (timingSafeEqual(Buffer.from(recibido, 'utf8'), Buffer.from(esperado, 'utf8'))) ok = true;
+  }
+  return ok ? { ok: true } : { ok: false, motivo: 'NO_COINCIDE' };
 }

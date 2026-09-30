@@ -21,7 +21,7 @@ import {
   esNuevaOrdenRappi,
   nuevaOrdenANeutral,
 } from '../services/rappi/adaptador.js';
-import { getRappiConfig, secretoWebhookRappi, setRappiConfig } from '../services/rappi/config.js';
+import { getRappiConfig, secretosWebhookRappi, setRappiConfig } from '../services/rappi/config.js';
 import { basePublica } from '../lib/url-publica.js';
 import { registrarPing } from '../services/rappi/webhooks.js';
 import { tomarOrden } from '../services/rappi/ordenes.js';
@@ -414,13 +414,13 @@ export default async function channelRoutes(fastify: FastifyInstance) {
    * lo rechazamos por la firma" es exactamente lo que hay que poder ver.
    */
   async function firmaRappiOk(req: FastifyRequest, reply: FastifyReply): Promise<boolean> {
-    const secreto = secretoWebhookRappi();
-    if (!secreto) return true;
+    const secretos = secretosWebhookRappi();
+    if (secretos.length === 0) return true;
     const header = req.headers['rappi-signature'];
     const v = verificarFirmaRappi(
       Array.isArray(header) ? header[0] : header,
       req.rawBody ?? '',
-      secreto,
+      secretos,
     );
     if (v.ok) return true;
     const motivo =
@@ -428,7 +428,7 @@ export default async function channelRoutes(fastify: FastifyInstance) {
         ? 'no trae el header Rappi-Signature (¿el webhook se suscribió sin secret?)'
         : v.motivo === 'HEADER_MALFORMADO'
           ? 'el header Rappi-Signature no tiene la forma t=…,sign=…'
-          : 'la firma no coincide con RAPPI_WEBHOOK_SECRET (¿es otro secret, o cambió?)';
+          : `la firma no coincide con RAPPI_WEBHOOK_SECRET (se probaron ${secretos.length} clave/s). RAPPI firmó con OTRO secret: revisá en su portal el secret del webhook de esta tienda y que sea el mismo que está en Railway`;
     await registrarRecepcion(req, {
       resultado: 'FIRMA_INVALIDA',
       status: 401,
@@ -467,12 +467,23 @@ export default async function channelRoutes(fastify: FastifyInstance) {
   async function manejarNuevaOrdenRappi(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
     const body = req.body;
     if (!esNuevaOrdenRappi(body)) {
+      // Firmado por RAPPI (pasó la verificación) pero sin la forma de un pedido:
+      // es el evento de PRUEBA del portal (`{order_id, store_id, total, status}`),
+      // que exige un 2xx para homologar. No hay pedido que perder, así que se
+      // responde 200 y queda anotado que NO se creó nada. Sin firma exigida, la
+      // respuesta sigue siendo 400: un 200 a cualquiera sería mentir.
+      const firmadoPorRappi = secretosWebhookRappi().length > 0;
       await registrarRecepcion(req, {
         resultado: 'BODY_INVALIDO',
-        status: 400,
-        detalle: 'Llegó a la URL de pedidos nuevos pero no tiene `order_detail.order_id`.',
+        status: firmadoPorRappi ? 200 : 400,
+        detalle: firmadoPorRappi
+          ? 'Vino firmado por RAPPI pero no tiene `order_detail.order_id`: no es un pedido (seguramente el evento de prueba del portal). Se respondió 200 y NO se creó ninguna venta.'
+          : 'Llegó a la URL de pedidos nuevos pero no tiene `order_detail.order_id`.',
         canal: 'RAPPI',
       });
+      if (firmadoPorRappi) {
+        return reply.code(200).send({ recibido: true, ignorado: true, motivo: 'No tiene order_detail: no es un pedido, no se creó venta.' });
+      }
       return reply.code(400).send({ error: 'No es un NEW_ORDER de RAPPI' });
     }
     if (body.action === 'scheduled') {
