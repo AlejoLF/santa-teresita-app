@@ -40,6 +40,40 @@ Lo operativo, en `configuracion_sistema` (clave `rappi_config`), editable desde 
 pantalla: la tienda elegida, el `clientId` de la integración, si se toman las
 órdenes solas, el tiempo de cocina que se declara, y el estado del último menú.
 
+## El menú vive en RAPPI: los pedidos se traducen (decisión del 30/09)
+
+El POS **no publica** su catálogo en RAPPI. La encargada maneja el menú de
+RAPPI en la web de RAPPI, como siempre: los productos, los combos y los
+precios de allá son otros, y todavía no se unifican. Lo que hace el POS es
+**contar** lo que se vendió:
+
+- Cada producto y cada extra de RAPPI (por su **id de RAPPI**, que es estable)
+  se traduce a un `Producto` / `OpcionModificador` nuestro. Tabla
+  `traducciones_canal`, servicio `services/traduccion-canal.ts`, pantalla
+  Admin → Configuración → Integraciones → **Traducir el menú de RAPPI**.
+- **El precio es siempre el de RAPPI** (viene en el pedido: `unit_price_with_discount`
+  del producto más los extras). Nunca la lista de precios del POS. Es la
+  excepción explícita a "precios server-side": la fuente es el webhook firmado
+  de la plataforma, no un cliente.
+- **Lo que llega sin traducir no se pierde**: la venta entra igual, con el
+  producto comodín `RAPPI — sin traducir` (inactivo a propósito: no aparece en
+  el cajero ni se publica), con el nombre y el precio de RAPPI, y la comanda
+  sale con ese nombre. Queda una fila PENDIENTE en la pantalla. Al traducirla,
+  los ítems de los últimos 90 días que entraron con el comodín para ese id
+  **se corrigen solos** al producto real (mismo precio y nombre; auditado).
+- Dos traducciones automáticas, marcadas "automática" para revisarlas: el sku
+  de RAPPI es un código nuestro (`AUTO_SKU`) o el nombre es exactamente igual
+  (`AUTO_NOMBRE`).
+- **Traer el menú de RAPPI** (`GET /store/{id}/menu/current`) registra todo lo
+  que RAPPI vende hoy para traducirlo *antes* del primer pedido.
+- Un producto marcado **IGNORAR** (por ejemplo "Envío") no entra en la venta.
+- Por peso: una unidad de RAPPI = `cantidadPorUnidad` de la traducción (gramos)
+  o el `cantidadDefault` del producto; el precio se convierte a por kilo para
+  que el subtotal dé unidades × precio de RAPPI.
+- El switch `menuOrigen` (RAPPI | POS, default RAPPI) en el panel. Con POS se
+  vuelve al comportamiento anterior (*Enviar menú*). Todo lo del menú desde el
+  catálogo sigue existiendo; sólo está apagado.
+
 ## El checklist, capacidad por capacidad
 
 | Grupo | Capacidad | Cómo se cumple | Estado |

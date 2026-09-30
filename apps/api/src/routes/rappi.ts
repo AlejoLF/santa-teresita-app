@@ -20,7 +20,12 @@ import {
   setTiendaHabilitada,
   setTiendaIntegrada,
 } from '../services/rappi/tiendas.js';
-import { armarMenuRappi, enviarMenu, estadoMenu, setDisponibilidad } from '../services/rappi/menu.js';
+import { armarMenuRappi, enviarMenu, estadoMenu, importarMenuRappi, setDisponibilidad } from '../services/rappi/menu.js';
+import {
+  decidirTraduccion,
+  listarTraducciones,
+  resumenTraducciones,
+} from '../services/traduccion-canal.js';
 import {
   CANCEL_TYPES,
   listaParaRetiro,
@@ -130,6 +135,7 @@ export default async function rappiRoutes(fastify: FastifyInstance) {
       firmaConfigurada: Boolean(secretoWebhookRappi()),
       ingestaConfigurada: Boolean(config.CHANNEL_INGEST_TOKEN),
       entorno: diagnosticoEntornoRappi(),
+      traducciones: await resumenTraducciones('RAPPI').catch(() => null),
       config: cfg,
       webhooks: { ...urls, ultimoPingAt: await ultimoPing() },
       catalogo: { publicables: totalProductos - sinCodigo, sinCodigo, porPesoSinCantidad },
@@ -150,6 +156,7 @@ export default async function rappiRoutes(fastify: FastifyInstance) {
           clientIntegrationId: z.string().max(120).nullable().optional(),
           tomarAutomatico: z.boolean().optional(),
           tiempoCocinaMin: z.number().int().min(1).max(180).nullable().optional(),
+          menuOrigen: z.enum(['RAPPI', 'POS']).optional(),
         }),
       },
     },
@@ -179,6 +186,69 @@ export default async function rappiRoutes(fastify: FastifyInstance) {
       return { llamadas, registroListo };
     },
   );
+
+  // ── Traducción del menú (el menú vive en RAPPI; ver services/traduccion-canal.ts) ──
+  fastify.get(
+    '/admin/rappi/traducciones',
+    {
+      ...admin,
+      schema: {
+        querystring: z.object({
+          tipo: z.enum(['PRODUCTO', 'TOPPING']).optional(),
+          estado: z.enum(['PENDIENTE', 'TRADUCIDO', 'IGNORAR']).optional(),
+          q: z.string().trim().max(80).optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const q = req.query as { tipo?: 'PRODUCTO' | 'TOPPING'; estado?: 'PENDIENTE' | 'TRADUCIDO' | 'IGNORAR'; q?: string };
+      const [traducciones, resumen] = await Promise.all([
+        listarTraducciones('RAPPI', q),
+        resumenTraducciones('RAPPI'),
+      ]);
+      return { traducciones, resumen };
+    },
+  );
+
+  fastify.put(
+    '/admin/rappi/traducciones/:id',
+    {
+      ...admin,
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: z.object({
+          productoId: z.string().uuid().nullable().optional(),
+          opcionId: z.string().uuid().nullable().optional(),
+          estado: z.enum(['PENDIENTE', 'TRADUCIDO', 'IGNORAR']).optional(),
+          cantidadPorUnidad: z.number().positive().nullable().optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const { id } = req.params as { id: string };
+      const r = await decidirTraduccion(id, req.body as never, {
+        id: req.usuario!.id,
+        nombre: req.usuario?.nombre,
+        pcOrigen: 'admin-web',
+      });
+      return {
+        ok: true,
+        estado: r.traduccion.estado,
+        itemsCorregidos: r.itemsCorregidos,
+        detalle:
+          r.itemsCorregidos > 0
+            ? `Traducido. Se corrigieron ${r.itemsCorregidos} ítem(s) de ventas anteriores que habían entrado sin traducir.`
+            : r.traduccion.estado === 'IGNORAR'
+              ? 'Se ignora: no entra en las ventas.'
+              : r.traduccion.estado === 'TRADUCIDO'
+                ? 'Traducido.'
+                : 'Queda pendiente.',
+      };
+    },
+  );
+
+  /** Trae el menú que RAPPI tiene hoy, para traducirlo antes del primer pedido. */
+  fastify.post('/admin/rappi/traducciones/importar-menu', admin, async () => importarMenuRappi());
 
   fastify.post('/admin/rappi/credenciales/probar', admin, async () => probarCredenciales());
 

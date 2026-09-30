@@ -49,12 +49,24 @@ const CUENTA_A_COBRAR_POR_CANAL: Record<CanalPlataforma, string> = {
   MERCADO_LIBRE: 'Mercado Libre',
 };
 
-/** Item normalizado de una orden de canal (SKU = `Producto.codigo`). */
+/**
+ * Item normalizado de una orden de canal. Dos formas de decir QUÉ producto es:
+ *   - `codigo` (SKU = `Producto.codigo`): el contrato neutral de siempre; si no
+ *     existe, la orden se rechaza con 422;
+ *   - `productoId` ya resuelto: lo pone un adaptador que tradujo el ítem
+ *     (RAPPI); si además trae `precioUnitarioCanal`, ese es el precio (el de la
+ *     plataforma) y `nombreCanal` el nombre con el que se ve.
+ */
 export interface ItemCanal {
   codigo: string;
   cantidad: number;
   observacion?: string;
   modificadores?: ModificadorAplicado[];
+  productoId?: string;
+  nombreCanal?: string;
+  precioUnitarioCanal?: number;
+  /** true = entró con el comodín porque no tenía traducción. */
+  pendiente?: boolean;
 }
 
 /** Orden de canal normalizada (platform-neutral: sirve para RAPPI/PYA/MELI). */
@@ -83,6 +95,8 @@ export class MapeoIncompletoError extends Error {
 export interface ResultadoOrdenCanal {
   venta: Venta;
   duplicate: boolean;
+  /** Ítems que entraron con el comodín (sin traducción). */
+  sinTraducir: number;
 }
 
 /** Resultado del pre-flight (`simularOrdenCanal`) — ninguna escritura ocurrió. */
@@ -152,12 +166,15 @@ export async function simularOrdenCanal(orden: OrdenCanal): Promise<DiagnosticoO
     );
   }
 
-  // 4. Mapeo de SKUs (SKU = Producto.codigo, activo).
-  const codigos = [...new Set(orden.items.map((i) => i.codigo))];
-  const productos = await prisma.producto.findMany({
-    where: { codigo: { in: codigos }, activo: true },
-    select: { codigo: true, nombre: true },
-  });
+  // 4. Mapeo de SKUs (SKU = Producto.codigo, activo). Los ítems que ya traen
+  //    `productoId` (traducidos por un adaptador) no se mapean por código.
+  const codigos = [...new Set(orden.items.filter((i) => !i.productoId).map((i) => i.codigo))];
+  const productos = codigos.length
+    ? await prisma.producto.findMany({
+        where: { codigo: { in: codigos }, activo: true },
+        select: { codigo: true, nombre: true },
+      })
+    : [];
   const porCodigo = new Map(productos.map((p) => [p.codigo as string, p.nombre]));
   const skusFaltantes = codigos.filter((c) => !porCodigo.has(c));
   if (skusFaltantes.length) {
@@ -185,8 +202,8 @@ export async function simularOrdenCanal(orden: OrdenCanal): Promise<DiagnosticoO
     items: orden.items.map((it) => ({
       codigo: it.codigo,
       cantidad: it.cantidad,
-      mapeado: porCodigo.has(it.codigo),
-      ...(porCodigo.has(it.codigo) && { nombre: porCodigo.get(it.codigo) }),
+      mapeado: Boolean(it.productoId) || porCodigo.has(it.codigo),
+      ...(it.productoId ? { nombre: it.nombreCanal } : porCodigo.has(it.codigo) && { nombre: porCodigo.get(it.codigo) }),
     })),
     skusFaltantes,
   };
@@ -200,8 +217,9 @@ export async function crearVentaCanal(orden: OrdenCanal): Promise<ResultadoOrden
     where: { canal, idExternoCanal: orden.idExternoCanal },
   });
   // Ya finalizada/anulada → idempotente puro, devolvemos la misma sin tocar nada.
+  const sinTraducir = orden.items.filter((i) => i.pendiente).length;
   if (existente && existente.estado !== EstadoVenta.PROCESADA) {
-    return { venta: existente, duplicate: true };
+    return { venta: existente, duplicate: true, sinTraducir };
   }
 
   // 2. Cuenta a cobrar del canal (receivable) — necesaria para auto-finalizar.
@@ -220,12 +238,15 @@ export async function crearVentaCanal(orden: OrdenCanal): Promise<ResultadoOrden
   //    falló), la reusamos (self-heal). Si no, la creamos.
   let venta: Venta | null = existente;
   if (!venta) {
-    // Map SKU (Producto.codigo) → productoId. Rechazamos si falta alguno.
-    const codigos = [...new Set(orden.items.map((i) => i.codigo))];
-    const productos = await prisma.producto.findMany({
-      where: { codigo: { in: codigos }, activo: true },
-      select: { id: true, codigo: true },
-    });
+    // Map SKU (Producto.codigo) → productoId para los ítems que no vienen ya
+    // resueltos por un adaptador. Rechazamos si falta alguno.
+    const codigos = [...new Set(orden.items.filter((i) => !i.productoId).map((i) => i.codigo))];
+    const productos = codigos.length
+      ? await prisma.producto.findMany({
+          where: { codigo: { in: codigos }, activo: true },
+          select: { id: true, codigo: true },
+        })
+      : [];
     const porCodigo = new Map(productos.map((p) => [p.codigo as string, p.id]));
     const faltantes = codigos.filter((c) => !porCodigo.has(c));
     if (faltantes.length) throw new MapeoIncompletoError(faltantes);
@@ -248,12 +269,18 @@ export async function crearVentaCanal(orden: OrdenCanal): Promise<ResultadoOrden
           // Las plataformas mandan items sueltos, no promos del catálogo interno.
           promos: [],
           items: orden.items.map((it) => ({
-            productoId: porCodigo.get(it.codigo) as string,
+            productoId: it.productoId ?? (porCodigo.get(it.codigo) as string),
             cantidad: it.cantidad,
             modificadores: it.modificadores ?? [],
             observacion: it.observacion,
           })),
         },
+        // El precio de la plataforma, cuando el adaptador lo trae.
+        overridesCanal: orden.items.map((it) =>
+          it.precioUnitarioCanal !== undefined
+            ? { precioUnitario: it.precioUnitarioCanal, nombre: it.nombreCanal }
+            : undefined,
+        ),
       });
     } catch (e) {
       // Carrera: dos webhooks duplicados en paralelo — el @@unique(canal,
@@ -264,7 +291,7 @@ export async function crearVentaCanal(orden: OrdenCanal): Promise<ResultadoOrden
         });
         if (!yaCreada) throw e;
         if (yaCreada.estado !== EstadoVenta.PROCESADA) {
-          return { venta: yaCreada, duplicate: true };
+          return { venta: yaCreada, duplicate: true, sinTraducir };
         }
         venta = yaCreada; // quedó PROCESADA → seguimos a finalizar (self-heal)
       } else {
@@ -321,7 +348,7 @@ export async function crearVentaCanal(orden: OrdenCanal): Promise<ResultadoOrden
     return upd;
   });
 
-  return { venta: finalizada, duplicate: Boolean(existente) };
+  return { venta: finalizada, duplicate: Boolean(existente), sinTraducir };
 }
 
 /**

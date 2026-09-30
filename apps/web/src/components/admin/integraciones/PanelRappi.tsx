@@ -36,8 +36,14 @@ interface Estado {
     clientIntegrationId: string | null;
     tomarAutomatico: boolean;
     tiempoCocinaMin: number | null;
+    menuOrigen: 'RAPPI' | 'POS';
     menu: { enviadoAt: string | null; items: number | null; estado: string | null; estadoAt: string | null };
   };
+  traducciones: {
+    productos: { pendientes: number; traducidos: number; ignorados: number };
+    toppings: { pendientes: number; traducidos: number; ignorados: number };
+    pendientes: number;
+  } | null;
   webhooks: { base: string; esLocal: boolean; porEvento: Record<string, string> | null; ultimoPingAt: string | null };
   catalogo: { publicables: number; sinCodigo: number; porPesoSinCantidad: number };
   ultimaLlamada: { hechoAt: string; ok: boolean; contexto: string | null; status: number | null } | null;
@@ -312,23 +318,56 @@ export function PanelRappi() {
       {/* ── 4. Menú ── */}
       <div className="border-t border-cream-200 pt-4 space-y-2">
         <h3 className="font-medium text-ink-900">3 · Menú</h3>
-        <p className="text-xs text-ink-500">
-          Se arma desde el catálogo con los precios de la lista RAPPI. {estado.catalogo.publicables} productos con código
-          {estado.catalogo.sinCodigo > 0 && <span className="text-saffron-600"> · {estado.catalogo.sinCodigo} sin código (no se publican)</span>}
-          {estado.catalogo.porPesoSinCantidad > 0 && <span className="text-saffron-600"> · {estado.catalogo.porPesoSinCantidad} por peso sin cantidad por defecto (no se publican)</span>}.
-          {cfg?.menu.enviadoAt && <> Último envío {hora(cfg.menu.enviadoAt)} ({cfg.menu.items} productos) → <strong>{cfg.menu.estado ?? 'sin respuesta'}</strong>{cfg.menu.estadoAt && ` el ${hora(cfg.menu.estadoAt)}`}.</>}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" size="sm" disabled={ocupado !== null} onClick={() => void accion('preview', async () => { const m = await api.get<typeof menuPreview>('/admin/rappi/menu/vista-previa'); setMenuPreview(m); return { ok: true, detalle: `${m!.resumen.productos} productos, ${m!.resumen.toppings} sabores/extras, ${m!.resumen.categorias} categorías` }; })}>Vista previa</Button>
-          <Button size="sm" disabled={ocupado !== null || !storeId} onClick={() => { if (confirm('¿Enviar el menú a RAPPI? Reemplaza el que tenga.')) void accion('menu', () => api.post('/admin/rappi/menu/enviar', {})); }}>Enviar menú a RAPPI</Button>
-          <Button variant="secondary" size="sm" disabled={ocupado !== null || !storeId} onClick={() => void accion('menuest', () => api.get('/admin/rappi/menu/estado'))}>Consultar aprobación</Button>
+        <div className="flex flex-wrap gap-4 text-sm text-ink-700">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="menuOrigen" checked={(cfg?.menuOrigen ?? 'RAPPI') === 'RAPPI'} disabled={ocupado !== null}
+              onChange={() => void accion('origen', () => api.put('/admin/rappi/config', { menuOrigen: 'RAPPI' }))} />
+            El menú se maneja en la web de RAPPI (los pedidos se traducen)
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="menuOrigen" checked={cfg?.menuOrigen === 'POS'} disabled={ocupado !== null}
+              onChange={() => { if (confirm('¿Publicar el catálogo del POS en RAPPI? Reemplaza el menú que la encargada tiene allá.')) void accion('origen', () => api.put('/admin/rappi/config', { menuOrigen: 'POS' })); }} />
+            El POS publica su catálogo en RAPPI
+          </label>
         </div>
-        <Resultado r={r('preview')} /><Resultado r={r('menu')} /><Resultado r={r('menuest')} />
-        {menuPreview && menuPreview.resumen.excluidos.length > 0 && (
-          <details className="text-xs text-ink-700">
-            <summary className="cursor-pointer text-saffron-600">{menuPreview.resumen.excluidos.length} productos quedan afuera — ver por qué</summary>
-            <ul className="mt-1 list-disc pl-5">{menuPreview.resumen.excluidos.map((x) => <li key={x.nombre}>{x.nombre}: {x.motivo}</li>)}</ul>
-          </details>
+        <Resultado r={r('origen')} />
+        {(cfg?.menuOrigen ?? 'RAPPI') === 'RAPPI' ? (
+          <div className="space-y-2">
+            <p className="text-xs text-ink-500">
+              Cada producto y extra de RAPPI se traduce a uno nuestro para contar lo que se vende; el precio es siempre el de RAPPI.
+              Lo que llega sin traducir entra igual como "RAPPI — sin traducir" y queda pendiente.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {estado.traducciones && (
+                <Chip ok={estado.traducciones.pendientes === 0 ? true : false}
+                  texto={estado.traducciones.pendientes === 0
+                    ? `todo traducido (${estado.traducciones.productos.traducidos} productos, ${estado.traducciones.toppings.traducidos} extras)`
+                    : `${estado.traducciones.pendientes} sin traducir`} />
+              )}
+              <a href="/admin/configuracion/integraciones/rappi-menu" className="btn btn-secondary btn-sm">Traducir el menú de RAPPI →</a>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-ink-500">
+              Se arma desde el catálogo con los precios de la lista RAPPI. {estado.catalogo.publicables} productos con código
+              {estado.catalogo.sinCodigo > 0 && <span className="text-saffron-600"> · {estado.catalogo.sinCodigo} sin código (no se publican)</span>}
+              {estado.catalogo.porPesoSinCantidad > 0 && <span className="text-saffron-600"> · {estado.catalogo.porPesoSinCantidad} por peso sin cantidad por defecto (no se publican)</span>}.
+              {cfg?.menu.enviadoAt && <> Último envío {hora(cfg.menu.enviadoAt)} ({cfg.menu.items} productos) → <strong>{cfg.menu.estado ?? 'sin respuesta'}</strong>{cfg.menu.estadoAt && ` el ${hora(cfg.menu.estadoAt)}`}.</>}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" size="sm" disabled={ocupado !== null} onClick={() => void accion('preview', async () => { const m = await api.get<typeof menuPreview>('/admin/rappi/menu/vista-previa'); setMenuPreview(m); return { ok: true, detalle: `${m!.resumen.productos} productos, ${m!.resumen.toppings} sabores/extras, ${m!.resumen.categorias} categorías` }; })}>Vista previa</Button>
+              <Button size="sm" disabled={ocupado !== null || !storeId} onClick={() => { if (confirm('¿Enviar el menú a RAPPI? Reemplaza el que tenga.')) void accion('menu', () => api.post('/admin/rappi/menu/enviar', {})); }}>Enviar menú a RAPPI</Button>
+              <Button variant="secondary" size="sm" disabled={ocupado !== null || !storeId} onClick={() => void accion('menuest', () => api.get('/admin/rappi/menu/estado'))}>Consultar aprobación</Button>
+            </div>
+            <Resultado r={r('preview')} /><Resultado r={r('menu')} /><Resultado r={r('menuest')} />
+            {menuPreview && menuPreview.resumen.excluidos.length > 0 && (
+              <details className="text-xs text-ink-700">
+                <summary className="cursor-pointer text-saffron-600">{menuPreview.resumen.excluidos.length} productos quedan afuera — ver por qué</summary>
+                <ul className="mt-1 list-disc pl-5">{menuPreview.resumen.excluidos.map((x) => <li key={x.nombre}>{x.nombre}: {x.motivo}</li>)}</ul>
+              </details>
+            )}
+          </div>
         )}
       </div>
 

@@ -132,11 +132,34 @@ async function expandirPromosAItems(args: {
  *
  * No imprime comanda — eso lo encola otro servicio (impresion.ts) cuando se confirma.
  */
+/**
+ * Precio y nombre que manda la PLATAFORMA para un ítem (RAPPI, PYA…). Sólo
+ * los usa `crearVentaCanal`: el pedido llega firmado por la plataforma, que es
+ * la autoridad sobre lo que el cliente pagó allá. Un cliente humano (PWA, .exe)
+ * NUNCA puede mandar esto — no está en `VentaNuevaSchema`, y acá se exige que
+ * la venta sea de un canal de plataforma. La regla de alpha.39 (precios
+ * server-side) sigue valiendo para todo lo demás.
+ */
+export interface OverrideItemCanal {
+  /** Precio unitario final del ítem, con sus extras incluidos. */
+  precioUnitario: number;
+  /** Nombre con el que se ve en la plataforma (va al snapshot y a la comanda). */
+  nombre?: string;
+}
+
+const CANALES_CON_PRECIO_PROPIO: ReadonlySet<string> = new Set(['RAPPI', 'PEDIDOS_YA', 'MERCADO_LIBRE']);
+
 export async function crearVenta(args: {
   data: VentaNueva;
   usuarioId: string;
+  /** Por índice de `data.items`. Ver `OverrideItemCanal`. */
+  overridesCanal?: ReadonlyArray<OverrideItemCanal | undefined>;
 }): Promise<Venta> {
   const { data, usuarioId } = args;
+  const overridesCanal = args.overridesCanal ?? [];
+  if (overridesCanal.some(Boolean) && !CANALES_CON_PRECIO_PROPIO.has(data.canal)) {
+    throw new ReglaNegocioError('Sólo un pedido de plataforma puede traer su propio precio.');
+  }
 
   // Resolvemos la lista de precios por CANAL (canalDefault), NO por nombre. Así
   // el nombre de la lista se puede cambiar (ej. "Local" → "Venta al público")
@@ -188,8 +211,10 @@ export async function crearVenta(args: {
     const precioListaSinDelta = precioOverride
       ? Number(precioOverride)
       : precioBaseNumber * (1 + ajustePct / 100);
-    const deltaMod = deltaDeModificadores(item.modificadores, deltas);
-    const precioUnitario = precioListaSinDelta + deltaMod;
+    const deCanal = overridesCanal[idx];
+    // Con precio de la plataforma, los extras ya vienen adentro: delta 0.
+    const deltaMod = deCanal ? 0 : deltaDeModificadores(item.modificadores, deltas);
+    const precioUnitario = deCanal ? Math.max(0, deCanal.precioUnitario) : precioListaSinDelta + deltaMod;
 
     const subTotalItemStr = subtotalItem({
       cantidad: item.cantidad,
@@ -206,7 +231,7 @@ export async function crearVenta(args: {
 
     itemsToCreate.push({
       producto: { connect: { id: producto.id } },
-      nombreSnapshot: producto.nombre,
+      nombreSnapshot: (deCanal?.nombre?.trim() || producto.nombre).slice(0, 160),
       cantidad: String(item.cantidad),
       unidad: producto.formaVenta as DbFormaVenta,
       precioUnitario: precioUnitario.toFixed(2),

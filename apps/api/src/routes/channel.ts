@@ -63,6 +63,11 @@ const OrdenCanalSchema = z.object({
         cantidad: z.number().positive(),
         observacion: z.string().max(500).optional(),
         modificadores: z.array(ModificadorSchema).optional(),
+        // Lo que pone un adaptador que ya tradujo el ítem (RAPPI). Ver ItemCanal.
+        productoId: z.string().uuid().optional(),
+        nombreCanal: z.string().max(160).optional(),
+        precioUnitarioCanal: z.number().nonnegative().optional(),
+        pendiente: z.boolean().optional(),
       }),
     )
     .min(1),
@@ -230,13 +235,15 @@ export default async function channelRoutes(fastify: FastifyInstance) {
     const orden = parsed.data as OrdenCanal;
 
     try {
-      const { venta, duplicate } = await crearVentaCanal(orden);
+      const { venta, duplicate, sinTraducir } = await crearVentaCanal(orden);
       await registrarRecepcion(req, {
         resultado: duplicate ? 'DUPLICADO' : 'OK',
         status: duplicate ? 200 : 201,
         detalle: duplicate
           ? `Ya existía la venta #${venta.numero} para ese pedido — no se duplicó`
-          : `Venta #${venta.numero} creada y enviada a la comandera`,
+          : `Venta #${venta.numero} creada y enviada a la comandera${
+              sinTraducir ? ` · ${sinTraducir} ítem(s) sin traducir (entraron como comodín; traducirlos en Integraciones → RAPPI → Menú)` : ''
+            }`,
         canal: orden.canal,
         idExternoCanal: orden.idExternoCanal,
         ventaId: venta.id,
@@ -247,6 +254,7 @@ export default async function channelRoutes(fastify: FastifyInstance) {
         numero: venta.numero,
         estado: venta.estado,
         duplicate,
+        sinTraducir,
       });
     } catch (e) {
       if (e instanceof MapeoIncompletoError) {

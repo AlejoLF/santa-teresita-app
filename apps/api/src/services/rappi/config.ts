@@ -244,6 +244,12 @@ export interface RappiConfig {
    * después de un deploy era mentira (incidente 30/09).
    */
   ultimoPingAt: string | null;
+  /**
+   * Quién manda en el menú. 'RAPPI' (default, decisión del 30/09): la
+   * encargada lo maneja en la web de RAPPI y los pedidos se TRADUCEN al
+   * catálogo. 'POS': el sistema publica su catálogo en RAPPI (Enviar menú).
+   */
+  menuOrigen: 'RAPPI' | 'POS';
   /** Lo último que pasó con el menú, para mostrarlo en la pantalla. */
   menu: {
     enviadoAt: string | null;
@@ -265,6 +271,7 @@ const DEFAULT: RappiConfig = {
   tomarAutomatico: false,
   tiempoCocinaMin: null,
   ultimoPingAt: null,
+  menuOrigen: 'RAPPI',
   menu: { enviadoAt: null, items: null, estado: null, estadoAt: null },
 };
 
