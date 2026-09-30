@@ -146,8 +146,9 @@ function Resultado({ r }: { r: { ok?: boolean; status?: number; explicacion?: st
   );
 }
 
-export function PanelRappi() {
+export function PanelRappi({ tick = 0, onActualizar }: { tick?: number; onActualizar?: () => void } = {}) {
   const [estado, setEstado] = useState<Estado | null>(null);
+  const [cargando, setCargando] = useState(false);
   const [tiendas, setTiendas] = useState<Tienda[] | null>(null);
   const [llamadas, setLlamadas] = useState<Llamada[]>([]);
   const [ordenes, setOrdenes] = useState<OrdenRappi[]>([]);
@@ -161,6 +162,7 @@ export function PanelRappi() {
   const [rechazo, setRechazo] = useState<{ id: string; tipo: string; motivo: string } | null>(null);
 
   const cargar = useCallback(async () => {
+    setCargando(true);
     const [e, l, o] = await Promise.allSettled([
       api.get<Estado>('/admin/rappi/estado'),
       api.get<{ llamadas: Llamada[] }>('/admin/rappi/llamadas?limite=30'),
@@ -175,9 +177,11 @@ export function PanelRappi() {
     if (o.status === 'fulfilled') setOrdenes(o.value.ordenes);
     const f = [e, l, o].find((x) => x.status === 'rejected');
     setError(f && f.status === 'rejected' ? (f.reason instanceof Error ? f.reason.message : 'No se pudo cargar') : null);
+    setCargando(false);
   }, []);
 
-  useEffect(() => { void cargar(); }, [cargar]);
+  // Se recarga al montar y cada vez que la pantalla de afuera pide refrescar (`tick`).
+  useEffect(() => { void cargar(); }, [cargar, tick]);
 
   /** Corre una acción contra RAPPI, guarda lo que respondió bajo `clave`, y refresca. */
   async function accion(clave: string, fn: () => Promise<unknown>) {
@@ -212,7 +216,7 @@ export function PanelRappi() {
             {fechaHora(estado.entorno.arrancoAt)} ({hace(estado.entorno.arrancoAt)}). Si cambiaste variables después de esa hora, ese cambio todavía no está corriendo.
           </p>
         </div>
-        <Button variant="secondary" onClick={() => void cargar()}>Actualizar</Button>
+        <Button variant="secondary" disabled={cargando} onClick={() => { void cargar(); onActualizar?.(); }}>{cargando ? 'Actualizando…' : 'Actualizar'}</Button>
       </div>
       {error && <p className="text-sm text-pomodoro-600">{error}</p>}
 

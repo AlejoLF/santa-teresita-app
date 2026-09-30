@@ -140,14 +140,23 @@ export default function IntegracionesPage() {
     void cargar();
   }, [cargar]);
 
+  // Los dos "Actualizar" de esta pantalla (el del panel de RAPPI y el del
+  // buzón) refrescan TODO: antes cada uno refrescaba sólo su sección y parecía
+  // que el botón no hacía nada.
+  const [tick, setTick] = useState(0);
+  const refrescarTodo = useCallback(() => {
+    setTick((t) => t + 1);
+    void cargar();
+  }, [cargar]);
+
   return (
     <div className="space-y-6 max-w-4xl">
-      <PanelRappi />
+      <PanelRappi tick={tick} onActualizar={() => void cargar()} />
 
       <section className="card p-5">
         <div className="flex items-start justify-between gap-3 mb-1">
           <h2 className="font-display text-lg text-teresita-700">Pedidos de plataformas</h2>
-          <Button variant="secondary" onClick={() => void cargar()} disabled={cargando}>
+          <Button variant="secondary" onClick={refrescarTodo} disabled={cargando}>
             {cargando ? 'Actualizando…' : 'Actualizar'}
           </Button>
         </div>
