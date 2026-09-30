@@ -23,7 +23,11 @@
 // Bumpeamos a v2 cuando la rama de optimizaciones (alpha.18) cambió SHELL_URLS
 // y agregó rutas admin frecuentes. El activate event borra las caches v1
 // automáticamente.
-const CACHE_VERSION = 'v2';
+// v3 (30/09): el API (/api/v1/*) deja de pasar por el cache del SW. Guardaba
+// respuestas JSON con datos de admin en el Cache Storage del navegador sin
+// ningún beneficio (en la nube el API no funciona offline), y ante cualquier
+// fallo de red servía datos viejos como si fueran actuales.
+const CACHE_VERSION = 'v3';
 const SHELL_CACHE = `sta-shell-${CACHE_VERSION}`;
 const STATIC_CACHE = `sta-static-${CACHE_VERSION}`;
 
@@ -84,6 +88,9 @@ self.addEventListener('fetch', (event) => {
   // Solo cacheamos cosas del mismo origen (Vercel deploy). Externos
   // pasan derecho.
   if (url.origin !== self.location.origin) return;
+
+  // El API (reenviado por Vercel a Railway): siempre red, nunca cache.
+  if (url.pathname.startsWith('/api/')) return;
 
   // Static assets: cache-first
   if (url.pathname.startsWith('/_next/static/') || url.pathname.startsWith('/icons/')) {
