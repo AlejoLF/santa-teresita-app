@@ -131,7 +131,7 @@ export default async function rappiRoutes(fastify: FastifyInstance) {
       ingestaConfigurada: Boolean(config.CHANNEL_INGEST_TOKEN),
       entorno: diagnosticoEntornoRappi(),
       config: cfg,
-      webhooks: { ...urls, ultimoPingAt: ultimoPing() },
+      webhooks: { ...urls, ultimoPingAt: await ultimoPing() },
       catalogo: { publicables: totalProductos - sinCodigo, sinCodigo, porPesoSinCantidad },
       ultimaLlamada: ultimasLlamadas[0]?.[0] ?? null,
       registroListo: ultimasLlamadas[1],

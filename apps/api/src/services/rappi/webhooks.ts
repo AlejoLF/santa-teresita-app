@@ -1,3 +1,4 @@
+import { getRappiConfig, setRappiConfig } from './config.js';
 import { llamarRappi } from './cliente.js';
 
 /**
@@ -84,10 +85,20 @@ export async function aprovisionarTienda(args: {
 // RAPPI manda PING para detectar caídas. No se guarda cada uno en el buzón
 // (lo llenaría de ruido y desplazaría los pedidos): se recuerda el último, que
 // es lo que la pantalla necesita mostrar: "RAPPI nos vio hace 2 minutos".
-let ultimoPingAt: string | null = null;
+// Se guarda en `rappi_config` (la base) y no sólo en memoria: el API de la
+// nube se reinicia con cada deploy y el dato se perdía. La respuesta al PING
+// no espera la escritura — RAPPI mide el tiempo de respuesta.
+let ultimoPingEnMemoria: string | null = null;
 export function registrarPing(): void {
-  ultimoPingAt = new Date().toISOString();
+  const ahora = new Date().toISOString();
+  ultimoPingEnMemoria = ahora;
+  void setRappiConfig({ ultimoPingAt: ahora }).catch((e) => {
+    console.error('[rappi] no se pudo guardar el último PING:', e);
+  });
 }
-export function ultimoPing(): string | null {
-  return ultimoPingAt;
+export async function ultimoPing(): Promise<string | null> {
+  const guardado = (await getRappiConfig()).ultimoPingAt;
+  if (!guardado) return ultimoPingEnMemoria;
+  if (!ultimoPingEnMemoria) return guardado;
+  return guardado > ultimoPingEnMemoria ? guardado : ultimoPingEnMemoria;
 }

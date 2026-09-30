@@ -238,6 +238,12 @@ export interface RappiConfig {
   tomarAutomatico: boolean;
   /** Minutos de cocina que se declaran al tomar. Null = el default de RAPPI. */
   tiempoCocinaMin: number | null;
+  /**
+   * Cuándo fue el último PING de RAPPI. Va en la base y no en memoria: el
+   * API de la nube se reinicia en cada deploy y "RAPPI todavía no hizo PING"
+   * después de un deploy era mentira (incidente 30/09).
+   */
+  ultimoPingAt: string | null;
   /** Lo último que pasó con el menú, para mostrarlo en la pantalla. */
   menu: {
     enviadoAt: string | null;
@@ -258,6 +264,7 @@ const DEFAULT: RappiConfig = {
   clientIntegrationId: null,
   tomarAutomatico: false,
   tiempoCocinaMin: null,
+  ultimoPingAt: null,
   menu: { enviadoAt: null, items: null, estado: null, estadoAt: null },
 };
 
