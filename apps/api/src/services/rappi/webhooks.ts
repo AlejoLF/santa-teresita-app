@@ -71,9 +71,19 @@ export async function aprovisionarTienda(args: {
     },
     contexto: `aprovisionar tienda ${args.storeId}`,
   });
+  // El self-onboarding exige DOS tokens: el nuestro y uno del comercio
+  // (login OAuth2 + PKCE del dueño en Portal Partners), que no tenemos. Un
+  // 401/403 acá es eso, no las credenciales. Ver docs/RAPPI-INTEGRACION.md.
+  const detalle =
+    r.status === 401 || r.status === 403
+      ? 'Aprovisionar por API exige además un token del comercio (login del dueño en Portal Partners), que el sistema todavía no hace. Si la tienda ya aparece en "Listar tiendas", ya está asociada y este paso no hace falta.'
+      : r.ok
+        ? `RAPPI aceptó el pedido de aprovisionamiento (${r.body?.accepted?.length ?? 0} aceptada/s, ${r.body?.rejected?.length ?? 0} rechazada/s); el resultado llega por webhook.`
+        : null;
   return {
     ok: r.ok,
     status: r.status,
+    detalle,
     batchId: r.body?.batch_id ?? null,
     aceptadas: r.body?.accepted ?? [],
     rechazadas: r.body?.rejected ?? [],

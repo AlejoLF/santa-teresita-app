@@ -44,7 +44,7 @@ pantalla: la tienda elegida, el `clientId` de la integración, si se toman las
 
 | Grupo | Capacidad | Cómo se cumple | Estado |
 |-|-|-|-|
-| Tiendas | **Enable/disable** ⭐ | botón *Activar/Desactivar integración* → `PUT /stores-pa/{id}/status` | listo |
+| Tiendas | **Enable/disable** ⭐ | botón *Activar/Desactivar integración* → `PUT /stores-pa/{id}/status` — **en DEV RAPPI responde `401 Access is denied`** con las mismas credenciales con las que listar y abrir/cerrar andan (30/09): no deja cambiar el estado de integración de la tienda que asociaron ellos. Verificar en el checklist si el ítem queda adoptado con *Abrir/Cerrar tienda*; si no, pedirles el permiso | listo (permiso pendiente en DEV) |
 | Tiendas | Listar | botón *Listar tiendas* → `GET /stores-pa` (si hay una sola, se elige sola) | listo |
 | Tiendas | Horarios | botón *Enviar horarios* → manda los turnos de `sesiones_horarios`, token de *utils* | listo (dominio a confirmar: ver nota) |
 | Menú | Enviar menú | botón *Enviar menú* → `POST /menu` armado desde el catálogo | listo |
@@ -144,6 +144,23 @@ simulador que no manda el cuerpo real de RAPPI (por ejemplo `{order_id, total,
 status}` sin `order_detail`) recibe 400 en `/new-order` a propósito — no se crea
 una venta con un pedido que no tiene ítems — y queda anotado como
 `BODY_INVALIDO`. Para `/ping` cualquier cuerpo recibe 200.
+
+### Si *Activar integración* dice "Access is denied" y *Aprovisionar* da 401
+
+Pasó el 30/09 con la tienda ya asociada por RAPPI, *Listar tiendas* y *Abrir
+tienda* funcionando. Son dos cosas distintas y ninguna es nuestra:
+
+- **Activar integración** (`PUT /stores-pa/{id}/status?integrated=true`): el
+  `401 Access is denied` es el "Invalid credentials" documentado de ese
+  endpoint, pero el mismo token lista tiendas y abre/cierra sin problema. RAPPI
+  no permite cambiar el estado de integración de esa tienda desde la API con
+  esta credencial. La tienda ya opera por la integración (los pedidos entran
+  por webhook), así que en la práctica no hace falta. Lo que hay que mirar es
+  el checklist del Integrations Manager: si "Enable/disable de tienda" queda
+  adoptado con *Abrir/Cerrar tienda*, listo; si no, pedirles el permiso.
+- **Aprovisionar**: exige el segundo token (del comercio) que no tenemos —ver
+  la sección del 404 más arriba—. Con la tienda ya asociada por RAPPI, este
+  botón no se usa.
 
 ### Si la pantalla dice que faltan las variables
 
