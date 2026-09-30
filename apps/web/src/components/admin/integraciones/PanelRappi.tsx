@@ -58,14 +58,19 @@ interface OrdenRappi {
   items: Array<{ nombreSnapshot: string; cantidad: string }>;
 }
 
+/** Los ONCE eventos del portal de RAPPI, en el mismo orden que los lista. Cada uno tiene su URL. */
 const EVENTOS_A_CARGAR: Array<{ evento: string; para: string }> = [
   { evento: 'NEW_ORDER', para: 'Pedidos nuevos' },
+  { evento: 'NEW_ORDER_SCHEDULED', para: 'Pedidos agendados (se anotan, entran cuando RAPPI los suelta)' },
+  { evento: 'NEW_ORDER_SCHEDULED_CANCELLED', para: 'Pedido agendado cancelado' },
   { evento: 'ORDER_EVENT_CANCEL', para: 'Cancelaciones (REQUERIDO)' },
+  { evento: 'ORDER_OTHER_EVENT', para: 'Otros eventos del pedido (se registran)' },
   { evento: 'PING', para: 'PING (RAPPI chequea que estemos vivos)' },
   { evento: 'MENU_APPROVED', para: 'Menú aprobado' },
   { evento: 'MENU_REJECTED', para: 'Menú rechazado' },
   { evento: 'STORE_CONNECTIVITY', para: 'Tienda conectada / desconectada' },
   { evento: 'STORE_PROVISIONING_STATUS', para: 'Resultado del aprovisionamiento' },
+  { evento: 'ORDER_RT_TRACKING', para: 'Seguimiento del repartidor (se registra)' },
 ];
 
 const CANCEL_TYPES = [
