@@ -296,18 +296,31 @@ export async function estadoMenu(storeId: string) {
  * `PUT /availability/stores/items` — prender/apagar productos por NUESTRO sku.
  * Pide el `integrationId` de la tienda, no el `rappiId`.
  */
+/**
+ * Prender/apagar productos y extras en RAPPI. Con el menú en RAPPI
+ * (`menuOrigen = 'RAPPI'`) los ids son los de RAPPI → `/items/rappi`; con el
+ * menú publicado desde el POS son nuestros sku → `/items`.
+ */
 export async function setDisponibilidad(args: { prender: string[]; apagar: string[] }) {
   const cfg = await getRappiConfig();
   const storeIntegrationId = cfg.storeIntegrationId ?? cfg.storeId;
   if (!storeIntegrationId) throw new ReglaNegocioError('Primero elegí la tienda de RAPPI.');
-  const r = await llamarRappi({
+  const porIdRappi = cfg.menuOrigen === 'RAPPI';
+  const r = await llamarRappi<{ message?: string }>({
     arbol: 'legacy',
     metodo: 'PUT',
-    ruta: `${LEGACY}/availability/stores/items`,
+    ruta: `${LEGACY}/availability/stores/items${porIdRappi ? '/rappi' : ''}`,
     body: [{ store_integration_id: storeIntegrationId, items: { turn_on: args.prender, turn_off: args.apagar } }],
-    contexto: `disponibilidad: prender ${args.prender.length}, apagar ${args.apagar.length}`,
+    contexto: `disponibilidad (${porIdRappi ? 'ids de RAPPI' : 'sku'}): prender ${args.prender.length}, apagar ${args.apagar.length}`,
   });
-  return { ok: r.ok, status: r.status, respuesta: r.body ?? r.texto };
+  return {
+    ok: r.ok,
+    status: r.status,
+    detalle: r.ok
+      ? `RAPPI aceptó: ${args.prender.length} prendido/s, ${args.apagar.length} apagado/s.`
+      : `RAPPI respondió ${r.status}${r.body?.message ? `: ${r.body.message}` : r.texto ? `: ${r.texto.slice(0, 200)}` : ''}`,
+    respuesta: r.body ?? r.texto,
+  };
 }
 
 // ─── El menú que RAPPI tiene hoy (para traducirlo) ───────────────────────

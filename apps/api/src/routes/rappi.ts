@@ -326,8 +326,8 @@ export default async function rappiRoutes(fastify: FastifyInstance) {
       ...admin,
       schema: {
         body: z.object({
-          prender: z.array(z.string().min(1).max(40)).default([]),
-          apagar: z.array(z.string().min(1).max(40)).default([]),
+          prender: z.array(z.string().min(1).max(120)).max(100).default([]),
+          apagar: z.array(z.string().min(1).max(120)).max(100).default([]),
         }),
       },
     },

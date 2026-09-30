@@ -235,6 +235,17 @@ Quedó para más adelante. Cuando se decida, es un tilde en la pantalla.
 
 ## Cosas a saber
 
+- **NEW_ORDER responde 200 al instante y la venta se crea en segundo plano.**
+  RAPPI exige el 200 en menos de 5 segundos, y crear una venta desde Railway
+  contra Supabase (decenas de consultas a otro continente) puede tardar más.
+  El resultado real (venta creada, duplicado, fuera de horario, error) queda
+  en el buzón igual; para RAPPI el pedido "llegó" y lo que cuenta después es
+  tomarlo o rechazarlo. La respuesta ya no trae el número de venta.
+- **Disponibilidad**: con el menú en RAPPI, prender/apagar va por
+  `/availability/stores/items/rappi` con los ids de RAPPI (botones "apagar en
+  RAPPI" / "prender en RAPPI" en la pantalla de traducción); con el menú
+  publicado desde el POS, por `/items` con nuestros sku.
+
 - **Los precios son los nuestros.** El pedido se valúa con la lista de precios
   RAPPI del sistema, no con lo que dice el cuerpo de RAPPI (decisión de alpha.39:
   precios server-side). El cuerpo entero queda en `payloadExterno` para comparar.

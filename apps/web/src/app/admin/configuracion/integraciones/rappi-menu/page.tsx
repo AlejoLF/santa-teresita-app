@@ -106,6 +106,18 @@ export default function RappiMenuPage() {
     }
   }
 
+  async function disponibilidad(t: Traduccion, prender: boolean) {
+    setOcupado(t.id);
+    try {
+      const r = await api.put<{ ok: boolean; detalle: string }>('/admin/rappi/menu/disponibilidad', prender ? { prender: [t.idExterno] } : { apagar: [t.idExterno] });
+      setAviso(`${t.nombreExterno}: ${r.detalle}`);
+    } catch (e) {
+      setAviso(`${t.nombreExterno}: ${e instanceof Error ? e.message : 'no se pudo'}`);
+    } finally {
+      setOcupado(null);
+    }
+  }
+
   async function importar() {
     setOcupado('importar');
     try {
@@ -179,7 +191,7 @@ export default function RappiMenuPage() {
       ) : (
         <div className="space-y-2">
           {filas.map((t) => (
-            <Fila key={t.id} t={t} grupos={grupos} ocupado={ocupado === t.id} onDecidir={(body) => void decidir(t, body)} />
+            <Fila key={t.id} t={t} grupos={grupos} ocupado={ocupado === t.id} onDecidir={(body) => void decidir(t, body)} onDisponibilidad={(prender) => void disponibilidad(t, prender)} />
           ))}
         </div>
       )}
@@ -195,7 +207,7 @@ function Chip({ tono, texto }: { tono: 'rojo' | 'verde' | 'neutro'; texto: strin
   );
 }
 
-function Fila({ t, grupos, ocupado, onDecidir }: { t: Traduccion; grupos: GrupoPOS[]; ocupado: boolean; onDecidir: (body: Record<string, unknown>) => void }) {
+function Fila({ t, grupos, ocupado, onDecidir, onDisponibilidad }: { t: Traduccion; grupos: GrupoPOS[]; ocupado: boolean; onDecidir: (body: Record<string, unknown>) => void; onDisponibilidad: (prender: boolean) => void }) {
   const [buscando, setBuscando] = useState(false);
   const [gramos, setGramos] = useState(t.cantidadPorUnidad ?? '');
   const traducido = t.estado === 'TRADUCIDO';
@@ -282,6 +294,8 @@ function Fila({ t, grupos, ocupado, onDecidir }: { t: Traduccion; grupos: GrupoP
 
       {/* Acciones */}
       <div className="flex sm:flex-col gap-1.5 text-xs">
+        <button type="button" disabled={ocupado} className="text-ink-700 underline" title="Lo deja fuera de venta en la app de RAPPI (por ejemplo, se acabó)" onClick={() => onDisponibilidad(false)}>apagar en RAPPI</button>
+        <button type="button" disabled={ocupado} className="text-ink-700 underline" title="Lo vuelve a poner en venta en la app de RAPPI" onClick={() => onDisponibilidad(true)}>prender en RAPPI</button>
         {t.estado !== 'IGNORAR' && (
           <button type="button" disabled={ocupado} className="text-ink-500 underline" onClick={() => onDecidir({ estado: 'IGNORAR' })}>ignorar</button>
         )}
