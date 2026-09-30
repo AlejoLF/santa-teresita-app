@@ -54,7 +54,15 @@ export async function setTiendaIntegrada(storeId: string, integrada: boolean) {
     query: { integrated: integrada },
     contexto: `${integrada ? 'activar' : 'desactivar'} integración de la tienda ${storeId}`,
   });
-  return { ok: r.ok, status: r.status, mensaje: r.body?.message ?? r.texto ?? null };
+  let mensaje = r.body?.message ?? r.texto ?? null;
+  // "Access is denied" es el 401 documentado de este endpoint. Con el mismo
+  // token, listar tiendas y abrir/cerrar andan (30/09): no es la credencial,
+  // es que RAPPI no deja cambiar el estado de integración de esta tienda
+  // desde la API. Decirlo ahorra ir a buscar el motivo al registro.
+  if (r.status === 401 || r.status === 403) {
+    mensaje = `RAPPI no permite ${integrada ? 'activar' : 'desactivar'} la integración de esta tienda con estas credenciales (${mensaje ?? r.status}). Si el checklist del Integrations Manager ya marca "Enable/disable de tienda" como adoptado, no hace falta: la tienda la asoció RAPPI. Si no, pedirles ese permiso.`;
+  }
+  return { ok: r.ok, status: r.status, mensaje };
 }
 
 /**
