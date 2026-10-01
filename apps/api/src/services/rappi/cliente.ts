@@ -95,8 +95,17 @@ async function login(tipo: TipoToken): Promise<string> {
   });
   const token = (body as { access_token?: unknown } | null)?.access_token;
   if (!res.ok || typeof token !== 'string' || !token) {
+    // Los dos logins van con las MISMAS credenciales. Si el de integraciones
+    // anda y el de utils (horarios) da 401, no es la credencial: a la
+    // integración le falta el permiso de utils (el portal lo llama scope
+    // `create:store_schedules`), y eso lo habilita RAPPI. Verificado el
+    // 01/10: con credenciales inventadas los dos logins contestan el mismo
+    // 401 `error.auth.unauthorized`, así que el 401 es "no autorizado", no
+    // "endpoint equivocado".
     throw new RappiError(
-      `RAPPI rechazó las credenciales (${res.status}). Revisá RAPPI_CLIENT_ID / RAPPI_CLIENT_SECRET y que el ambiente (${'RAPPI_AMBIENTE'}) sea el de esas credenciales.`,
+      tipo === 'utils'
+        ? `RAPPI rechazó las credenciales para el token de utils (${res.status}), el que exigen los horarios. Si "Probar credenciales" anda, las credenciales están bien: a esta integración le falta el permiso de utils (scope create:store_schedules). Hay que pedírselo a RAPPI (al TAM, o por el Integrations Manager).`
+        : `RAPPI rechazó las credenciales (${res.status}). Revisá RAPPI_CLIENT_ID / RAPPI_CLIENT_SECRET y que el ambiente (${'RAPPI_AMBIENTE'}) sea el de esas credenciales.`,
       res.status,
       body ?? texto,
     );

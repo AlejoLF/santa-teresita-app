@@ -120,15 +120,32 @@ Errores documentados de `/stores-pa`:
 
 ### Horarios
 
-Otro prefijo, y token de *utils*:
+Otro prefijo (`/api/rest-ops-utils`, en DEV el portal muestra
+`microservices.dev.rappi.com`; `api.dev.rappi.com` responde igual) y token de
+*utils* (`POST /restaurants/auth/v1/token/login/utils`, mismas credenciales).
+**No hay "reemplazar todo"**: RAPPI guarda FRANJAS sueltas con id, una por día
+(portal → api-reference/store-schedules, transcripto el 01/10):
 
-```
-POST {COUNTRY_DOMAIN}/api/rest-ops-utils/store/schedule/{storeId}
+| | |
+|-|-|
+| **Leer** | `GET /store/schedule/{storeId}` → `{ "storeScheduleDays": [ { "day": "mon", "storeSchedules": [ { "id": 1171828, "startsTime": "07:00:00", "endsTime": "09:00:00" } ] } ] }` |
+| **Crear una franja** | `POST /store/schedule/{storeId}` con `{ "day": "mon", "starts_time": "08:00:00", "ends_time": "09:00:00" }` → `{ "day": "mon", "storeSchedules": [ { "id": 21126292, … } ] }` |
+| **Editar una franja** | `PUT /store/schedule/{storeId}/{storeScheduleId}` con `{ "startsTime": "07:00:00", "endsTime": "08:00:00" }` |
+| **Borrar una franja** | `DELETE /store/schedule/{storeId}/{storeScheduleId}` → 200 sin cuerpo |
+| Feriados / días especiales | `GET …/holiday`, `GET …/special`, `POST …/holiday/{holidayDayId}`, `POST …/special`, `POST …/special/{specialDayId}`, `DELETE …/special/{specialDayId}` |
 
-{ "schedule_details": [
-    { "days": "mon,tue,wed,thu,fri,sat,sun", "starts_time": "08:00:00", "ends_time": "20:00:00" }
-] }
-```
+Status: 200 / 400 / 401. Por eso `enviarHorarios` (tiendas.ts) **sincroniza**:
+lee, borra las franjas que sobran, crea las que faltan. Mandarlo dos veces no
+duplica nada.
+
+> **El 401 del login de utils.** Los dos logins (`integrations` y `utils`) van
+> con el mismo `client_id`/`client_secret`. Probado el 01/10 con credenciales
+> inventadas: los dos devuelven `401 {"code":"401","code_message":
+> "error.auth.unauthorized"}` (tras un 307 a la ruta con barra final). Si el de
+> integraciones anda y el de utils da ese 401, a la integración le falta el
+> permiso de utils (el checklist lo llama scope `create:store_schedules`); lo
+> habilita RAPPI. El portal también avisa que los endpoints de utils están
+> previstos a dejar de existir, reemplazados por los del catálogo nuevo.
 
 ## Disponibilidad
 

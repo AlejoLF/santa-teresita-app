@@ -109,42 +109,138 @@ export async function estadoTiendas(storeIds: string[]): Promise<Record<string, 
 }
 
 const DIAS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+const UTILS = '/api/rest-ops-utils';
+
+export interface FranjaRappi {
+  day: string;
+  starts_time: string;
+  ends_time: string;
+}
 
 /**
  * Los horarios de la tienda en RAPPI, sacados de NUESTRA configuración de
  * turnos (`sesiones_horarios`): no se cargan dos veces.
  *
- * `POST /api/rest-ops-utils/store/schedule/{storeId}` — va con el token de
- * *utils*, que es otro login. Se asume el dominio legacy (es `/api/...` y no
- * `/restaurants/...`); si RAPPI contesta 404 ahí, el registro lo muestra y es
- * un cambio de una línea.
+ * El portal (api-reference/store-schedules) los modela como FRANJAS sueltas,
+ * una por día: `POST /api/rest-ops-utils/store/schedule/{storeId}` con
+ * `{ day, starts_time, ends_time }` crea UNA franja, `GET` devuelve las que
+ * hay (`storeScheduleDays[].storeSchedules[]`, con id) y `DELETE
+ * …/{storeId}/{storeScheduleId}` borra una. No hay "reemplazar todo": por eso
+ * `enviarHorarios` sincroniza (lee, borra lo que sobra, crea lo que falta) en
+ * vez de mandar una lista, y correrlo dos veces no duplica nada.
+ *
+ * Todo con el token de *utils*, que es otro login con las mismas
+ * credenciales — ver el comentario en `login()` de cliente.ts.
  */
-export function armarHorariosRappi(horarios: Array<{ diasSemana: number[]; horaInicio: string; horaFin: string }>) {
+export function armarHorariosRappi(horarios: Array<{ diasSemana: number[]; horaInicio: string; horaFin: string }>): FranjaRappi[] {
   const hhmmss = (hhmm: string) => (hhmm.length === 5 ? `${hhmm}:00` : hhmm);
-  return {
-    schedule_details: horarios
-      .filter((h) => h.diasSemana.length > 0)
-      .map((h) => ({
-        days: [...new Set(h.diasSemana)]
-          .sort((a, b) => a - b)
-          .map((d) => DIAS[d] ?? 'mon')
-          .join(','),
-        starts_time: hhmmss(h.horaInicio),
-        ends_time: hhmmss(h.horaFin),
-      })),
-  };
+  const franjas: FranjaRappi[] = [];
+  for (const h of horarios) {
+    const inicio = hhmmss(h.horaInicio);
+    const fin = hhmmss(h.horaFin);
+    for (const d of [...new Set(h.diasSemana)].sort((a, b) => a - b)) {
+      const day = DIAS[d];
+      if (!day) continue;
+      if (fin > inicio) {
+        franjas.push({ day, starts_time: inicio, ends_time: fin });
+      } else {
+        // Un turno que cruza medianoche (22:00→02:00) son dos franjas en RAPPI.
+        franjas.push({ day, starts_time: inicio, ends_time: '23:59:59' });
+        franjas.push({ day: DIAS[(d + 1) % 7] ?? 'sun', starts_time: '00:00:00', ends_time: fin });
+      }
+    }
+  }
+  // Sin duplicados y en orden estable (el orden de llamadas sale de acá).
+  const vistos = new Set<string>();
+  return franjas.filter((f) => {
+    const k = `${f.day}|${f.starts_time}|${f.ends_time}`;
+    if (vistos.has(k)) return false;
+    vistos.add(k);
+    return true;
+  });
+}
+
+interface HorariosActualesRappi {
+  storeScheduleDays?: Array<{
+    day?: string;
+    storeSchedules?: Array<{ id?: number | string; startsTime?: string; endsTime?: string }>;
+  }>;
 }
 
 export async function enviarHorarios(storeId: string) {
   const cfg = await getConfigHorarios();
-  const body = armarHorariosRappi(cfg.horarios);
-  const r = await llamarRappi({
+  const deseadas = armarHorariosRappi(cfg.horarios);
+  const base = `${UTILS}/store/schedule/${encodeURIComponent(storeId)}`;
+  const clave = (f: FranjaRappi) => `${f.day}|${f.starts_time}|${f.ends_time}`;
+
+  const actual = await llamarRappi<HorariosActualesRappi>({
     arbol: 'legacy',
-    metodo: 'POST',
-    ruta: `/api/rest-ops-utils/store/schedule/${encodeURIComponent(storeId)}`,
-    body,
-    contexto: `enviar horarios de la tienda ${storeId}`,
+    metodo: 'GET',
+    ruta: base,
+    contexto: `leer los horarios de la tienda ${storeId}`,
     token: 'utils',
   });
-  return { ok: r.ok, status: r.status, enviado: body, respuesta: r.body ?? r.texto };
+  if (!actual.ok) {
+    const detalle = actual.body !== null ? JSON.stringify(actual.body).slice(0, 300) : (actual.texto ?? '').slice(0, 300);
+    throw new RappiError(
+      `RAPPI respondió ${actual.status} al leer los horarios de la tienda ${storeId}${detalle ? `: ${detalle}` : ''}`,
+      actual.status,
+      actual.body ?? actual.texto,
+    );
+  }
+  const existentes = (actual.body?.storeScheduleDays ?? []).flatMap((d) =>
+    (d.storeSchedules ?? []).map((f) => ({
+      id: String(f.id ?? ''),
+      franja: { day: String(d.day ?? ''), starts_time: String(f.startsTime ?? ''), ends_time: String(f.endsTime ?? '') },
+    })),
+  );
+  const quiero = new Set(deseadas.map(clave));
+  const hay = new Set(existentes.map((e) => clave(e.franja)));
+
+  const fallas: string[] = [];
+  let borradas = 0;
+  for (const e of existentes) {
+    if (quiero.has(clave(e.franja)) || !e.id) continue;
+    const r = await llamarRappi({
+      arbol: 'legacy',
+      metodo: 'DELETE',
+      ruta: `${base}/${encodeURIComponent(e.id)}`,
+      contexto: `borrar la franja ${e.franja.day} ${e.franja.starts_time}–${e.franja.ends_time} de la tienda ${storeId}`,
+      token: 'utils',
+    });
+    if (r.ok) borradas += 1;
+    else fallas.push(`borrar ${e.franja.day} ${e.franja.starts_time}–${e.franja.ends_time}: ${r.status}`);
+  }
+  let creadas = 0;
+  for (const f of deseadas) {
+    if (hay.has(clave(f))) continue;
+    const r = await llamarRappi<{ message?: string }>({
+      arbol: 'legacy',
+      metodo: 'POST',
+      ruta: base,
+      body: f,
+      contexto: `crear la franja ${f.day} ${f.starts_time}–${f.ends_time} de la tienda ${storeId}`,
+      token: 'utils',
+    });
+    if (r.ok) creadas += 1;
+    else fallas.push(`crear ${f.day} ${f.starts_time}–${f.ends_time}: ${r.status}${r.body?.message ? ` ${r.body.message}` : ''}`);
+  }
+  const sinCambios = deseadas.length - creadas - fallas.filter((x) => x.startsWith('crear')).length;
+  const partes = [
+    creadas ? `${creadas} franja/s creada/s` : null,
+    borradas ? `${borradas} borrada/s` : null,
+    sinCambios ? `${sinCambios} ya estaba/n` : null,
+  ].filter(Boolean);
+  return {
+    ok: fallas.length === 0,
+    status: fallas.length ? 207 : 200,
+    creadas,
+    borradas,
+    sinCambios,
+    fallas,
+    enviado: deseadas,
+    detalle: fallas.length
+      ? `RAPPI rechazó ${fallas.length} de ${fallas.length + creadas + borradas} cambio/s: ${fallas.join('; ').slice(0, 400)}`
+      : `Horarios sincronizados en RAPPI: ${partes.join(', ') || 'no había nada que mandar'} (${deseadas.length} franja/s en total).`,
+  };
 }

@@ -83,7 +83,7 @@ precios de allá son otros, y todavía no se unifican. Lo que hace el POS es
 |-|-|-|-|
 | Tiendas | **Enable/disable** ⭐ | botón *Activar/Desactivar integración* → `PUT /stores-pa/{id}/status` — **en DEV RAPPI responde `401 Access is denied`** con las mismas credenciales con las que listar y abrir/cerrar andan (30/09): no deja cambiar el estado de integración de la tienda que asociaron ellos. Verificar en el checklist si el ítem queda adoptado con *Abrir/Cerrar tienda*; si no, pedirles el permiso | listo (permiso pendiente en DEV) |
 | Tiendas | Listar | botón *Listar tiendas* → `GET /stores-pa` (si hay una sola, se elige sola) | listo |
-| Tiendas | Horarios | botón *Enviar horarios* → manda los turnos de `sesiones_horarios`, token de *utils* | listo (dominio a confirmar: ver nota) |
+| Tiendas | Horarios | botón *Enviar horarios* → sincroniza los turnos de `sesiones_horarios` como franjas (`GET`/`POST`/`DELETE /api/rest-ops-utils/store/schedule/{id}`), token de *utils* | listo (**en DEV el login de utils da 401**: ver abajo) |
 | Menú | Enviar menú | botón *Enviar menú* → `POST /menu` armado desde el catálogo | listo |
 | Menú | Estado del menú | botón *Consultar aprobación* → `GET /menu/approved/{id}`, y el webhook `MENU_APPROVED` | listo |
 | Menú | Disponibilidad | `PUT /admin/rappi/menu/disponibilidad` → `PUT /availability/stores/items` | listo (sin botón todavía: se llama por API) |
@@ -99,10 +99,13 @@ precios de allá son otros, y todavía no se unifican. Lo que hace el POS es
 
 ⭐ = REQUERIDO
 
-> **Nota sobre los horarios**: el endpoint es `/api/rest-ops-utils/store/schedule/{id}`
-> y el portal no dice contra qué dominio. Se asume el legacy (`services.*`), por el
-> prefijo `/api/`. Si contesta 404, el registro lo muestra y es cambiar una línea en
-> `services/rappi/tiendas.ts`.
+> **Nota sobre los horarios**: RAPPI no tiene "reemplazar los horarios": guarda
+> franjas sueltas (una por día, con id). *Enviar horarios* las lee, borra las que
+> no están en los turnos del POS y crea las que faltan; repetirlo no duplica. Un
+> turno que cruza medianoche se manda como dos franjas. Va con el token de
+> *utils*, que es otro login con las mismas credenciales — y en DEV ese login
+> contesta 401 (ver "Si *Enviar horarios* dice que RAPPI rechazó las
+> credenciales para el token de utils").
 
 ## Cómo se pone en marcha
 
@@ -198,6 +201,23 @@ tienda* funcionando. Son dos cosas distintas y ninguna es nuestra:
 - **Aprovisionar**: exige el segundo token (del comercio) que no tenemos —ver
   la sección del 404 más arriba—. Con la tienda ya asociada por RAPPI, este
   botón no se usa.
+
+### Si *Enviar horarios* dice "RAPPI rechazó las credenciales para el token de utils (401)"
+
+Los horarios van por `/api/rest-ops-utils/…`, que exige **otro token**:
+`POST /restaurants/auth/v1/token/login/utils`, con el mismo `client_id` y
+`client_secret` que el de integraciones. Pasó el 01/10 en DEV: *Probar
+credenciales*, listar tiendas, abrir/cerrar, tomar pedidos — todo anda — y el
+login de utils devuelve `401 error.auth.unauthorized`, exactamente lo mismo que
+devuelve con credenciales inventadas (verificado). No es la variable ni el
+dominio: a esta integración **no le habilitaron el permiso de utils** (el
+checklist lo nombra: "scope create:store_schedules").
+
+Qué hacer: pedirle a RAPPI (al TAM, o por el soporte del Integrations Manager)
+que habilite el scope de horarios / utils para el `client_id` de la
+integración, y volver a tocar *Enviar horarios*. El ítem **no es REQUERIDO**
+para certificar: la encargada sigue cargando los horarios desde la web de
+RAPPI mientras tanto.
 
 ### Si la pantalla dice que faltan las variables
 

@@ -301,6 +301,8 @@ export async function estadoMenu(storeId: string) {
  * (`menuOrigen = 'RAPPI'`) los ids son los de RAPPI → `/items/rappi`; con el
  * menú publicado desde el POS son nuestros sku → `/items`.
  */
+const idItem = (id: string): string | number => (/^\d+$/.test(id) ? Number(id) : id);
+
 export async function setDisponibilidad(args: { prender: string[]; apagar: string[] }) {
   const cfg = await getRappiConfig();
   const storeIntegrationId = cfg.storeIntegrationId ?? cfg.storeId;
@@ -310,7 +312,8 @@ export async function setDisponibilidad(args: { prender: string[]; apagar: strin
     arbol: 'legacy',
     metodo: 'PUT',
     ruta: `${LEGACY}/availability/stores/items${porIdRappi ? '/rappi' : ''}`,
-    body: [{ store_integration_id: storeIntegrationId, items: { turn_on: args.prender, turn_off: args.apagar } }],
+    // El portal muestra los ids de RAPPI como números y los sku como texto.
+    body: [{ store_integration_id: storeIntegrationId, items: { turn_on: args.prender.map(idItem), turn_off: args.apagar.map(idItem) } }],
     contexto: `disponibilidad (${porIdRappi ? 'ids de RAPPI' : 'sku'}): prender ${args.prender.length}, apagar ${args.apagar.length}`,
   });
   return {
