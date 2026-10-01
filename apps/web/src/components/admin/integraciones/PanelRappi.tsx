@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
@@ -191,6 +191,21 @@ export function PanelRappi({ tick = 0, onActualizar }: { tick?: number; onActual
 
   // Se recarga al montar y cada vez que la pantalla de afuera pide refrescar (`tick`).
   useEffect(() => { void cargar(); }, [cargar, tick]);
+
+  // Los pedidos entran solos por el webhook: cada 10 s se vuelven a pedir (sólo
+  // ellos, no toda la pantalla) para que aparezcan sin tocar "Actualizar". No
+  // se pisa una acción en curso ni se pollea con la pestaña en segundo plano.
+  const ocupadoRef = useRef<string | null>(null);
+  ocupadoRef.current = ocupado;
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (ocupadoRef.current !== null || document.hidden) return;
+      api.get<{ ordenes: OrdenRappi[] }>('/admin/rappi/ordenes?limite=15')
+        .then((o) => setOrdenes(o.ordenes))
+        .catch(() => { /* la próxima vuelta lo intenta de nuevo */ });
+    }, 10_000);
+    return () => clearInterval(id);
+  }, []);
 
   /** Corre una acción contra RAPPI, guarda lo que respondió bajo `clave`, y refresca. */
   async function accion(clave: string, fn: () => Promise<unknown>) {
@@ -449,28 +464,32 @@ export function PanelRappi({ tick = 0, onActualizar }: { tick?: number; onActual
                 <MoneyAmount value={o.total} className="text-sm" />
                 <Chip ok={o.estado === 'ANULADA' ? false : o.enRappi === 'SIN_RESPUESTA' ? null : true}
                   texto={o.estado === 'ANULADA' ? 'anulada' : o.enRappi === 'TOMADA' ? 'tomada' : o.enRappi === 'RECHAZADA' ? 'rechazada' : o.enRappi === 'LISTA' ? 'lista para retiro' : 'sin responder a RAPPI'} />
-                {o.idExternoCanal && o.estado !== 'ANULADA' && (
+                {o.idExternoCanal && (() => {
                   // Sólo lo que RAPPI acepta en cada estado (managing-user-orders):
-                  // SENT → tomar o rechazar; TAKEN → listo. Rechazar una orden ya
-                  // tomada da 400 "Invalid transition"; se cancela desde RAPPI.
-                  <div className="flex gap-1">
-                    {o.enRappi === 'SIN_RESPUESTA' && (
-                      <Button size="sm" disabled={ocupado !== null} onClick={() => void accion(`o-${o.id}`, () => api.post(`/admin/rappi/ordenes/${o.idExternoCanal}/tomar`, {}))}>Tomar</Button>
-                    )}
-                    {o.enRappi === 'TOMADA' && (
-                      <Button variant="secondary" size="sm" disabled={ocupado !== null} onClick={() => void accion(`o-${o.id}`, () => api.post(`/admin/rappi/ordenes/${o.idExternoCanal}/lista`, {}))}>Listo</Button>
-                    )}
-                    {o.enRappi === 'SIN_RESPUESTA' && (
-                      <Button variant={rechazo?.id === o.idExternoCanal ? 'destructive' : 'secondary'} size="sm" disabled={ocupado !== null}
-                        onClick={() => setRechazo(rechazo?.id === o.idExternoCanal ? null : { id: o.idExternoCanal!, tipo: 'ORDER_MISSING_INFORMATION', motivo: etiquetaCancel('ORDER_MISSING_INFORMATION') })}>
-                        Rechazar
+                  // SENT → tomar o rechazar; TAKEN → listo; después, nada. Los
+                  // botones quedan a la vista pero apagados, así se ve qué ya pasó.
+                  const viva = o.estado !== 'ANULADA';
+                  const puedeTomar = viva && o.enRappi === 'SIN_RESPUESTA';
+                  const puedeListo = viva && o.enRappi === 'TOMADA';
+                  const puedeRechazar = viva && o.enRappi === 'SIN_RESPUESTA';
+                  return (
+                    <div className="flex gap-1 items-center">
+                      <Button size="sm" disabled={ocupado !== null || !puedeTomar} title={puedeTomar ? undefined : 'Ya se respondió a RAPPI'}
+                        onClick={() => void accion(`o-${o.id}`, () => api.post(`/admin/rappi/ordenes/${o.idExternoCanal}/tomar`, {}))}>
+                        {o.enRappi === 'TOMADA' || o.enRappi === 'LISTA' ? 'Tomada' : 'Tomar'}
                       </Button>
-                    )}
-                    {(o.enRappi === 'TOMADA' || o.enRappi === 'LISTA') && (
-                      <span className="text-2xs text-ink-500 self-center">ya tomada: si hay que cancelarla, es desde RAPPI</span>
-                    )}
-                  </div>
-                )}
+                      <Button variant="secondary" size="sm" disabled={ocupado !== null || !puedeListo} title={puedeListo ? undefined : o.enRappi === 'LISTA' ? 'Ya avisada como lista' : 'Primero hay que tomarla'}
+                        onClick={() => void accion(`o-${o.id}`, () => api.post(`/admin/rappi/ordenes/${o.idExternoCanal}/lista`, {}))}>
+                        {o.enRappi === 'LISTA' ? 'Lista' : 'Listo'}
+                      </Button>
+                      <Button variant={rechazo?.id === o.idExternoCanal ? 'destructive' : 'secondary'} size="sm" disabled={ocupado !== null || !puedeRechazar}
+                        title={puedeRechazar ? undefined : o.enRappi === 'RECHAZADA' ? 'Ya rechazada' : 'Una orden tomada no se rechaza: se cancela desde RAPPI'}
+                        onClick={() => setRechazo(rechazo?.id === o.idExternoCanal ? null : { id: o.idExternoCanal!, tipo: 'ORDER_MISSING_INFORMATION', motivo: etiquetaCancel('ORDER_MISSING_INFORMATION') })}>
+                        {o.enRappi === 'RECHAZADA' ? 'Rechazada' : 'Rechazar'}
+                      </Button>
+                    </div>
+                  );
+                })()}
                 {rechazo && rechazo.id === o.idExternoCanal && (
                   <div className="w-full rounded-lg border border-red-200 bg-red-50/40 p-3 space-y-2 text-sm">
                     <p className="font-medium text-ink-900">Rechazar el pedido #{o.numero} en RAPPI</p>
