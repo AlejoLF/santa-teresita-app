@@ -1,5 +1,5 @@
 import { prisma } from '@sta/db/client';
-import { credencialesRappi, dominiosRappi } from './config.js';
+import { ambienteRappi, credencialesRappi, dominiosRappi } from './config.js';
 
 /**
  * El cliente HTTP contra la API de RAPPI. Todo lo saliente pasa por acá.
@@ -33,6 +33,8 @@ export interface RespuestaRappi<T = unknown> {
   /** El cuerpo crudo cuando no era JSON. */
   texto: string | null;
   ms: number;
+  /** Algo que conviene saber de cómo se hizo la llamada (p. ej. con qué token). */
+  nota?: string;
 }
 
 export class RappiApagadoError extends Error {
@@ -63,15 +65,32 @@ const MAX_FILAS_REGISTRO = 500;
 const tokens = new Map<TipoToken, { token: string; expiraAt: number }>();
 const RENOVAR_ANTES_MS = 60 * 60_000;
 
-async function login(tipo: TipoToken): Promise<string> {
+/**
+ * Dónde pedir cada token. El de integraciones va al dominio "nuevo" y listo.
+ * El de utils (horarios) es otro login con las mismas credenciales, y en DEV
+ * no está claro en qué host vive: la tabla del portal dice
+ * `microservices.dev.rappi.com`, los ejemplos `api.dev.rappi.com`. Se prueban
+ * los dos (el configurado primero) y gana el que entregue token. Con un
+ * override de URL (tests, proxy) no se inventan hosts.
+ */
+function hostsLogin(tipo: TipoToken): string[] {
+  const { nuevo, legacy } = dominiosRappi();
+  const hosts = [nuevo];
+  if (tipo === 'utils') {
+    if (ambienteRappi() === 'dev' && nuevo === 'https://api.dev.rappi.com') hosts.push('https://microservices.dev.rappi.com');
+    hosts.push(legacy);
+  }
+  return [...new Set(hosts)];
+}
+
+async function loginEn(tipo: TipoToken, host: string): Promise<string> {
   const cred = credencialesRappi();
   if (!cred) throw new RappiApagadoError();
-  const { nuevo } = dominiosRappi();
   const ruta = `/restaurants/auth/v1/token/login/${tipo}`;
   const t0 = Date.now();
   let res: Response;
   try {
-    res = await fetch(`${nuevo}${ruta}`, {
+    res = await fetch(`${host}${ruta}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ client_id: cred.clientId, client_secret: cred.clientSecret }),
@@ -79,10 +98,10 @@ async function login(tipo: TipoToken): Promise<string> {
     });
   } catch (e) {
     await registrar({
-      metodo: 'POST', ruta, contexto: `login ${tipo}`, status: null, ok: false,
+      metodo: 'POST', ruta, contexto: `login ${tipo} en ${host}`, status: null, ok: false,
       ms: Date.now() - t0, error: describir(e),
     });
-    throw new RappiError(`No se pudo hablar con RAPPI para el login: ${describir(e)}`, null, null);
+    throw new RappiError(`No se pudo hablar con RAPPI (${host}) para el login: ${describir(e)}`, null, null);
   }
   const ms = Date.now() - t0;
   const texto = await res.text();
@@ -90,30 +109,46 @@ async function login(tipo: TipoToken): Promise<string> {
   // El cuerpo del login NO se registra: lleva las credenciales de ida y el
   // token de vuelta. Sólo el resultado.
   await registrar({
-    metodo: 'POST', ruta, contexto: `login ${tipo}`, status: res.status, ok: res.ok, ms,
-    error: res.ok ? null : `RAPPI respondió ${res.status} al login`,
+    metodo: 'POST', ruta, contexto: `login ${tipo} en ${host}`, status: res.status, ok: res.ok, ms,
+    error: res.ok ? null : `RAPPI respondió ${res.status} al login de ${tipo}`,
   });
   const token = (body as { access_token?: unknown } | null)?.access_token;
   if (!res.ok || typeof token !== 'string' || !token) {
-    // Los dos logins van con las MISMAS credenciales. Si el de integraciones
-    // anda y el de utils (horarios) da 401, no es la credencial: a la
-    // integración le falta el permiso de utils (el portal lo llama scope
-    // `create:store_schedules`), y eso lo habilita RAPPI. Verificado el
-    // 01/10: con credenciales inventadas los dos logins contestan el mismo
-    // 401 `error.auth.unauthorized`, así que el 401 es "no autorizado", no
-    // "endpoint equivocado".
-    throw new RappiError(
-      tipo === 'utils'
-        ? `RAPPI rechazó las credenciales para el token de utils (${res.status}), el que exigen los horarios. Si "Probar credenciales" anda, las credenciales están bien: a esta integración le falta el permiso de utils (scope create:store_schedules). Hay que pedírselo a RAPPI (al TAM, o por el Integrations Manager).`
-        : `RAPPI rechazó las credenciales (${res.status}). Revisá RAPPI_CLIENT_ID / RAPPI_CLIENT_SECRET y que el ambiente (${'RAPPI_AMBIENTE'}) sea el de esas credenciales.`,
-      res.status,
-      body ?? texto,
-    );
+    throw new RappiError(`${host}: ${res.status}`, res.status, body ?? texto);
   }
   const expiresIn = Number((body as { expires_in?: unknown }).expires_in);
   const vida = Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn * 1000 : 7 * 24 * 3_600_000;
   tokens.set(tipo, { token, expiraAt: Date.now() + vida });
   return token;
+}
+
+async function login(tipo: TipoToken): Promise<string> {
+  const intentos: string[] = [];
+  let ultimo: RappiError | null = null;
+  for (const host of hostsLogin(tipo)) {
+    try {
+      return await loginEn(tipo, host);
+    } catch (e) {
+      if (!(e instanceof RappiError)) throw e;
+      ultimo = e;
+      intentos.push(e.message);
+    }
+  }
+  const status = ultimo?.status ?? null;
+  // Los dos logins van con las MISMAS credenciales. Si el de integraciones
+  // anda y el de utils (horarios) da 401 en todos los hosts, no es la
+  // credencial: a la integración le falta el permiso de utils (el portal lo
+  // llama scope `create:store_schedules`), y eso lo habilita RAPPI. Verificado
+  // el 01/10: con credenciales inventadas los dos logins contestan el mismo
+  // 401 `error.auth.unauthorized`, así que el 401 es "no autorizado", no
+  // "endpoint equivocado".
+  throw new RappiError(
+    tipo === 'utils'
+      ? `RAPPI rechazó las credenciales para el token de utils (${intentos.join(', ')}), el que exigen los horarios. Si "Probar credenciales" anda, las credenciales están bien: a esta integración le falta el permiso de utils (scope create:store_schedules). Hay que pedírselo a RAPPI (al TAM, o por el Integrations Manager).`
+      : `RAPPI rechazó las credenciales (${status ?? 'sin respuesta'}). Revisá RAPPI_CLIENT_ID / RAPPI_CLIENT_SECRET y que el ambiente (RAPPI_AMBIENTE) sea el de esas credenciales.`,
+    status,
+    ultimo?.cuerpo ?? null,
+  );
 }
 
 export async function obtenerToken(tipo: TipoToken = 'integrations'): Promise<string> {
@@ -127,14 +162,29 @@ export function invalidarTokens(): void {
 }
 
 /** Para el botón "Probar credenciales": fuerza un login y dice cómo fue. */
-export async function probarCredenciales(): Promise<{ ok: boolean; detalle: string }> {
+export async function probarCredenciales(): Promise<{ ok: boolean; detalle: string; utils: { ok: boolean; detalle: string } }> {
   invalidarTokens();
+  let integraciones: { ok: boolean; detalle: string };
   try {
     await login('integrations');
-    return { ok: true, detalle: 'RAPPI aceptó las credenciales y entregó un token.' };
+    integraciones = { ok: true, detalle: 'RAPPI aceptó las credenciales y entregó un token.' };
   } catch (e) {
-    return { ok: false, detalle: e instanceof Error ? e.message : String(e) };
+    integraciones = { ok: false, detalle: e instanceof Error ? e.message : String(e) };
   }
+  // El token de utils es el que piden los horarios. Se prueba aparte para que
+  // "las credenciales andan pero los horarios no" se vea acá, de una.
+  let utils: { ok: boolean; detalle: string };
+  try {
+    await login('utils');
+    utils = { ok: true, detalle: 'RAPPI también entregó el token de utils (horarios).' };
+  } catch (e) {
+    utils = { ok: false, detalle: e instanceof Error ? e.message : String(e) };
+  }
+  return {
+    ok: integraciones.ok,
+    detalle: integraciones.ok ? `${integraciones.detalle} ${utils.detalle}` : integraciones.detalle,
+    utils,
+  };
 }
 
 // ─── Llamadas ────────────────────────────────────────────────────────────
@@ -187,14 +237,30 @@ export async function llamarRappi<T = unknown>(args: LlamadaArgs): Promise<Respu
 
   let res: Response;
   let ms: number;
+  let nota: string | undefined;
+  // Con qué token se pega. Si el de utils no se consigue (401/403 en todos
+  // los hosts), se intenta igual con el de integraciones: el portal dice
+  // "Token" a secas para esos endpoints, y si RAPPI lo acepta, listo; si
+  // contesta "Access is denied", el registro muestra las dos cosas y el
+  // diagnóstico es inequívoco (falta el permiso de utils).
+  const tokenPara = async (): Promise<{ token: string; tipo: TipoToken }> => {
+    try {
+      return { token: await obtenerToken(tipo), tipo };
+    } catch (e) {
+      if (tipo !== 'utils' || !(e instanceof RappiError) || (e.status !== 401 && e.status !== 403)) throw e;
+      nota = `el login de utils dio ${e.status}; se usó el token de integraciones`;
+      return { token: await obtenerToken('integrations'), tipo: 'integrations' };
+    }
+  };
   try {
-    ({ res, ms } = await hacer(await obtenerToken(tipo)));
+    const t = await tokenPara();
+    ({ res, ms } = await hacer(t.token));
     // Un 401 con token cacheado casi siempre es un token vencido antes de
     // tiempo (rotaron credenciales, o RAPPI lo invalidó): se renueva y se
     // reintenta UNA vez.
-    if (res.status === 401 && tokens.has(tipo)) {
-      tokens.delete(tipo);
-      ({ res, ms } = await hacer(await obtenerToken(tipo)));
+    if (res.status === 401 && tokens.has(t.tipo)) {
+      tokens.delete(t.tipo);
+      ({ res, ms } = await hacer((await tokenPara()).token));
     }
   } catch (e) {
     if (e instanceof RappiError || e instanceof RappiApagadoError) throw e;
@@ -208,12 +274,12 @@ export async function llamarRappi<T = unknown>(args: LlamadaArgs): Promise<Respu
   const texto = await res.text();
   const body = parsear(texto) as T | null;
   await registrar({
-    metodo: args.metodo, ruta: rutaCompleta, contexto: args.contexto, ventaId: args.ventaId,
+    metodo: args.metodo, ruta: rutaCompleta, contexto: nota ? `${args.contexto} (${nota})` : args.contexto, ventaId: args.ventaId,
     status: res.status, ok: res.ok, ms, requestBody: args.body,
     responseBody: body, responseTexto: body === null ? texto : null,
     error: res.ok ? null : `RAPPI respondió ${res.status}`,
   });
-  return { status: res.status, ok: res.ok, body, texto: body === null && texto ? texto : null, ms };
+  return { status: res.status, ok: res.ok, body, texto: body === null && texto ? texto : null, ms, ...(nota && { nota }) };
 }
 
 // ─── Registro ────────────────────────────────────────────────────────────

@@ -182,8 +182,11 @@ export async function enviarHorarios(storeId: string) {
   });
   if (!actual.ok) {
     const detalle = actual.body !== null ? JSON.stringify(actual.body).slice(0, 300) : (actual.texto ?? '').slice(0, 300);
+    const porPermiso = (actual.status === 401 || actual.status === 403) && actual.nota;
     throw new RappiError(
-      `RAPPI respondió ${actual.status} al leer los horarios de la tienda ${storeId}${detalle ? `: ${detalle}` : ''}`,
+      porPermiso
+        ? `RAPPI no deja tocar los horarios con estas credenciales: ${actual.nota}, y con ese token contestó ${actual.status}${detalle ? ` ${detalle}` : ''}. A la integración le falta el permiso de utils (scope create:store_schedules): pedírselo a RAPPI.`
+        : `RAPPI respondió ${actual.status} al leer los horarios de la tienda ${storeId}${detalle ? `: ${detalle}` : ''}`,
       actual.status,
       actual.body ?? actual.texto,
     );
