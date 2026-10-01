@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 
-export type AreaPrincipal = 'admin' | 'pedidos' | 'encargos';
+export type AreaPrincipal = 'admin' | 'pedidos' | 'encargos' | 'aplicaciones';
 
 /**
  * Solapas superiores estilo navegador — la navegación principal entre las tres
@@ -14,6 +14,7 @@ export type AreaPrincipal = 'admin' | 'pedidos' | 'encargos';
  * que el personal sepa dónde está de un vistazo:
  *
  *   ADMIN (celeste acero) · PEDIDOS (verde teresita) · ENCARGOS (marrón madera)
+ *   · APPS (naranja azafrán: los pedidos que entran por RAPPI y las otras apps)
  *
  * La solapa ADMIN sólo aparece para usuarios ADMIN. En el login (401) no se
  * renderiza nada: `visible` queda en false y la barra no ocupa alto.
@@ -51,6 +52,14 @@ const SOLAPAS: Array<{
     href: '/encargos',
     activa: 'bg-wood-700 text-wood-50 shadow-md',
     inactiva: 'bg-wood-100 text-wood-700 hover:bg-wood-200',
+  },
+  {
+    area: 'aplicaciones',
+    label: 'APPS',
+    icono: '📱',
+    href: '/aplicaciones',
+    activa: 'bg-saffron-600 text-white shadow-md',
+    inactiva: 'bg-saffron-100 text-saffron-600 hover:bg-saffron-100/70',
   },
 ];
 
