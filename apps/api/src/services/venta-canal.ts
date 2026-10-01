@@ -1,3 +1,4 @@
+import bcrypt from 'bcryptjs';
 import { prisma } from '@sta/db/client';
 import {
   CanalVenta,
@@ -35,8 +36,35 @@ import { getConfigHorarios, resolverSlotActivo } from './horarios.js';
  * el pooler → una query global adentro de la tx deadlockea (incidente alpha.52).
  */
 
-/** UUID fijo del usuario de sistema "Canales" (seed). No es un login humano. */
+/** UUID fijo del usuario de sistema "Canales" (seed + migración 20261001120000). No es un login humano. */
 export const USUARIO_CANALES_ID = '00000000-0000-0000-0000-000000000009';
+
+let usuarioCanalesVerificado = false;
+
+/**
+ * Red de seguridad: si la base no tiene al usuario "Canales" (una base armada
+ * por migraciones viejas, o un seed anterior a su existencia), se crea acá
+ * mismo antes de tocar la sesión de caja. Incidente 01/10: el primer pedido
+ * real de RAPPI contra Supabase reventó con un FK sobre
+ * sesiones_caja.usuario_apertura_id y respondió 500. El pin_hash es bcrypt de
+ * un texto largo no numérico: ningún PIN de 4 dígitos entra como él.
+ */
+export async function asegurarUsuarioCanales(): Promise<void> {
+  if (usuarioCanalesVerificado) return;
+  const existe = await prisma.usuario.findUnique({ where: { id: USUARIO_CANALES_ID }, select: { id: true } });
+  if (!existe) {
+    await prisma.usuario.create({
+      data: {
+        id: USUARIO_CANALES_ID,
+        nombre: 'Canales (RAPPI / PedidosYa / MELI)',
+        rol: 'VENDEDOR',
+        pinHash: await bcrypt.hash('canal-sistema-no-login-' + '0'.repeat(16), 10),
+      },
+    });
+    console.warn('[canal] la base no tenía al usuario de sistema "Canales": se creó.');
+  }
+  usuarioCanalesVerificado = true;
+}
 
 /** Canales de plataforma que este endpoint acepta (prepago, bucket plataforma). */
 export const CANALES_PLATAFORMA = ['RAPPI', 'PEDIDOS_YA', 'MERCADO_LIBRE'] as const;
@@ -252,6 +280,7 @@ export async function crearVentaCanal(orden: OrdenCanal): Promise<ResultadoOrden
     if (faltantes.length) throw new MapeoIncompletoError(faltantes);
 
     const modalidad = orden.modalidad ?? 'DELIVERY_PLATAFORMA';
+    await asegurarUsuarioCanales();
     try {
       venta = await crearVenta({
         usuarioId: USUARIO_CANALES_ID,
@@ -392,6 +421,7 @@ export async function anularVentaCanal(args: {
   });
   if (!venta) return { resultado: 'NO_ENCONTRADA' };
   if (venta.estado === EstadoVenta.ANULADA) return { resultado: 'YA_ANULADA', venta };
+  await asegurarUsuarioCanales();
 
   // Sólo las FINALIZADAS tienen pagos; una PROCESADA a medias no.
   const pagosAReversar =
