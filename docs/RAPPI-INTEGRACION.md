@@ -325,6 +325,15 @@ Quedó para más adelante. Cuando se decida, es un tilde en la pantalla.
   ofrece "Rechazar" en una orden tomada. Para probar la cancelación en DEV,
   el simulador tampoco deja cancelar una tomada: usar el *Testear* del ítem
   "Webhook de cancelación" del checklist, que manda el evento.
+- **Los clientes de los pedidos se agendan solos** (01/10): si el pedido trae
+  nombre y teléfono o dirección, se crea (o reutiliza) el Cliente con tipo
+  PLATAFORMA y `origen` = la plataforma, también si es para retirar. Se
+  deduplica por teléfono (normalizado: de RAPPI se guarda sólo dígitos) y, sin
+  teléfono, por nombre completo dentro de esa plataforma. Si la ficha existía
+  sin dirección y el pedido trae una, se le suma. En Admin → Clientes se ve el
+  chip "Plataforma · RAPPI". Ojo: la búsqueda por teléfono antes comparaba el
+  número sin guiones contra fichas guardadas con guiones y no encontraba nada
+  (cada pedido creaba un cliente nuevo); ahora busca de las dos formas.
 - **NEW_ORDER responde 200 al instante y la venta se crea en segundo plano.**
   RAPPI exige el 200 en menos de 5 segundos, y crear una venta desde Railway
   contra Supabase (decenas de consultas a otro continente) puede tardar más.

@@ -10,6 +10,8 @@ import { cn } from '@/lib/cn';
 interface Cliente {
   id: string;
   tipo: 'CASUAL' | 'REGISTRADO' | 'CORPORATIVO' | 'PLATAFORMA';
+  /** De qué plataforma vino (RAPPI, PEDIDOS_YA…) cuando tipo = PLATAFORMA; 'innovo' si es importado. */
+  origen?: string | null;
   nombre: string;
   apellido: string | null;
   telefono: string | null;
@@ -195,6 +197,9 @@ export default function ClientesListPage() {
                     >
                       {tipoStyle.label}
                     </span>
+                    {c.tipo === 'PLATAFORMA' && c.origen && (
+                      <span className="ml-1 text-2xs font-medium px-2 py-0.5 rounded bg-pomodoro-100 text-pomodoro-600">{c.origen.replace('_', ' ')}</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-xs text-ink-700">
                     {c.telefono && <div>📞 {c.telefono}</div>}

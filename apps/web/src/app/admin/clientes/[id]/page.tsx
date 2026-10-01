@@ -10,6 +10,7 @@ import { cn } from '@/lib/cn';
 interface Cliente {
   id: string;
   tipo: 'CASUAL' | 'REGISTRADO' | 'CORPORATIVO' | 'PLATAFORMA';
+  origen?: string | null;
   nombre: string;
   apellido: string | null;
   telefono: string | null;
@@ -151,6 +152,11 @@ export default function ClienteDetallePage({
               >
                 {tipoStyle.label}
               </span>
+              {c.tipo === 'PLATAFORMA' && c.origen && (
+                <span className="text-2xs font-medium px-2 py-0.5 rounded bg-pomodoro-100 text-pomodoro-600" title="Cliente agendado desde los pedidos de esta plataforma">
+                  {c.origen.replace('_', ' ')}
+                </span>
+              )}
               {c.telefono && <span className="text-ink-700">📞 {c.telefono}</span>}
               {c.email && <span className="text-ink-500">{c.email}</span>}
               {c.cuitCuil && <span className="text-ink-500 font-mono">CUIT {c.cuitCuil}</span>}

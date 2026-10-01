@@ -277,31 +277,81 @@ export async function crearVenta(args: {
     // teléfono y reutilizamos si existe; sino creamos un cliente nuevo +
     // dirección. Esto evita que la encargada tenga que ir a "Clientes" a
     // crear cada uno a mano — cualquier pedido genera la ficha.
+    //
+    // Pedidos de plataforma (RAPPI / PedidosYa / MELI): el cliente se agenda
+    // SIEMPRE que venga con nombre y algo más (teléfono o dirección), también
+    // si es para retirar, con tipo PLATAFORMA y `origen` = la plataforma, para
+    // que en Clientes se vea de dónde salió. Sin teléfono no hay con qué
+    // deduplicar, así que se busca por nombre completo dentro de esa
+    // plataforma; un homónimo real queda como dos fichas, que es el mal menor.
     let clienteIdResuelto = data.clienteId ?? null;
+    const esPlataforma = CANALES_CON_PRECIO_PROPIO.has(data.canal);
+    const telNormalizado = (data.clienteTelefono ?? '').replace(/[\s-]/g, '');
+    const partesNombre = (data.clienteNombre ?? '').trim().split(/\s+/).filter(Boolean);
+    const nombreCliente = partesNombre[0] ?? '';
+    const apellidoCliente = partesNombre.length > 1 ? partesNombre.slice(1).join(' ') : null;
     if (
       !clienteIdResuelto &&
-      esDelivery &&
-      data.clienteNombre &&
-      data.clienteTelefono
+      nombreCliente &&
+      ((esDelivery && telNormalizado) || (esPlataforma && (telNormalizado || data.direccionEntrega)))
     ) {
-      const tel = data.clienteTelefono.replace(/[\s-]/g, '');
-      const existente = tel
+      // Se busca por el número tal cual vino Y sin espacios/guiones: las fichas
+      // viejas guardan "221-555-0000" y una búsqueda por "2215550000" no las
+      // encontraba (por eso cada pedido creaba un cliente nuevo).
+      const telTalCual = (data.clienteTelefono ?? '').trim();
+      const existente = telNormalizado
         ? await tx.cliente.findFirst({
-            where: { telefono: { contains: tel } },
+            where: { OR: [{ telefono: { contains: telNormalizado } }, { telefono: { contains: telTalCual } }] },
           })
-        : null;
+        : esPlataforma
+          ? await tx.cliente.findFirst({
+              where: {
+                origen: data.canal,
+                nombre: { equals: nombreCliente, mode: 'insensitive' },
+                apellido: apellidoCliente ? { equals: apellidoCliente, mode: 'insensitive' } : null,
+              },
+            })
+          : null;
       if (existente) {
         clienteIdResuelto = existente.id;
+        // La ficha ya estaba pero sin dirección, y este pedido trae una: se suma.
+        if (data.direccionEntrega) {
+          const tiene = await tx.direccion.count({ where: { clienteId: existente.id } });
+          if (tiene === 0) {
+            const dir = await tx.direccion.create({
+              data: {
+                clienteId: existente.id,
+                etiqueta: 'Casa',
+                calle: data.direccionEntrega,
+                numero: '—',
+                indicaciones: data.indicacionesEntrega ?? null,
+                esDefault: true,
+              },
+              select: { id: true },
+            });
+            await recordAudit({
+              tabla: 'direcciones',
+              registroId: dir.id,
+              accion: 'INSERT',
+              usuarioId,
+              pcOrigen: data.pcOrigen,
+              contexto: { autoCreadoDesdePedido: true, clienteId: existente.id },
+              tx,
+            });
+          }
+        }
       } else {
-        const partes = data.clienteNombre.trim().split(/\s+/);
-        const nombre = partes[0] ?? data.clienteNombre.trim();
-        const apellido = partes.length > 1 ? partes.slice(1).join(' ') : null;
+        const nombre = nombreCliente;
+        const apellido = apellidoCliente;
         const nuevo = await tx.cliente.create({
           data: {
-            tipo: 'REGISTRADO',
+            tipo: esPlataforma ? 'PLATAFORMA' : 'REGISTRADO',
             nombre,
             apellido,
-            telefono: data.clienteTelefono.trim(),
+            // De plataforma se guarda normalizado (sólo dígitos y +): vienen en
+            // cualquier formato y así la próxima búsqueda los encuentra.
+            telefono: (esPlataforma ? telNormalizado : telTalCual) || null,
+            ...(esPlataforma && { origen: data.canal }),
           },
         });
         clienteIdResuelto = nuevo.id;
