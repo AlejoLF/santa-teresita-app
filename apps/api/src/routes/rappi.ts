@@ -433,7 +433,8 @@ export default async function rappiRoutes(fastify: FastifyInstance) {
     async (req) => {
       const { idExterno } = req.params as { idExterno: string };
       const venta = await ventaDe(idExterno);
-      return listaParaRetiro(idExterno, { ventaId: venta?.id, usuarioId: req.usuario!.id });
+      const cfg = await getRappiConfig();
+      return listaParaRetiro(idExterno, { ventaId: venta?.id, usuarioId: req.usuario!.id, storeId: cfg.storeId ?? null });
     },
   );
 

@@ -202,6 +202,8 @@ export interface LlamadaArgs {
   token?: TipoToken;
   /** La respuesta trae secretos (reset-secret): se registra el status, no el cuerpo. */
   ocultarRespuesta?: boolean;
+  /** `x-authorization: Bearer <token>` sin los dos puntos (la API nueva lo documenta así). */
+  authPlano?: boolean;
 }
 
 /**
@@ -229,7 +231,7 @@ export async function llamarRappi<T = unknown>(args: LlamadaArgs): Promise<Respu
         Accept: 'application/json',
         ...(args.body !== undefined && { 'Content-Type': 'application/json' }),
         // Sí: `x-authorization`, y con dos puntos. Ver el comentario de arriba.
-        'x-authorization': `Bearer: ${token}`,
+        'x-authorization': args.authPlano ? `Bearer ${token}` : `Bearer: ${token}`,
       },
       ...(args.body !== undefined && { body: JSON.stringify(args.body) }),
       signal: AbortSignal.timeout(TIMEOUT_MS),

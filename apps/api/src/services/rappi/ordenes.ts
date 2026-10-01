@@ -130,40 +130,57 @@ export async function rechazarOrden(
 }
 
 /**
- * `POST /orders/{id}/ready-for-pickup` — avisa al repartidor (si no hay uno
- * asignado, RAPPI apura la asignación). RAPPI deja de actuar después de tres
- * requests por orden, así que acá se reintenta UNA sola vez, y sólo ante un
- * 424 o un 5xx: ese es el "no pude procesarlo" de un sistema de ellos
- * (`error.ready_for_pickup.unsuccessful`), no un error de la orden. En DEV
- * pasa con las órdenes del simulador, que no tienen repartidor que asignar.
- * Un 400 es "transición inválida" (la orden no está TAKEN) y no se reintenta.
+ * "Lista para retiro". Dos caminos, porque en DEV el legacy falla:
+ *
+ *  1. Legacy `POST /orders/{id}/ready-for-pickup` (el que nombra el checklist).
+ *     Avisa al repartidor; si no hay uno asignado, RAPPI apura la asignación.
+ *     Con las órdenes del simulador contesta `424
+ *     error.ready_for_pickup.unsuccessful` (01/10): falló el sistema de
+ *     asignación de ellos, no la orden. Deja de actuar a la tercera request,
+ *     así que acá se le pega UNA sola vez.
+ *  2. Si eso da 424/5xx, la API nueva
+ *     `POST /restaurants/orders/v1/stores/{storeId}/orders/{id}/ready-for-pickup`
+ *     — es la que usa el propio portal, donde "Listo" sí anda. Documentada con
+ *     `x-authorization: bearer <token>` (sin dos puntos): se prueba primero
+ *     con el header de siempre y, ante un 401, con el plano.
+ *
+ * Un 400 es "transición inválida" (la orden no está TAKEN) en cualquiera de
+ * los dos y no se insiste.
  */
-export async function listaParaRetiro(idExterno: string, rastro: Rastro = {}) {
-  const pedir = () =>
-    llamarRappi({
-      arbol: 'legacy',
-      metodo: 'POST',
-      ruta: `${LEGACY}/orders/${encodeURIComponent(idExterno)}/ready-for-pickup`,
-      contexto: `orden ${idExterno} lista para retiro`,
-      ventaId: rastro.ventaId,
-    });
-  let r = await pedir();
-  let reintentado = false;
-  if (!r.ok && (r.status === 424 || r.status >= 500)) {
-    await new Promise((res) => setTimeout(res, 1500));
-    r = await pedir();
-    reintentado = true;
+export async function listaParaRetiro(idExterno: string, rastro: Rastro & { storeId?: string | null } = {}) {
+  const legacy = await llamarRappi({
+    arbol: 'legacy',
+    metodo: 'POST',
+    ruta: `${LEGACY}/orders/${encodeURIComponent(idExterno)}/ready-for-pickup`,
+    contexto: `orden ${idExterno} lista para retiro`,
+    ventaId: rastro.ventaId,
+  });
+  let r = legacy;
+  let porApiNueva = false;
+  if (!legacy.ok && (legacy.status === 424 || legacy.status >= 500) && rastro.storeId) {
+    const nueva = (authPlano: boolean) =>
+      llamarRappi({
+        arbol: 'nuevo',
+        metodo: 'POST',
+        ruta: `/restaurants/orders/v1/stores/${encodeURIComponent(rastro.storeId!)}/orders/${encodeURIComponent(idExterno)}/ready-for-pickup`,
+        contexto: `orden ${idExterno} lista para retiro (API nueva${authPlano ? ', header plano' : ''}; el legacy dio ${legacy.status})`,
+        ventaId: rastro.ventaId,
+        authPlano,
+      });
+    r = await nueva(false);
+    if (r.status === 401) r = await nueva(true);
+    porApiNueva = true;
   }
-  if (r.ok) await auditar(rastro, 'LISTA_PARA_RETIRO', { idExterno, reintentado });
+  if (r.ok) await auditar(rastro, 'LISTA_PARA_RETIRO', { idExterno, porApiNueva });
   let detalle: string;
   if (r.ok) {
-    detalle = `RAPPI avisó al repartidor que la orden está lista${reintentado ? ' (al segundo intento)' : ''}.`;
-  } else if (r.status === 424 || r.status >= 500) {
-    detalle = `${describirRespuesta(r.status, r.body, r.texto)} — RAPPI no pudo procesar el aviso al repartidor (se intentó dos veces). La orden sigue tomada y el pedido sigue en curso; no insistas: RAPPI corta a la tercera. En DEV pasa con las órdenes del simulador, que no tienen repartidor.`;
+    detalle = `RAPPI avisó al repartidor que la orden está lista${porApiNueva ? ` (por la API nueva: la legacy respondió ${legacy.status})` : ''}.`;
+  } else if (legacy.status === 424 || legacy.status >= 500) {
+    detalle = `${describirRespuesta(legacy.status, legacy.body, legacy.texto)} — RAPPI no pudo procesar el aviso al repartidor${porApiNueva ? `, y por la API nueva tampoco (${describirRespuesta(r.status, r.body, r.texto)})` : ''}. La orden sigue tomada y el pedido sigue en curso; no insistas: RAPPI corta a la tercera. En DEV pasa con las órdenes del simulador, que no tienen repartidor.`;
   } else if (r.status === 400) {
     detalle = `${describirRespuesta(r.status, r.body, r.texto)} — la orden no está en TAKEN: primero hay que tomarla.`;
   } else {
     detalle = describirRespuesta(r.status, r.body, r.texto);
   }
-  return { ok: r.ok, status: r.status, respuesta: r.body ?? r.texto, detalle, reintentado };
+  return { ok: r.ok, status: r.status, respuesta: r.body ?? r.texto, detalle, porApiNueva };
 }

@@ -393,9 +393,12 @@ documentado). `GET /menu` lista los menús creados.
 ## Órdenes — la API nueva
 
 Existe también `/restaurants/orders/v1/stores/{storeId}/orders/{orderId}/{take|ready-for-pickup}`
-y `…/cancel_type/{cancelType}/reject` (body `{description, additional_info}`, responde
-202). **El checklist nombra las rutas legacy** (`PUT /orders/{orderId}/take`), así que
-es lo que se implementa.
+(y `…/cooking_time/{min}/take`), y `…/cancel_type/{cancelType}/reject` (body
+`{description, additional_info}`, responde 202). Dominio nuevo. El portal
+documenta ahí el header como `x-authorization: bearer <token>` (sin dos puntos).
+**El checklist nombra las rutas legacy** (`PUT /orders/{orderId}/take`), así que
+es lo que se implementa — salvo "lista para retiro", que cae a la API nueva
+cuando la legacy contesta 424/5xx (ver RAPPI-INTEGRACION.md → Cosas a saber).
 
 ## El payload de NEW_ORDER
 

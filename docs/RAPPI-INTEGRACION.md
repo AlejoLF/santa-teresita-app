@@ -310,11 +310,21 @@ Quedó para más adelante. Cuando se decida, es un tilde en la pantalla.
   Es "RAPPI no pudo procesar el aviso al repartidor", no un error de la orden
   ni nuestro: el endpoint apura la asignación de repartidor, y en DEV las
   órdenes del simulador no tienen uno (pasó el 01/10 con la orden 1870681284,
-  tomada sin problema). El API reintenta UNA vez (RAPPI corta a la tercera) y
-  el panel lo explica. La orden sigue tomada y en curso. El portal dice además
-  que este endpoint es opcional y recomienda dejar la transición a
-  READY_FOR_PICKUP en automático. Un `400` ahí es otra cosa: la orden no está
-  en TAKEN.
+  tomada sin problema). Ante ese 424 (o un 5xx) el API prueba la **API nueva**
+  (`POST /restaurants/orders/v1/stores/{storeId}/orders/{id}/ready-for-pickup`,
+  la que usa el propio portal, donde "Listo" sí anda), primero con el header
+  de siempre y ante un 401 con `Bearer <token>` sin dos puntos, como la
+  documenta el portal. Al legacy se le pega una sola vez (RAPPI corta a la
+  tercera). El panel dice por cuál camino salió. La orden sigue tomada y en
+  curso. El portal dice además que este endpoint es opcional y recomienda
+  dejar la transición a READY_FOR_PICKUP en automático. Un `400` ahí es otra
+  cosa: la orden no está en TAKEN.
+- **Una orden tomada no se puede rechazar** (`400 Invalid transition from
+  TAKEN to REJECTED`): RAPPI sólo rechaza en SENT. La cancelación de una orden
+  tomada la hace RAPPI (y llega por `ORDER_EVENT_CANCEL`). El panel ya no
+  ofrece "Rechazar" en una orden tomada. Para probar la cancelación en DEV,
+  el simulador tampoco deja cancelar una tomada: usar el *Testear* del ítem
+  "Webhook de cancelación" del checklist, que manda el evento.
 - **NEW_ORDER responde 200 al instante y la venta se crea en segundo plano.**
   RAPPI exige el 200 en menos de 5 segundos, y crear una venta desde Railway
   contra Supabase (decenas de consultas a otro continente) puede tardar más.
