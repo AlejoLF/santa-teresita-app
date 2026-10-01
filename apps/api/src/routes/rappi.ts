@@ -9,6 +9,7 @@ import {
   diagnosticoEntornoRappi,
   dominiosRappi,
   getRappiConfig,
+  huellaSecretosWebhook,
   secretoWebhookRappi,
   setRappiConfig,
 } from '../services/rappi/config.js';
@@ -133,6 +134,7 @@ export default async function rappiRoutes(fastify: FastifyInstance) {
       dominios: dominiosRappi(),
       credencialesConfiguradas: Boolean(credencialesRappi()),
       firmaConfigurada: Boolean(secretoWebhookRappi()),
+      firma: { claves: huellaSecretosWebhook() },
       ingestaConfigurada: Boolean(config.CHANNEL_INGEST_TOKEN),
       entorno: diagnosticoEntornoRappi(),
       traducciones: await resumenTraducciones('RAPPI').catch(() => null),

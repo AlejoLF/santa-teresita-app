@@ -200,6 +200,22 @@ export function secretoWebhookRappi(): string | null {
  * ellas; si en el entorno quedó el texto entero, se aceptan las dos y también
  * el texto entero (por si RAPPI firmara con lo que se le mandó tal cual).
  */
+/**
+ * Para comparar a ojo el secret cargado en Railway con el del portal de RAPPI
+ * sin mostrarlo entero: cuántas claves, de qué largo, y cómo empieza y
+ * termina cada una. Con 8 caracteres de 64 no se reconstruye nada, y alcanza
+ * para ver si es el mismo o si quedó uno viejo.
+ */
+export function huellaSecretosWebhook(): Array<{ largo: number; huella: string }> {
+  const crudo = entorno().webhookSecret;
+  if (!crudo) return [];
+  return crudo
+    .split(/[,;\s]+/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((k) => ({ largo: k.length, huella: k.length <= 8 ? `${k[0]}…${k[k.length - 1]}` : `${k.slice(0, 4)}…${k.slice(-4)}` }));
+}
+
 export function secretosWebhookRappi(): string[] {
   const crudo = entorno().webhookSecret;
   if (!crudo) return [];
