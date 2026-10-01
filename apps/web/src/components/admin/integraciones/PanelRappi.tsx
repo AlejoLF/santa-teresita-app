@@ -450,13 +450,25 @@ export function PanelRappi({ tick = 0, onActualizar }: { tick?: number; onActual
                 <Chip ok={o.estado === 'ANULADA' ? false : o.enRappi === 'SIN_RESPUESTA' ? null : true}
                   texto={o.estado === 'ANULADA' ? 'anulada' : o.enRappi === 'TOMADA' ? 'tomada' : o.enRappi === 'RECHAZADA' ? 'rechazada' : o.enRappi === 'LISTA' ? 'lista para retiro' : 'sin responder a RAPPI'} />
                 {o.idExternoCanal && o.estado !== 'ANULADA' && (
+                  // Sólo lo que RAPPI acepta en cada estado (managing-user-orders):
+                  // SENT → tomar o rechazar; TAKEN → listo. Rechazar una orden ya
+                  // tomada da 400 "Invalid transition"; se cancela desde RAPPI.
                   <div className="flex gap-1">
-                    <Button size="sm" disabled={ocupado !== null} onClick={() => void accion(`o-${o.id}`, () => api.post(`/admin/rappi/ordenes/${o.idExternoCanal}/tomar`, {}))}>Tomar</Button>
-                    <Button variant="secondary" size="sm" disabled={ocupado !== null} onClick={() => void accion(`o-${o.id}`, () => api.post(`/admin/rappi/ordenes/${o.idExternoCanal}/lista`, {}))}>Listo</Button>
-                    <Button variant={rechazo?.id === o.idExternoCanal ? 'destructive' : 'secondary'} size="sm" disabled={ocupado !== null}
-                      onClick={() => setRechazo(rechazo?.id === o.idExternoCanal ? null : { id: o.idExternoCanal!, tipo: 'ORDER_MISSING_INFORMATION', motivo: etiquetaCancel('ORDER_MISSING_INFORMATION') })}>
-                      Rechazar
-                    </Button>
+                    {o.enRappi === 'SIN_RESPUESTA' && (
+                      <Button size="sm" disabled={ocupado !== null} onClick={() => void accion(`o-${o.id}`, () => api.post(`/admin/rappi/ordenes/${o.idExternoCanal}/tomar`, {}))}>Tomar</Button>
+                    )}
+                    {o.enRappi === 'TOMADA' && (
+                      <Button variant="secondary" size="sm" disabled={ocupado !== null} onClick={() => void accion(`o-${o.id}`, () => api.post(`/admin/rappi/ordenes/${o.idExternoCanal}/lista`, {}))}>Listo</Button>
+                    )}
+                    {o.enRappi === 'SIN_RESPUESTA' && (
+                      <Button variant={rechazo?.id === o.idExternoCanal ? 'destructive' : 'secondary'} size="sm" disabled={ocupado !== null}
+                        onClick={() => setRechazo(rechazo?.id === o.idExternoCanal ? null : { id: o.idExternoCanal!, tipo: 'ORDER_MISSING_INFORMATION', motivo: etiquetaCancel('ORDER_MISSING_INFORMATION') })}>
+                        Rechazar
+                      </Button>
+                    )}
+                    {(o.enRappi === 'TOMADA' || o.enRappi === 'LISTA') && (
+                      <span className="text-2xs text-ink-500 self-center">ya tomada: si hay que cancelarla, es desde RAPPI</span>
+                    )}
                   </div>
                 )}
                 {rechazo && rechazo.id === o.idExternoCanal && (
