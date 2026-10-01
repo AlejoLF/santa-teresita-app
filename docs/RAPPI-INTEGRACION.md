@@ -306,6 +306,15 @@ Quedó para más adelante. Cuando se decida, es un tilde en la pantalla.
   BODY_INVALIDO con status 200 y "no se creó ninguna venta". Sin firma exigida
   sigue siendo 400.
 
+- **"Listo" (ready-for-pickup) puede dar `424 error.ready_for_pickup.unsuccessful`.**
+  Es "RAPPI no pudo procesar el aviso al repartidor", no un error de la orden
+  ni nuestro: el endpoint apura la asignación de repartidor, y en DEV las
+  órdenes del simulador no tienen uno (pasó el 01/10 con la orden 1870681284,
+  tomada sin problema). El API reintenta UNA vez (RAPPI corta a la tercera) y
+  el panel lo explica. La orden sigue tomada y en curso. El portal dice además
+  que este endpoint es opcional y recomienda dejar la transición a
+  READY_FOR_PICKUP en automático. Un `400` ahí es otra cosa: la orden no está
+  en TAKEN.
 - **NEW_ORDER responde 200 al instante y la venta se crea en segundo plano.**
   RAPPI exige el 200 en menos de 5 segundos, y crear una venta desde Railway
   contra Supabase (decenas de consultas a otro continente) puede tardar más.
