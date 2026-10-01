@@ -206,7 +206,13 @@ Body de `reject`:
 `ORDER_MISSING_INFORMATION`, `ORDER_MISSING_ADDRESS_INFORMATION`,
 `ORDER_TOTAL_INCORRECT`. Los que son "por ítem" exigen decir cuáles.
 
-> `ready-for-pickup` deja de ejecutarse después de tres requests.
+> `ready-for-pickup` deja de ejecutarse después de tres requests. Respuestas
+> documentadas: 200, 400 (transición inválida: la orden no está TAKEN), 401, 404.
+> Vista el 01/10 en DEV y no documentada: `424 {"message":"424
+> {\"code\":\"error.ready_for_pickup.unsuccessful\",\"message\":\"No se pudo procesar su
+> solicitud…\"}"}` (el `message` es otro JSON en texto) — falló el sistema de
+> asignación de repartidor de ellos. Estados: CREATED → WEBHOOK/READY → SENT →
+> TAKEN → READY_FOR_PICKUP; REJECTED sólo desde SENT; TIMEOUT a los 6 minutos.
 
 ## Webhooks
 
