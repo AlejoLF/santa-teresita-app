@@ -87,6 +87,7 @@ const CANCEL_TYPES = [
   ['ORDER_MISSING_ADDRESS_INFORMATION', 'Falta la dirección'],
   ['ORDER_TOTAL_INCORRECT', 'Total incorrecto'],
 ] as const;
+const etiquetaCancel = (v: string): string => CANCEL_TYPES.find(([k]) => k === v)?.[1] ?? '';
 
 function hora(iso: string): string {
   return new Date(iso).toLocaleString('es-AR', {
@@ -160,6 +161,12 @@ export function PanelRappi({ tick = 0, onActualizar }: { tick?: number; onActual
   const [clientId, setClientId] = useState('');
   const [tiempoCocina, setTiempoCocina] = useState('');
   const [rechazo, setRechazo] = useState<{ id: string; tipo: string; motivo: string } | null>(null);
+  const confirmarRechazo = (ventaId: string) => {
+    const rj = rechazo;
+    if (!rj || !rj.motivo.trim()) return;
+    setRechazo(null);
+    void accion(`o-${ventaId}`, () => api.post(`/admin/rappi/ordenes/${rj.id}/rechazar`, { cancelType: rj.tipo, reason: rj.motivo.trim() }));
+  };
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -413,8 +420,29 @@ export function PanelRappi({ tick = 0, onActualizar }: { tick?: number; onActual
                 {o.idExternoCanal && o.estado !== 'ANULADA' && (
                   <div className="flex gap-1">
                     <Button size="sm" disabled={ocupado !== null} onClick={() => void accion(`o-${o.id}`, () => api.post(`/admin/rappi/ordenes/${o.idExternoCanal}/tomar`, {}))}>Tomar</Button>
-                    <Button variant="secondary" size="sm" disabled={ocupado !== null} onClick={() => void accion(`o-${o.id}`, () => api.post(`/admin/rappi/ordenes/${o.idExternoCanal}/lista`, {}))}>Lista</Button>
-                    <Button variant="secondary" size="sm" disabled={ocupado !== null} onClick={() => setRechazo({ id: o.idExternoCanal!, tipo: 'ORDER_MISSING_INFORMATION', motivo: '' })}>Rechazar</Button>
+                    <Button variant="secondary" size="sm" disabled={ocupado !== null} onClick={() => void accion(`o-${o.id}`, () => api.post(`/admin/rappi/ordenes/${o.idExternoCanal}/lista`, {}))}>Listo</Button>
+                    <Button variant={rechazo?.id === o.idExternoCanal ? 'destructive' : 'secondary'} size="sm" disabled={ocupado !== null}
+                      onClick={() => setRechazo(rechazo?.id === o.idExternoCanal ? null : { id: o.idExternoCanal!, tipo: 'ORDER_MISSING_INFORMATION', motivo: etiquetaCancel('ORDER_MISSING_INFORMATION') })}>
+                      Rechazar
+                    </Button>
+                  </div>
+                )}
+                {rechazo && rechazo.id === o.idExternoCanal && (
+                  <div className="w-full rounded-lg border border-red-200 bg-red-50/40 p-3 space-y-2 text-sm">
+                    <p className="font-medium text-ink-900">Rechazar el pedido #{o.numero} en RAPPI</p>
+                    <p className="text-2xs text-ink-600">Elegí por qué y tocá <b>Confirmar rechazo</b>. RAPPI le avisa al cliente y cancela el pedido; acá queda anulado.</p>
+                    <select className="input w-full" value={rechazo.tipo}
+                      onChange={(e) => setRechazo({ ...rechazo, tipo: e.target.value, motivo: rechazo.motivo.trim() === etiquetaCancel(rechazo.tipo) ? etiquetaCancel(e.target.value) : rechazo.motivo })}>
+                      {CANCEL_TYPES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+                    </select>
+                    <input className="input w-full" autoFocus placeholder="Motivo (lo ve RAPPI)" maxLength={300} value={rechazo.motivo}
+                      onChange={(e) => setRechazo({ ...rechazo, motivo: e.target.value })}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && rechazo.motivo.trim()) confirmarRechazo(o.id); }} />
+                    <div className="flex gap-2">
+                      <Button size="sm" disabled={!rechazo.motivo.trim() || ocupado !== null} onClick={() => confirmarRechazo(o.id)}>Confirmar rechazo</Button>
+                      <Button variant="secondary" size="sm" onClick={() => setRechazo(null)}>No rechazar</Button>
+                    </div>
+                    <p className="text-2xs text-ink-500">Los motivos "por producto" exigen decir cuál: si RAPPI lo rechaza, usá "Falta información".</p>
                   </div>
                 )}
                 <div className="w-full"><Resultado r={r(`o-${o.id}`)} /></div>
@@ -422,21 +450,6 @@ export function PanelRappi({ tick = 0, onActualizar }: { tick?: number; onActual
             ))}
           </div>
         )}
-        {rechazo && (
-          <div className="rounded-lg border border-cream-300 p-3 space-y-2 text-sm">
-            <p className="font-medium">Rechazar el pedido {rechazo.id}</p>
-            <select className="input w-full" value={rechazo.tipo} onChange={(e) => setRechazo({ ...rechazo, tipo: e.target.value })}>
-              {CANCEL_TYPES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
-            </select>
-            <input className="input w-full" placeholder="Motivo (lo ve RAPPI)" value={rechazo.motivo} onChange={(e) => setRechazo({ ...rechazo, motivo: e.target.value })} />
-            <div className="flex gap-2">
-              <Button size="sm" disabled={!rechazo.motivo.trim() || ocupado !== null} onClick={() => { const rj = rechazo; setRechazo(null); void accion('rechazo', () => api.post(`/admin/rappi/ordenes/${rj.id}/rechazar`, { cancelType: rj.tipo, reason: rj.motivo.trim() })); }}>Confirmar rechazo</Button>
-              <Button variant="secondary" size="sm" onClick={() => setRechazo(null)}>Cancelar</Button>
-            </div>
-            <p className="text-2xs text-ink-500">Los motivos "por producto" exigen decir cuál: si RAPPI lo rechaza, usá "Falta información".</p>
-          </div>
-        )}
-        <Resultado r={r('rechazo')} />
       </div>
 
       {/* ── 6. Registro ── */}
