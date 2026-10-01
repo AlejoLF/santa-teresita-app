@@ -47,6 +47,7 @@ import impresionRoutes from './routes/impresion.js';
 import ingestRoutes from './routes/ingest.js';
 import channelRoutes from './routes/channel.js';
 import rappiRoutes from './routes/rappi.js';
+import aplicacionesRoutes from './routes/aplicaciones.js';
 import { invalidate as cacheInvalidate } from './lib/cache.js';
 
 const isProd = config.NODE_ENV === 'production';
@@ -363,6 +364,7 @@ export async function buildServer() {
       await api.register(ingestRoutes);
       await api.register(channelRoutes);
       await api.register(rappiRoutes);
+      await api.register(aplicacionesRoutes);
     },
     { prefix: '/api/v1' },
   );

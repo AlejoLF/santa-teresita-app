@@ -18,6 +18,13 @@ Dos direcciones, dos módulos:
 Todo lo saliente se dispara desde **Admin → Configuración → Integraciones**, con
 sesión de admin. Cada botón es un ítem del checklist.
 
+Para el mostrador está la pestaña **APPS** (`/aplicaciones`, `routes/aplicaciones.ts`,
+cualquier usuario logueado): los pedidos de plataforma con los dos números (el
+id de RAPPI para buscarlo en su portal y el número de orden del POS), ítems,
+cliente, dirección y lo que mandó la app (cómo pagó, tiempo de cocina, total de
+la app, envío, propina…), refresco solo cada 10 s, sonido cuando entra uno sin
+responder, y las acciones Tomar / Listo / Rechazar, apagadas según el estado.
+
 ### Configuración
 
 Secretos y ambiente, en el entorno del server (Railway) — **nunca en la base**:
