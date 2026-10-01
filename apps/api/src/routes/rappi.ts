@@ -37,6 +37,7 @@ import {
 import {
   aprovisionarTienda,
   EVENTOS_WEBHOOK,
+  resetearSecretsWebhooks,
   suscribirWebhookIntegracion,
   ultimoPing,
   type EventoWebhook,
@@ -435,6 +436,11 @@ export default async function rappiRoutes(fastify: FastifyInstance) {
       return listaParaRetiro(idExterno, { ventaId: venta?.id, usuarioId: req.usuario!.id });
     },
   );
+
+  // ── Secrets de los webhooks de tienda ───────────────────────────────────
+  // El resultado trae los secrets nuevos: va al navegador del admin y a ningún
+  // otro lado (no se guarda, no se registra).
+  fastify.post('/admin/rappi/webhooks/reset-secrets', admin, async () => resetearSecretsWebhooks());
 
   // ── Webhooks a nivel integración (auto-onboarding) ─────────────────────
   fastify.post(
