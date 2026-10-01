@@ -213,11 +213,22 @@ devuelve con credenciales inventadas (verificado). No es la variable ni el
 dominio: a esta integración **no le habilitaron el permiso de utils** (el
 checklist lo nombra: "scope create:store_schedules").
 
-Qué hacer: pedirle a RAPPI (al TAM, o por el soporte del Integrations Manager)
-que habilite el scope de horarios / utils para el `client_id` de la
-integración, y volver a tocar *Enviar horarios*. El ítem **no es REQUERIDO**
-para certificar: la encargada sigue cargando los horarios desde la web de
-RAPPI mientras tanto.
+Lo que el API ya hace solo (01/10, segunda vuelta): el login de utils se
+intenta en `api.dev.rappi.com` **y** en `microservices.dev.rappi.com` (en DEV),
+y si los dos dan 401, los horarios se mandan igual **con el token de
+integraciones** — el portal dice "Token" a secas para esos endpoints, y si
+RAPPI lo acepta, el ítem queda adoptado sin pedirle nada a nadie. Si RAPPI lo
+rechaza (`401 Access is denied`), el panel lo dice con las dos cosas juntas
+("el login de utils dio 401; se usó el token de integraciones, y con ese token
+contestó 401"). *Probar credenciales* ahora también prueba el token de utils y
+lo dice en la misma línea. El registro ("Lo que le dijimos a RAPPI") muestra
+cada login con su host.
+
+Si después de eso sigue en 401: pedirle a RAPPI (al TAM, o por el soporte del
+Integrations Manager) que habilite el scope de horarios / utils para el
+`client_id` de la integración, y volver a tocar *Enviar horarios*. El ítem
+**no es REQUERIDO** para certificar: la encargada sigue cargando los horarios
+desde la web de RAPPI mientras tanto.
 
 ### Si la pantalla dice que faltan las variables
 
