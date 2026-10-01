@@ -21,7 +21,7 @@ import {
   esNuevaOrdenRappi,
   nuevaOrdenANeutral,
 } from '../services/rappi/adaptador.js';
-import { getRappiConfig, secretosWebhookRappi, setRappiConfig } from '../services/rappi/config.js';
+import { getRappiConfig, huellaSecretosWebhook, secretosWebhookRappi, setRappiConfig } from '../services/rappi/config.js';
 import { basePublica } from '../lib/url-publica.js';
 import { registrarPing } from '../services/rappi/webhooks.js';
 import { tomarOrden } from '../services/rappi/ordenes.js';
@@ -428,7 +428,7 @@ export default async function channelRoutes(fastify: FastifyInstance) {
         ? 'no trae el header Rappi-Signature (¿el webhook se suscribió sin secret?)'
         : v.motivo === 'HEADER_MALFORMADO'
           ? 'el header Rappi-Signature no tiene la forma t=…,sign=…'
-          : `la firma no coincide con RAPPI_WEBHOOK_SECRET (se probaron ${secretos.length} clave/s). RAPPI firmó con OTRO secret: revisá en su portal el secret del webhook de esta tienda y que sea el mismo que está en Railway`;
+          : `la firma no coincide con RAPPI_WEBHOOK_SECRET (se probaron ${huellaSecretosWebhook().length} clave/s: ${huellaSecretosWebhook().map((h) => `${h.huella} de ${h.largo}`).join(', ')}). RAPPI firmó con OTRO secret: compará esas huellas con el secret del módulo Webhooks del portal; si difieren, copiá el del portal a Railway (o regeneralo ahí y copialo)`;
     await registrarRecepcion(req, {
       resultado: 'FIRMA_INVALIDA',
       status: 401,

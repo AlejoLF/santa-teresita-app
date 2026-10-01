@@ -21,6 +21,7 @@ interface Estado {
   dominios: { legacy: string; nuevo: string };
   credencialesConfiguradas: boolean;
   firmaConfigurada: boolean;
+  firma?: { claves: Array<{ largo: number; huella: string }> };
   ingestaConfigurada: boolean;
   /** Lo que el server encontró raro en sus variables RAPPI_*, y desde cuándo corre. */
   entorno: {
@@ -235,6 +236,13 @@ export function PanelRappi({ tick = 0, onActualizar }: { tick?: number; onActual
         <Chip ok={storeId ? true : null} texto={storeId ? `tienda ${cfg?.storeNombre ?? storeId}` : 'sin tienda elegida'} />
         <Chip ok={estado.webhooks.ultimoPingAt ? true : null} texto={estado.webhooks.ultimoPingAt ? `último PING ${hora(estado.webhooks.ultimoPingAt)}` : 'RAPPI todavía no hizo PING'} />
       </div>
+      {estado.firmaConfigurada && (estado.firma?.claves.length ?? 0) > 0 && (
+        <p className="text-2xs text-ink-500">
+          Secret de webhooks cargado en el server: {estado.firma!.claves.length} clave/s ·{' '}
+          {estado.firma!.claves.map((c) => `${c.huella} (${c.largo} caracteres)`).join(' · ')}.
+          Para saber si es el mismo que tiene RAPPI: en el portal, módulo Webhooks, mirá cómo empieza y termina el secret de esta integración y comparalo con esto. Si no coincide, copiá el del portal a RAPPI_WEBHOOK_SECRET en Railway y redeployá; si el portal ya no lo muestra, regeneralo ahí y copiá el nuevo.
+        </p>
+      )}
       {estado.entorno.problemas.length > 0 && (
         <div className={cn('rounded-lg border p-3 text-sm text-ink-700', estado.entorno.problemas.some((p) => p.grave) ? 'border-pomodoro-600/30 bg-pomodoro-100' : 'border-saffron-600/30 bg-saffron-100')}>
           {!estado.credencialesConfiguradas && (
