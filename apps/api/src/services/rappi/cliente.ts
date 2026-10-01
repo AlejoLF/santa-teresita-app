@@ -200,6 +200,8 @@ export interface LlamadaArgs {
   contexto: string;
   ventaId?: string;
   token?: TipoToken;
+  /** La respuesta trae secretos (reset-secret): se registra el status, no el cuerpo. */
+  ocultarRespuesta?: boolean;
 }
 
 /**
@@ -276,7 +278,8 @@ export async function llamarRappi<T = unknown>(args: LlamadaArgs): Promise<Respu
   await registrar({
     metodo: args.metodo, ruta: rutaCompleta, contexto: nota ? `${args.contexto} (${nota})` : args.contexto, ventaId: args.ventaId,
     status: res.status, ok: res.ok, ms, requestBody: args.body,
-    responseBody: body, responseTexto: body === null ? texto : null,
+    responseBody: args.ocultarRespuesta ? undefined : body,
+    responseTexto: args.ocultarRespuesta ? '(la respuesta trae secretos: no se registra)' : body === null ? texto : null,
     error: res.ok ? null : `RAPPI respondió ${res.status}`,
   });
   return { status: res.status, ok: res.ok, body, texto: body === null && texto ? texto : null, ms, ...(nota && { nota }) };

@@ -283,6 +283,14 @@ Por tienda hay además: `POST /webhook`, `GET /webhook/{EVENT}`,
 `DELETE /webhook/{EVENT}/remove-stores`, `PUT /webhook/{EVENT}/reset-secret`,
 `PUT /webhook/{EVENT}/change-status`.
 
+**El secret de los webhooks de tienda lo genera RAPPI**, uno por evento
+(transcripto el 01/10): `POST /webhook` lo devuelve en la respuesta
+(`{ event, stores: [...], secret }`), `GET /webhook/{EVENT}` **no** lo devuelve, y
+`PUT /webhook/{EVENT}/reset-secret` (cuerpo vacío) genera uno nuevo y lo
+devuelve: `{ "event": "NEW_ORDER", "stores": [...], "secret": "NEW_SECRET" }`.
+El integrador no elige el secret de los de tienda; sí el de los de integración
+(`POST /clients/{clientId}/webhooks`, campo `secret` opcional).
+
 > Los webhooks por tienda **no cuentan** para la capacidad de Auto-onboarding: ésa
 > exige el de nivel integración.
 

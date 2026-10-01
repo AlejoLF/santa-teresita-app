@@ -202,6 +202,33 @@ tienda* funcionando. Son dos cosas distintas y ninguna es nuestra:
   la sección del 404 más arriba—. Con la tienda ya asociada por RAPPI, este
   botón no se usa.
 
+### Si los tests de webhooks del portal dan 401 y el buzón dice "firma rechazada"
+
+Cómo funciona el secret, según la referencia del portal (api-reference/webhooks):
+**cada webhook de tienda (uno por evento) tiene SU secret**, lo genera RAPPI al
+crearlo, lo muestra una sola vez, y no vuelve a mostrarlo (ni en el portal ni en
+`GET /webhook/{EVENT}`). La única forma de volver a tenerlo es regenerarlo con
+`PUT /webhook/{EVENT}/reset-secret`, que devuelve el nuevo. Si los webhooks se
+volvieron a crear (reasociación de la tienda, eventos nuevos), tienen secrets
+nuevos que Railway no conoce → 401 en todos los tests.
+
+Qué hacer (sin ver nada en el portal):
+
+1. Integraciones → RAPPI → Webhooks → **Regenerar los secrets en RAPPI**. El
+   API llama a `reset-secret` para los 11 eventos y muestra UNA vez los secrets
+   nuevos, ya unidos por coma, con el botón "copiar". No se guardan ni se
+   registran (`ocultarRespuesta`).
+2. Pegar eso en `RAPPI_WEBHOOK_SECRET` del servicio `api` en Railway, tal cual.
+   El server verifica cada firma contra cada clave de la lista.
+3. Redeploy, "Actualizar" en Integraciones (la línea "Secret de webhooks
+   cargado" tiene que mostrar tantas huellas como eventos regenerados), y
+   volver a testear en el portal.
+
+Entre el paso 1 y el 3 los webhooks firmados con los secrets viejos se
+rechazan: hacerlo de corrido. Si un evento dice "sin webhook de tienda" es que
+no está suscripto a nivel tienda (p. ej. `STORE_PROVISIONING_STATUS`, que es a
+nivel integración): no hace falta.
+
 ### Si *Enviar horarios* dice "RAPPI rechazó las credenciales para el token de utils (401)"
 
 Los horarios van por `/api/rest-ops-utils/…`, que exige **otro token**:
@@ -266,13 +293,13 @@ Quedó para más adelante. Cuando se decida, es un tilde en la pantalla.
 
 ## Cosas a saber
 
-- **El secret del webhook son DOS claves separadas por coma.** RAPPI lo
-  entrega así ("K1,K2") y firma con una de ellas. Si en `RAPPI_WEBHOOK_SECRET`
-  quedó el texto entero, el sistema acepta la firma hecha con K1, con K2 o con
-  el texto entero (incidente 30/09: se verificaba sólo contra el texto entero y
-  todos los tests daban "Firma inválida"). Y el secret que RAPPI tiene para el
-  webhook de la tienda —el que se ve en su módulo Webhooks— tiene que ser el
-  mismo que el de Railway; si no, la firma nunca va a coincidir.
+- **`RAPPI_WEBHOOK_SECRET` es una LISTA de claves separadas por coma.** Cada
+  webhook de tienda (uno por evento) tiene su propio secret, generado por
+  RAPPI; el server prueba la firma contra cada clave de la lista (y contra el
+  texto entero). Incidente 30/09: RAPPI entregó "K1,K2", se verificaba sólo
+  contra el texto entero y todos los tests daban "Firma inválida". RAPPI no
+  vuelve a mostrar los secrets: para tenerlos hay que regenerarlos desde el
+  panel (botón *Regenerar los secrets en RAPPI*) y pegarlos en Railway.
 - **El evento de prueba de NEW_ORDER del portal no es un pedido**: manda
   `{order_id, store_id, total, status}` sin `order_detail`. Si viene firmado
   por RAPPI, se responde 200 (lo que el test exige) y queda en el buzón como

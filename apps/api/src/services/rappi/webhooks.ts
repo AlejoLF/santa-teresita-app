@@ -41,6 +41,58 @@ export async function suscribirWebhookIntegracion(args: {
   return { ok: r.ok, status: r.status, respuesta: r.body ?? r.texto };
 }
 
+/**
+ * `PUT /webhook/{EVENT}/reset-secret`, para cada evento. RAPPI genera el
+ * secret de cada webhook de tienda al crearlo, no lo vuelve a mostrar (ni en
+ * el portal ni en `GET /webhook/{EVENT}`), y la única forma de volver a
+ * tenerlo es regenerarlo: este endpoint lo devuelve. Como son uno POR EVENTO,
+ * el resultado es la lista entera, lista para pegar en `RAPPI_WEBHOOK_SECRET`
+ * separada por comas (el server verifica la firma contra cada una).
+ *
+ * Ojo: regenerar invalida el anterior. Entre esto y el redeploy de Railway
+ * con el valor nuevo, los webhooks firmados con el viejo se rechazan.
+ * Los secrets NO se registran en `llamadas_canal` (ocultarRespuesta).
+ */
+export async function resetearSecretsWebhooks() {
+  const eventos: Array<{ evento: EventoWebhook; ok: boolean; status: number; detalle: string }> = [];
+  const secrets: string[] = [];
+  for (const evento of EVENTOS_WEBHOOK) {
+    const r = await llamarRappi<{ secret?: string; message?: string }>({
+      arbol: 'legacy',
+      metodo: 'PUT',
+      ruta: `${LEGACY}/webhook/${evento}/reset-secret`,
+      contexto: `regenerar el secret del webhook ${evento}`,
+      ocultarRespuesta: true,
+    });
+    const secret = typeof r.body?.secret === 'string' ? r.body.secret.trim() : '';
+    if (r.ok && secret) {
+      secrets.push(secret);
+      eventos.push({ evento, ok: true, status: r.status, detalle: `secret nuevo (${secret.length} caracteres)` });
+    } else {
+      eventos.push({
+        evento,
+        ok: false,
+        status: r.status,
+        detalle: r.ok
+          ? 'RAPPI respondió sin secret'
+          : r.status === 404
+            ? 'sin webhook de tienda para este evento en RAPPI (no hace falta)'
+            : `RAPPI respondió ${r.status}${r.body?.message ? `: ${r.body.message}` : ''}`,
+      });
+    }
+  }
+  const unicos = [...new Set(secrets)];
+  return {
+    ok: unicos.length > 0,
+    eventos,
+    claves: unicos.length,
+    secret: unicos.length ? unicos.join(',') : null,
+    detalle: unicos.length
+      ? `RAPPI generó ${unicos.length} secret/s nuevo/s para ${secrets.length} evento/s. Copiá el valor de abajo en RAPPI_WEBHOOK_SECRET (servicio api, Railway) y redeployá: hasta entonces los webhooks firmados con los viejos se rechazan.`
+      : 'RAPPI no devolvió ningún secret: fijate el detalle por evento.',
+  };
+}
+
 /** `POST /stores/provisioning` — responde 202; el resultado llega por STORE_PROVISIONING_STATUS. */
 export async function aprovisionarTienda(args: {
   storeId: string;

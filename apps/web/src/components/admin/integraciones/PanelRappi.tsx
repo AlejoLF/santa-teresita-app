@@ -162,6 +162,7 @@ export function PanelRappi({ tick = 0, onActualizar }: { tick?: number; onActual
   const [clientId, setClientId] = useState('');
   const [tiempoCocina, setTiempoCocina] = useState('');
   const [rechazo, setRechazo] = useState<{ id: string; tipo: string; motivo: string } | null>(null);
+  const [secretsNuevos, setSecretsNuevos] = useState<{ secret: string | null; claves: number; eventos: Array<{ evento: string; ok: boolean; detalle: string }> } | null>(null);
   const confirmarRechazo = (ventaId: string) => {
     const rj = rechazo;
     if (!rj || !rj.motivo.trim()) return;
@@ -326,6 +327,29 @@ export function PanelRappi({ tick = 0, onActualizar }: { tick?: number; onActual
               </div>
             </div>
           ))}
+        </div>
+        <div className="rounded-lg border border-cream-300 p-3 space-y-2">
+          <p className="text-sm font-medium text-ink-900">El secret con el que RAPPI firma</p>
+          <p className="text-2xs text-ink-600">
+            Cada webhook de tienda tiene SU secret, lo genera RAPPI al crearlo y no lo vuelve a mostrar. Si los tests dan 401 por firma, este botón le pide a RAPPI un secret nuevo por evento y te los muestra una sola vez,
+            listos para pegar en <span className="font-mono">RAPPI_WEBHOOK_SECRET</span> (servicio api, Railway). Después: redeploy, "Actualizar" acá, y volver a testear en el portal.
+            Ojo: regenerar invalida los secrets viejos al instante.
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="secondary" size="sm" disabled={ocupado !== null || !estado.credencialesConfiguradas}
+              onClick={() => { setSecretsNuevos(null); void accion('resetsec', async () => { const x = await api.post<{ ok: boolean; detalle: string; secret: string | null; claves: number; eventos: Array<{ evento: string; ok: boolean; detalle: string }> }>('/admin/rappi/webhooks/reset-secrets', {}); setSecretsNuevos(x); return x; }); }}>
+              {ocupado === 'resetsec' ? 'Pidiendo a RAPPI…' : 'Regenerar los secrets en RAPPI'}
+            </Button>
+            <Resultado r={r('resetsec')} />
+          </div>
+          {secretsNuevos?.secret && (
+            <Copiable etiqueta={`RAPPI_WEBHOOK_SECRET — ${secretsNuevos.claves} clave/s, separadas por coma (se muestra una sola vez)`} valor={secretsNuevos.secret} />
+          )}
+          {secretsNuevos && (
+            <ul className="text-2xs text-ink-600 grid gap-0.5 sm:grid-cols-2">
+              {secretsNuevos.eventos.map((e) => <li key={e.evento}>{e.ok ? '✓' : '✗'} {e.evento}: {e.detalle}</li>)}
+            </ul>
+          )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <label className="text-xs text-ink-700">clientId de la integración (lo da RAPPI):</label>
