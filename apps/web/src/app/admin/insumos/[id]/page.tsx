@@ -54,6 +54,8 @@ interface DetalleResp {
   saldoAdeudado: string;
 }
 
+const esNC = (tipo: string) => tipo === 'NOTA_CREDITO';
+
 export default function DetalleProveedorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [data, setData] = useState<DetalleResp | null>(null);
@@ -114,7 +116,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
         </div>
         <div className="text-right space-y-1">
           <div>
-            <div className="text-2xs text-ink-500 uppercase">Saldo adeudado</div>
+            <div className="text-2xs text-ink-500 uppercase">{Number(data.saldoAdeudado) < 0 ? 'Saldo a favor nuestro' : 'Saldo adeudado'}</div>
             <MoneyAmount
               value={data.saldoAdeudado}
               className={cn(
@@ -192,10 +194,10 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                 <th className="text-left px-4 py-2 w-10">
                   <input
                     type="checkbox"
-                    checked={seleccion.size === facturasPendientes.length}
+                    checked={seleccion.size > 0 && seleccion.size === facturasPendientes.filter((f) => !esNC(f.tipoComprobante)).length}
                     onChange={(e) => {
                       if (e.target.checked) {
-                        setSeleccion(new Set(facturasPendientes.map((f) => f.id)));
+                        setSeleccion(new Set(facturasPendientes.filter((f) => !esNC(f.tipoComprobante)).map((f) => f.id)));
                       } else {
                         setSeleccion(new Set());
                       }
@@ -227,12 +229,14 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                       <input
                         type="checkbox"
                         checked={checked}
+                        disabled={esNC(f.tipoComprobante)}
+                        title={esNC(f.tipoComprobante) ? 'Una nota de crédito no se paga: ya descuenta del saldo' : undefined}
                         onChange={() => toggleSeleccion(f.id)}
                       />
                     </td>
                     <td className="px-4 py-3">
                       <div className="text-xs text-ink-500">
-                        {f.tipoComprobante.replace('_', ' ')}
+                        {esNC(f.tipoComprobante) ? 'NOTA DE CRÉDITO · a favor' : f.tipoComprobante.replace('_', ' ')}
                       </div>
                       <Link
                         href={`/admin/facturas/${f.id}`}
@@ -263,7 +267,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                       <MoneyAmount value={f.totalPagado} />
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <MoneyAmount value={f.saldo} className="text-pomodoro-600 font-medium" />
+                      <MoneyAmount value={f.saldo} className={cn(esNC(f.tipoComprobante) ? 'text-basil-600' : 'text-pomodoro-600', 'font-medium')} />
                     </td>
                   </tr>
                 );
@@ -320,13 +324,15 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                   <input
                     type="checkbox"
                     checked={checked}
-                    onChange={() => toggleSeleccion(f.id)}
+                    disabled={esNC(f.tipoComprobante)}
+                        title={esNC(f.tipoComprobante) ? 'Una nota de crédito no se paga: ya descuenta del saldo' : undefined}
+                        onChange={() => toggleSeleccion(f.id)}
                     className="mt-1 shrink-0"
                   />
                   <div className="flex-1 min-w-0 flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="text-2xs text-ink-500">
-                        {f.tipoComprobante.replace('_', ' ')}
+                        {esNC(f.tipoComprobante) ? 'NOTA DE CRÉDITO · a favor' : f.tipoComprobante.replace('_', ' ')}
                       </div>
                       <Link
                         href={`/admin/facturas/${f.id}`}
@@ -345,7 +351,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
                       </div>
                     </div>
                     <div className="shrink-0 text-right">
-                      <MoneyAmount value={f.saldo} className="text-md text-pomodoro-600 font-medium" />
+                      <MoneyAmount value={f.saldo} className={cn(esNC(f.tipoComprobante) ? 'text-basil-600' : 'text-pomodoro-600', 'text-md font-medium')} />
                       <div className="text-2xs font-mono text-ink-500">
                         de <MoneyAmount value={f.total} />
                       </div>
@@ -791,9 +797,16 @@ function FormNuevaFactura({
                 <option value="FACTURA_A">Factura A</option>
                 <option value="FACTURA_B">Factura B</option>
                 <option value="FACTURA_C">Factura C</option>
+                <option value="FACTURA_X">Factura X</option>
+                <option value="NOTA_CREDITO">Nota de crédito (resta)</option>
+                <option value="NOTA_DEBITO">Nota de débito</option>
                 <option value="TICKET">Ticket</option>
                 <option value="REMITO">Remito</option>
+                <option value="OTRO">Otro</option>
               </select>
+              {tipoComprobante === 'NOTA_CREDITO' && (
+                <p className="text-2xs text-basil-600 mt-1">Cargala en positivo, como figura en el papel: resta sola del saldo.</p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-ink-700 mb-1">Pto. venta</label>

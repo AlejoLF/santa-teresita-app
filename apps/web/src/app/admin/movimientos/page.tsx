@@ -112,6 +112,87 @@ function fechaInputAIso(value: string, finDelDia: boolean): string | undefined {
   return date.toISOString();
 }
 
+interface PagoDesparejo {
+  movimientoId: string;
+  fecha: string;
+  tipo: string;
+  categoria: string;
+  observacion: string | null;
+  monto: string;
+  antes: { cuenta: string; metodo: string; monto: string };
+  despues: { cuenta: string; metodo: string; monto: string };
+}
+
+const METODO_TXT: Record<string, string> = { EFECTIVO: 'efectivo', TRANSFERENCIA: 'transferencia', DEPOSITO: 'depósito', CHEQUE: 'cheque', MERCADOPAGO_QR: 'MercadoPago' };
+
+/**
+ * Movimientos editados antes del arreglo del 16/10 cuyo pago siguió con la
+ * cuenta o el medio viejos (el cierre de caja tomaba lo primero que se puso).
+ * Sólo aparece si hay alguno; un botón los deja como dice el movimiento.
+ */
+function AvisoPagosDesparejos() {
+  const [lista, setLista] = useState<PagoDesparejo[] | null>(null);
+  const [abierto, setAbierto] = useState(false);
+  const [estado, setEstado] = useState<'idle' | 'corrigiendo' | 'listo' | 'error'>('idle');
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const cargar = useCallback(async () => {
+    try {
+      const r = await api.get<{ desparejos: PagoDesparejo[] }>('/admin/movimientos/pagos-desparejos');
+      setLista(r.desparejos);
+    } catch {
+      setLista([]);
+    }
+  }, []);
+  useEffect(() => { void cargar(); }, [cargar]);
+
+  if (estado === 'listo' && msg) {
+    return <div className="rounded-lg border border-basil-600/30 bg-basil-100 p-3 text-sm text-ink-900">✓ {msg}</div>;
+  }
+  if (!lista || lista.length === 0) return null;
+
+  async function corregir() {
+    setEstado('corrigiendo');
+    try {
+      const r = await api.post<{ corregidos: number }>('/admin/movimientos/pagos-desparejos/corregir', {});
+      setMsg(`Listo: ${r.corregidos} pago(s) corregidos. Los cierres de caja ya los toman como dice cada movimiento.`);
+      setEstado('listo');
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'No se pudo corregir');
+      setEstado('error');
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-saffron-600/30 bg-saffron-100 p-3 text-sm text-ink-900 space-y-2">
+      <p>
+        <strong>{lista.length} movimiento(s) editado(s) quedaron con el pago viejo.</strong> Se les cambió la cuenta o el monto, pero el
+        cierre de caja seguía tomando lo primero que se cargó. Corregirlos los deja como dice cada movimiento; el saldo de las cuentas no cambia.
+      </p>
+      <div className="flex flex-wrap gap-2 items-center">
+        <Button size="sm" disabled={estado === 'corrigiendo'} onClick={() => void corregir()}>
+          {estado === 'corrigiendo' ? 'Corrigiendo…' : 'Corregirlos'}
+        </Button>
+        <button type="button" className="text-xs underline" onClick={() => setAbierto((v) => !v)}>{abierto ? 'ocultar' : 'ver cuáles'}</button>
+        {estado === 'error' && msg && <span className="text-xs text-pomodoro-600">{msg}</span>}
+      </div>
+      {abierto && (
+        <ul className="text-xs space-y-1">
+          {lista.map((d) => (
+            <li key={d.movimientoId}>
+              {new Date(d.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })} · {d.categoria}
+              {d.observacion ? ` · ${d.observacion}` : ''} · <MoneyAmount value={d.monto} />: el pago dice{' '}
+              <strong>{METODO_TXT[d.antes.metodo] ?? d.antes.metodo} ({d.antes.cuenta})</strong> y debería decir{' '}
+              <strong>{METODO_TXT[d.despues.metodo] ?? d.despues.metodo} ({d.despues.cuenta})</strong>
+              {d.antes.monto !== d.despues.monto && <> · monto <MoneyAmount value={d.antes.monto} /> → <MoneyAmount value={d.despues.monto} /></>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function AdminMovimientosPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -244,6 +325,8 @@ export default function AdminMovimientosPage() {
         </div>
         <Button onClick={() => setShowForm(true)}>+ Nuevo movimiento</Button>
       </header>
+
+      <AvisoPagosDesparejos />
 
       {/* Sumas */}
       {data && (

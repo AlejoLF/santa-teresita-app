@@ -192,7 +192,7 @@ function ProveedoresTab() {
     }
   }
 
-  const totalAdeudado = proveedores.reduce((acc, p) => acc + Number(p.saldoAdeudado), 0);
+  const totalAdeudado = proveedores.reduce((acc, p) => acc + Math.max(0, Number(p.saldoAdeudado)), 0);
   const conSaldo = proveedores.filter((p) => Number(p.saldoAdeudado) > 0);
 
   return (
@@ -289,6 +289,10 @@ function ProveedoresTab() {
                         value={p.saldoAdeudado}
                         className="text-pomodoro-600 font-medium"
                       />
+                    ) : saldo < -0.01 ? (
+                      <span className="text-basil-600 font-medium" title="Las notas de crédito superan a lo adeudado">
+                        a favor <MoneyAmount value={String(-saldo)} />
+                      </span>
                     ) : (
                       <span className="text-ink-300">—</span>
                     )}

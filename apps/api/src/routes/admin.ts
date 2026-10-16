@@ -186,6 +186,17 @@ async function syncListasCustomDeProducto(
  * Endpoints exclusivos del rol Admin. Devuelven KPIs agregados para los dashboards.
  * Todas las queries usan agregaciones de Postgres (no fetch + sum en app) para que escale.
  */
+/**
+ * Con qué medio sale (o entra) la plata de una cuenta, cuando la encargada
+ * cambia la cuenta de un pago con el desplegable simple: la caja es efectivo;
+ * un banco o billetera, transferencia. Si el medio que ya tenía es coherente
+ * con la cuenta nueva (un cheque desde un banco), se respeta.
+ */
+export function metodoParaCuenta(tipoCuenta: string, metodoActual: string): string {
+  if (tipoCuenta === 'EFECTIVO') return 'EFECTIVO';
+  return metodoActual === 'EFECTIVO' ? 'TRANSFERENCIA' : metodoActual;
+}
+
 export default async function adminRoutes(fastify: FastifyInstance) {
   // GET /admin/errores — buscar un código que reportó alguien del mostrador.
   //
@@ -423,6 +434,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         prisma.facturaRecibida.count({
           where: {
             estado: { in: ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'] },
+            tipoComprobante: { notIn: ['NOTA_CREDITO'] },
             fechaVencimiento: { gte: inicioHoy, lte: en20Dias },
           },
         }),
@@ -1609,6 +1621,96 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // ── Pagos desparejos: movimientos editados antes del arreglo del 16/10 ──
+  //
+  // Hasta esa fecha, cambiar la cuenta de un movimiento con el desplegable
+  // simple dejaba su fila de `pagos` con la cuenta y el medio viejos, y el
+  // cierre de caja (que lee `pagos`) seguía con lo primero que se cargó. Esto
+  // los encuentra: movimientos editados, con UN solo pago, cuyo pago no
+  // coincide en cuenta o en monto con el movimiento. GET lista, POST corrige.
+  // El saldo de las cuentas NO se toca: ya quedó bien al editar (la edición
+  // revertía contra el pago viejo y aplicaba contra la cuenta nueva); lo único
+  // desparejo es la fila del pago.
+  async function pagosDesparejos() {
+    const editados = await prisma.auditLog.findMany({
+      where: { tabla: 'movimientos', accion: 'UPDATE' },
+      select: { registroId: true },
+      distinct: ['registroId'],
+    });
+    if (editados.length === 0) return [];
+    const movs = await prisma.movimiento.findMany({
+      where: { id: { in: editados.map((e) => e.registroId) }, estado: EstadoMovimiento.CONFIRMADO, tipo: { in: ['EGRESO', 'INGRESO'] } },
+      include: {
+        pagos: { include: { cuenta: { select: { id: true, nombre: true, tipo: true } } } },
+        cuentaOrigen: { select: { id: true, nombre: true, tipo: true } },
+        cuentaDestino: { select: { id: true, nombre: true, tipo: true } },
+        categoria: { select: { nombre: true } },
+      },
+      orderBy: { fechaComputo: 'desc' },
+    });
+    return movs
+      .filter((m) => m.pagos.length === 1)
+      .map((m) => {
+        const pago = m.pagos[0]!;
+        const cuentaMov = m.tipo === 'EGRESO' ? m.cuentaOrigen : m.cuentaDestino;
+        if (!cuentaMov) return null;
+        const cuentaDistinta = pago.cuentaId !== cuentaMov.id;
+        const montoDistinto = Math.abs(Number(pago.monto) - Number(m.monto)) > 0.01;
+        if (!cuentaDistinta && !montoDistinto) return null;
+        return {
+          movimientoId: m.id,
+          pagoId: pago.id,
+          fecha: m.fechaComputo,
+          tipo: m.tipo,
+          categoria: m.categoria.nombre,
+          observacion: m.observacion,
+          monto: m.monto.toFixed(2),
+          sesionCajaId: m.sesionCajaId,
+          antes: { cuenta: pago.cuenta.nombre, metodo: pago.metodo, monto: pago.monto.toFixed(2) },
+          despues: {
+            cuentaId: cuentaMov.id,
+            cuenta: cuentaMov.nombre,
+            metodo: cuentaDistinta ? metodoParaCuenta(cuentaMov.tipo, pago.metodo) : pago.metodo,
+            monto: m.monto.toFixed(2),
+          },
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+  }
+
+  fastify.get(
+    '/admin/movimientos/pagos-desparejos',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => ({ desparejos: await pagosDesparejos() }),
+  );
+
+  fastify.post(
+    '/admin/movimientos/pagos-desparejos/corregir',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async (req) => {
+      const lista = await pagosDesparejos();
+      for (const d of lista) {
+        await prisma.$transaction(async (tx) => {
+          await tx.pago.update({
+            where: { id: d.pagoId },
+            data: { cuentaId: d.despues.cuentaId, metodo: d.despues.metodo as never, monto: d.despues.monto },
+          });
+          await recordAudit({
+            tabla: 'pagos',
+            registroId: d.pagoId,
+            accion: 'UPDATE',
+            usuarioId: req.usuario!.id,
+            valorAnterior: d.antes,
+            valorNuevo: { cuenta: d.despues.cuenta, metodo: d.despues.metodo, monto: d.despues.monto },
+            contexto: { movimientoId: d.movimientoId, motivo: 'reparación: el pago no seguía la cuenta editada del movimiento' },
+            tx,
+          });
+        });
+      }
+      return { corregidos: lista.length, detalle: lista };
+    },
+  );
+
   // GET /admin/movimientos/:id — detalle + audit log para el modal de detalle.
   fastify.get(
     '/admin/movimientos/:id',
@@ -1894,6 +1996,49 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             ...(cuentaDestinoNueva ? [{ cuentaId: cuentaDestinoNueva, delta: montoNuevo }] : []),
           ];
 
+      // Cambiar la CUENTA con el desplegable simple (sin `lineas`) tiene que
+      // cambiar también el pago. El cierre de caja y el arqueo leen el reparto
+      // real de la tabla `pagos` (services/efecto-caja.ts), no la cuenta del
+      // movimiento: si sólo se tocaba el movimiento, la lista mostraba
+      // "Efectivo" pero el cierre seguía con la transferencia que se cargó
+      // primero. Incidente 16/10, pago del banco de horas a Zoe.
+      //
+      // Con UN pago se corrige en el lugar (no se borra: así no se pierde una
+      // imputación a facturas). Con varios no se adivina cuál era: se pide el
+      // editor de reparto.
+      const cuentaCambiada =
+        !body.lineas &&
+        ((mov.tipo === 'EGRESO' && body.cuentaOrigenId !== undefined && body.cuentaOrigenId !== mov.cuentaOrigenId) ||
+          (mov.tipo === 'INGRESO' && body.cuentaDestinoId !== undefined && body.cuentaDestinoId !== mov.cuentaDestinoId));
+      if (cuentaCambiada && mov.pagos.length > 1) {
+        return reply.code(400).send({
+          error:
+            'Este pago está repartido en varias cuentas: cambialo desde "Cómo se pagó", eligiendo cuánto va por cada una.',
+        });
+      }
+      const cuentaNuevaDelPago = cuentaCambiada
+        ? ((mov.tipo === 'EGRESO' ? body.cuentaOrigenId : body.cuentaDestinoId) ?? null)
+        : null;
+      if (cuentaCambiada && mov.pagos.length === 1 && !cuentaNuevaDelPago) {
+        return reply.code(400).send({ error: 'Elegí la cuenta nueva del pago.' });
+      }
+      const pagoACorregir =
+        mov.pagos.length === 1 && !body.lineas && (cuentaNuevaDelPago || (body.monto !== undefined && Math.abs(montoNuevo - montoAnterior) > 0.01))
+          ? mov.pagos[0]!
+          : null;
+      if (pagoACorregir && body.monto !== undefined && Math.abs(montoNuevo - montoAnterior) > 0.01) {
+        const imputado = await prisma.pagoFactura.count({ where: { pagoId: pagoACorregir.id } });
+        if (imputado > 0) {
+          return reply.code(400).send({
+            error: 'Este pago ya está imputado a facturas del proveedor: cambiarle el monto acá las dejaría mal. Anulalo y volvé a cargarlo.',
+          });
+        }
+      }
+      const cuentaPagoNueva = cuentaNuevaDelPago
+        ? await prisma.cuenta.findUnique({ where: { id: cuentaNuevaDelPago }, select: { id: true, tipo: true } })
+        : null;
+      if (cuentaNuevaDelPago && !cuentaPagoNueva) return reply.code(400).send({ error: 'La cuenta elegida no existe.' });
+
       const updated = await prisma.$transaction(async (tx) => {
         // 1. Revertir el efecto original (signo al revés) y aplicar el nuevo.
         //    Se acumulan por cuenta antes de escribir: si una cuenta está en
@@ -1939,8 +2084,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         //    llegar acá.
         if (body.lineas) {
           await tx.pago.deleteMany({ where: { movimientoId: mov.id } });
+          for (const viejo of mov.pagos) {
+            await recordAudit({ tabla: 'pagos', registroId: viejo.id, accion: 'DELETE', usuarioId: req.usuario!.id, contexto: { movimientoId: mov.id, motivo: 'reparto editado' }, tx });
+          }
           for (const l of body.lineas) {
-            await tx.pago.create({
+            const pagoNuevo = await tx.pago.create({
               data: {
                 movimientoId: mov.id,
                 metodo: l.metodo as never,
@@ -1951,7 +2099,28 @@ export default async function adminRoutes(fastify: FastifyInstance) {
                 fecha: body.fechaComputo ? new Date(body.fechaComputo) : mov.fechaComputo,
               },
             });
+            // `pagos` es otra tabla: sin evento propio el reparto nuevo no
+            // llega a la otra base y el cierre de allá sigue con el viejo.
+            await recordAudit({ tabla: 'pagos', registroId: pagoNuevo.id, accion: 'INSERT', usuarioId: req.usuario!.id, contexto: { movimientoId: mov.id, motivo: 'reparto editado' }, tx });
           }
+        } else if (pagoACorregir) {
+          const data: { cuentaId?: string; metodo?: never; monto?: string } = {};
+          if (cuentaPagoNueva) {
+            data.cuentaId = cuentaPagoNueva.id;
+            data.metodo = metodoParaCuenta(cuentaPagoNueva.tipo, pagoACorregir.metodo) as never;
+          }
+          if (body.monto !== undefined && Math.abs(montoNuevo - montoAnterior) > 0.01) data.monto = montoNuevo.toFixed(2);
+          await tx.pago.update({ where: { id: pagoACorregir.id }, data });
+          await recordAudit({
+            tabla: 'pagos',
+            registroId: pagoACorregir.id,
+            accion: 'UPDATE',
+            usuarioId: req.usuario!.id,
+            valorAnterior: { cuentaId: pagoACorregir.cuentaId, metodo: pagoACorregir.metodo, monto: pagoACorregir.monto.toString() },
+            valorNuevo: { cuentaId: data.cuentaId ?? pagoACorregir.cuentaId, metodo: data.metodo ?? pagoACorregir.metodo, monto: data.monto ?? pagoACorregir.monto.toString() },
+            contexto: { movimientoId: mov.id, motivo: 'cuenta del movimiento editada' },
+            tx,
+          });
         }
 
         return nuevo;

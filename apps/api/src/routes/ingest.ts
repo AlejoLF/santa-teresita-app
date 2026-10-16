@@ -238,6 +238,7 @@ export default async function ingestRoutes(fastify: FastifyInstance) {
       // lee la encargada al abrirla, y la confianza baja la ordena arriba en la
       // pantalla de pendientes.
       const sinProveedor = proveedorId === (await getProveedorSinIdentificar());
+      const enPositivoSiNC = (v: string) => (body.comprobante.tipo === 'NOTA_CREDITO' ? v.replace(/^-/, '') : v);
       const observaciones = [
         sinProveedor ? '⚠ FALTA EL PROVEEDOR: el OCR no pudo leer de quién es esta factura. Asignáselo con "no es este" antes de aprobarla.' : null,
         body.observaciones ?? null,
@@ -261,12 +262,15 @@ export default async function ingestRoutes(fastify: FastifyInstance) {
               fechaEmision: fechaEm,
               fechaComputo: fechaEm,
               fechaVencimiento: body.comprobante.fechaVencimiento ? new Date(body.comprobante.fechaVencimiento) : null,
-              netoGravado: body.montos.neto ?? '0',
-              iva21: body.montos.iva21 ?? body.montos.ivaTotal ?? '0',
-              iva10_5: body.montos.iva10_5 ?? '0',
-              iva27: body.montos.iva27 ?? '0',
-              otrosImpuestos: body.montos.otrosImpuestos ?? '0',
-              total: body.montos.total,
+              // Una nota de crédito se guarda en positivo, como figura en el
+              // papel: el signo lo pone el tipo (services/facturas.ts). Si el
+              // OCR la leyó con "-", se le saca acá.
+              netoGravado: enPositivoSiNC(body.montos.neto ?? '0'),
+              iva21: enPositivoSiNC(body.montos.iva21 ?? body.montos.ivaTotal ?? '0'),
+              iva10_5: enPositivoSiNC(body.montos.iva10_5 ?? '0'),
+              iva27: enPositivoSiNC(body.montos.iva27 ?? '0'),
+              otrosImpuestos: enPositivoSiNC(body.montos.otrosImpuestos ?? '0'),
+              total: enPositivoSiNC(body.montos.total),
               // estado PENDIENTE_VALIDACION = default → gate de aprobación humana.
               origen: 'TELEGRAM_OCR',
               adjuntoUrl: body.adjunto.url ?? null,

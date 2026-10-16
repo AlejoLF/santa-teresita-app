@@ -104,7 +104,9 @@ export default function FacturasInboxPage() {
         <section className="card overflow-hidden">
           <ul className="divide-y divide-cream-200">
             {b.items.map((f) => {
-              const badge = estadoBadgeMap[f.estado] ?? { label: f.estado, cls: 'bg-cream-200 text-ink-500' };
+              const badge = f.tipoComprobante === 'NOTA_CREDITO' && ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'].includes(f.estado)
+                ? { label: 'a favor', cls: 'bg-basil-100 text-basil-600' }
+                : estadoBadgeMap[f.estado] ?? { label: f.estado, cls: 'bg-cream-200 text-ink-500' };
               const esOcr = f.origen === 'TELEGRAM_OCR' || f.origen === 'PROGRAMA_FOTO';
               return (
                 <li key={f.id}>

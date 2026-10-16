@@ -9,7 +9,7 @@ import {
 } from '@sta/db';
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
-import { calcSaldoFactura } from '../services/facturas.js';
+import { calcSaldoFactura, esNotaCredito, importeConSigno } from '../services/facturas.js';
 import { PROVEEDOR_SIN_IDENTIFICAR } from '../services/proveedor-sin-identificar.js';
 import {
   facturasPendientesDe,
@@ -99,6 +99,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           proveedorId: true,
           total: true,
           totalPagado: true,
+          tipoComprobante: true,
           fechaVencimiento: true,
         },
       });
@@ -106,8 +107,9 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       for (const f of facturas) {
         const cur = saldosMap.get(f.proveedorId) ?? { saldo: 0, cantidad: 0, proxVenc: null };
         cur.saldo += calcSaldoFactura(f);
-        cur.cantidad += 1;
-        if (f.fechaVencimiento && (!cur.proxVenc || f.fechaVencimiento < cur.proxVenc)) {
+        // Las NC restan del saldo pero no son "facturas pendientes" ni vencen.
+        if (!esNotaCredito(f.tipoComprobante)) cur.cantidad += 1;
+        if (!esNotaCredito(f.tipoComprobante) && f.fechaVencimiento && (!cur.proxVenc || f.fechaVencimiento < cur.proxVenc)) {
           cur.proxVenc = f.fechaVencimiento;
         }
         saldosMap.set(f.proveedorId, cur);
@@ -116,6 +118,8 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       return {
         proveedores: proveedores.map((p) => ({
           ...p,
+          // Puede quedar negativo si las notas de crédito superan a las facturas:
+          // es saldo a favor y se muestra como tal.
           saldoAdeudado: (saldosMap.get(p.id)?.saldo ?? 0).toFixed(2),
           facturasPendientes: saldosMap.get(p.id)?.cantidad ?? 0,
           proximoVencimiento: saldosMap.get(p.id)?.proxVenc ?? null,
@@ -186,7 +190,9 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       // sin asignar (que son créditos a favor del proveedor todavía no
       // imputados a ninguna factura).
       const totalPagosACuenta = pagosACuenta.reduce((acc, p) => acc + Number(p.monto), 0);
-      const saldoAdeudado = Math.max(0, saldoFacturas - totalPagosACuenta);
+      // Sin piso en 0: si las notas de crédito (y los pagos a cuenta) superan a
+      // las facturas, el proveedor nos debe a nosotros y eso se tiene que ver.
+      const saldoAdeudado = saldoFacturas - totalPagosACuenta;
 
       return {
         proveedor: { ...proveedor, facturas: undefined },
@@ -841,9 +847,11 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
             // ficha de la factura.
             iva: Number(f.iva21) + Number(f.iva10_5) + Number(f.iva27),
             otros: Number(f.otrosImpuestos),
-            total: Number(f.total),
+            // Las notas de crédito van en negativo: el TOTAL FACTURADO y el
+            // SALDO A PAGAR de abajo las descuentan.
+            total: importeConSigno(f),
             pagado: Number(f.totalPagado),
-            saldo: Number(f.total) - Number(f.totalPagado),
+            saldo: calcSaldoFactura(f),
           })),
           totales: [
             { etiqueta: 'TOTAL FACTURADO', columna: 'total' },
@@ -1742,6 +1750,11 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
       for (const f of body.facturas) {
         const dbF = facturasDb.find((d) => d.id === f.facturaId);
         if (!dbF) continue;
+        if (esNotaCredito(dbF.tipoComprobante)) {
+          return reply.code(400).send({
+            error: `El comprobante ${dbF.numero} es una nota de crédito: no se paga, ya descuenta sola del saldo del proveedor.`,
+          });
+        }
         const saldoActual = calcSaldoFactura(dbF);
         if (Number(f.montoAplicar) > saldoActual + 0.01) {
           return reply.code(400).send({
@@ -2203,7 +2216,14 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
     },
     async (req) => {
       const { id } = req.params as { id: string };
-      const facturas = await facturasPendientesDe(prisma, id);
+      const [facturas, notasCredito] = await Promise.all([
+        facturasPendientesDe(prisma, id),
+        prisma.facturaRecibida.findMany({
+          where: { proveedorId: id, tipoComprobante: 'NOTA_CREDITO', estado: { in: ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'] } },
+          select: { total: true, totalPagado: true, tipoComprobante: true },
+        }),
+      ]);
+      const aFavor = notasCredito.reduce((acc, n) => acc - calcSaldoFactura(n), 0);
       return {
         facturas: facturas
           .map((f) => ({
@@ -2220,9 +2240,9 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           // Una factura con saldo 0 sigue en PAGADA_PARCIAL hasta que alguien
           // la cierre; no tiene sentido ofrecerla para imputar.
           .filter((f) => Number(f.saldo) > 0.01),
-        totalAdeudado: facturas
-          .reduce((acc, f) => acc + Math.max(0, calcSaldoFactura(f)), 0)
-          .toFixed(2),
+        totalAdeudado: (facturas.reduce((acc, f) => acc + Math.max(0, calcSaldoFactura(f)), 0) - aFavor).toFixed(2),
+        /** Lo que suman las notas de crédito del proveedor (en positivo). */
+        notasCreditoAFavor: aFavor.toFixed(2),
       };
     },
   );

@@ -67,6 +67,9 @@ export async function facturasPendientesDe(
       estado: {
         in: [EstadoFacturaRecibida.PENDIENTE_PAGO, EstadoFacturaRecibida.PAGADA_PARCIAL],
       },
+      // Una nota de crédito no se paga: es plata a favor. Restan del saldo del
+      // proveedor (calcSaldoFactura) pero no son candidatas a imputar.
+      tipoComprobante: { notIn: ['NOTA_CREDITO'] },
     },
     orderBy: [{ fechaEmision: 'asc' }, { numero: 'asc' }],
   });

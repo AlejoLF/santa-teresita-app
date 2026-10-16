@@ -100,7 +100,7 @@ export default function PagarFacturasPage({ params }: { params: Promise<{ id: st
 
         // Pre-seleccionar facturas si vinieron en URL
         const facsPendientes = det.facturas.filter((f) =>
-          ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'].includes(f.estado),
+          ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'].includes(f.estado) && f.tipoComprobante !== 'NOTA_CREDITO',
         );
         const inicial: FacturaSel[] = facsPendientes
           .filter((f) => idsPreseleccionadas.includes(f.id))
@@ -150,8 +150,9 @@ export default function PagarFacturasPage({ params }: { params: Promise<{ id: st
   if (error) return <div className="text-pomodoro-600 p-6">{error}</div>;
   if (!data) return <div className="text-ink-500 p-6">Cargando...</div>;
 
+  // Las notas de crédito no se pagan: ya descuentan del saldo del proveedor.
   const facturasPendientes = data.facturas.filter((f) =>
-    ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'].includes(f.estado),
+    ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'].includes(f.estado) && f.tipoComprobante !== 'NOTA_CREDITO',
   );
 
   // ────── Step 1 helpers ──────

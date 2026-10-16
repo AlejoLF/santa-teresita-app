@@ -314,7 +314,7 @@ export async function volcarSemanaProveedores(opts: {
       .map((f) => {
         const signo = COMPROBANTES_NEGATIVOS.has(f.tipoComprobante) ? -1 : 1;
         const nro = f.puntoVenta ? `${f.puntoVenta}-${f.numero}` : f.numero;
-        return { detalle: `${f.tipoComprobante} ${nro}`, monto: r2(signo * Number(f.total)) };
+        return { detalle: `${f.tipoComprobante} ${nro}`, monto: r2(signo * Math.abs(Number(f.total))) };
       });
 
     // Pagos
