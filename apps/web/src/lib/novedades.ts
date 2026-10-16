@@ -36,7 +36,7 @@ export const NOVEDADES: Novedad[] = [
   {
     version: '2.0.0-alpha.76',
     fecha: '1 de octubre',
-    titulo: 'Nueva pestaña APPS: los pedidos de RAPPI, a mano',
+    titulo: 'Pestaña APPS para RAPPI, notas de crédito y pagos editados',
     cambios: [
       'Arriba, al lado de PEDIDOS y ENCARGOS, hay una pestaña nueva: APPS. Ahí aparecen los pedidos que entran por RAPPI, solos, sin tocar nada: se actualiza cada 10 segundos y suena cuando entra uno nuevo.',
       'Cada pedido muestra los dos números: el de RAPPI (para buscarlo en la web de RAPPI) y el número de orden nuestro (para buscarlo acá). Tocando el número de RAPPI se copia.',
@@ -44,6 +44,8 @@ export const NOVEDADES: Novedad[] = [
       '"Más detalle" muestra lo que mandó RAPPI: cómo pagó el cliente, el tiempo de cocina que pide, el total y el envío de la app, la propina y la dirección.',
       'Los clientes que llegan por RAPPI con nombre y teléfono o dirección quedan agendados solos en Clientes, marcados como "Plataforma · RAPPI".',
       'En Admin → Integraciones → RAPPI, los pedidos también se refrescan solos y los botones muestran lo que ya pasó (Tomada, Lista, Rechazada).',
+      'Notas de crédito: ahora aparecen en la lista de comprobantes al cargar una factura. Se cargan en positivo, como figuran en el papel, y restan solas del saldo del proveedor. Las que entraron por foto también restan. Se ven como "a favor" y no se ofrecen para pagar.',
+      'Si cambiás la cuenta de un pago en Aportes y egresos (por ejemplo de transferencia a efectivo), el cierre de caja ahora toma el cambio. Si había pagos que quedaron con lo viejo, en Movimientos aparece un aviso con la lista y un botón para corregirlos.',
     ],
   },
   {

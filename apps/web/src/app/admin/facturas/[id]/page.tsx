@@ -93,7 +93,10 @@ export default function FacturaDetallePage({ params }: { params: Promise<{ id: s
   if (!factura) return <div className="text-ink-500 p-6">Cargando...</div>;
 
   const esValidacion = factura.estado === 'PENDIENTE_VALIDACION';
-  const estadoBadge = estadoBadgeMap[factura.estado] ?? { label: factura.estado, cls: 'bg-cream-200 text-ink-500' };
+  // Una nota de crédito no es deuda: es plata a favor que descuenta del saldo.
+  const estadoBadge = factura.tipoComprobante === 'NOTA_CREDITO' && ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'].includes(factura.estado)
+    ? { label: 'a favor', cls: 'bg-basil-100 text-basil-600' }
+    : estadoBadgeMap[factura.estado] ?? { label: factura.estado, cls: 'bg-cream-200 text-ink-500' };
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
