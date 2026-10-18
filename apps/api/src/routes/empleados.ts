@@ -19,6 +19,7 @@ import {
   nombreArchivoExport,
 } from '../services/export-busqueda.js';
 import { ReglaNegocioError } from '../services/errores.js';
+import { aplicarUnificacion, planUnificacion } from '../services/unificar-empleados.js';
 import { totalesPorConcepto, conceptoDe } from '../services/conceptos-empleado.js';
 
 /**
@@ -748,6 +749,39 @@ export default async function empleadosRoutes(fastify: FastifyInstance) {
         valorNuevo: { nombre: updated.nombre, puesto: updated.puesto, activo: updated.activo },
       });
       return updated;
+    },
+  );
+
+  // ── Unificar dos fichas de la misma persona ────────────────────────────
+  // Queda SIEMPRE la más vieja (la que tiene el historial), sin importar desde
+  // cuál de las dos se abrió: así no hay forma de equivocarse de lado. Ver
+  // services/unificar-empleados.ts.
+  async function ordenar(idA: string, idB: string) {
+    const fichas = await prisma.empleado.findMany({ where: { id: { in: [idA, idB] } }, select: { id: true, creadoAt: true } });
+    if (fichas.length !== 2) throw new ReglaNegocioError('No encontré una de las dos fichas.');
+    fichas.sort((a, b) => a.creadoAt.getTime() - b.creadoAt.getTime());
+    return { quedaId: fichas[0]!.id, absorbidaId: fichas[1]!.id };
+  }
+  const cuerpoUnificar = { params: z.object({ id: z.string().uuid() }), body: z.object({ otroId: z.string().uuid() }) };
+
+  fastify.post(
+    '/admin/empleados/:id/unificar/vista-previa',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]), schema: cuerpoUnificar },
+    async (req) => {
+      const { quedaId, absorbidaId } = await ordenar((req.params as { id: string }).id, (req.body as { otroId: string }).otroId);
+      const { _datos, _ids, ...plan } = await planUnificacion(quedaId, absorbidaId);
+      void _datos; void _ids;
+      return plan;
+    },
+  );
+
+  fastify.post(
+    '/admin/empleados/:id/unificar',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]), schema: cuerpoUnificar },
+    async (req) => {
+      const { quedaId, absorbidaId } = await ordenar((req.params as { id: string }).id, (req.body as { otroId: string }).otroId);
+      const r = await aplicarUnificacion(quedaId, absorbidaId, req.usuario!.id);
+      return { ...r, quedaId, absorbidaId };
     },
   );
 

@@ -108,6 +108,7 @@ export default function EmpleadoDetallePage({
   const [error, setError] = useState<string | null>(null);
   const [showPagar, setShowPagar] = useState(false);
   const [showEditar, setShowEditar] = useState(false);
+  const [showUnificar, setShowUnificar] = useState(false);
   // Etiqueta del concepto con la que se abre el modal (de la lista configurable).
   const [tipoConcepto, setTipoConcepto] = useState<string>('Sueldo');
   // El MISMO filtro temporal que la pantalla general de empleados. Arranca en
@@ -165,6 +166,9 @@ export default function EmpleadoDetallePage({
             </p>
           </div>
           <div className="flex gap-2">
+            <Button variant="secondary" onClick={() => setShowUnificar(true)} title="Si esta persona quedó cargada dos veces, juntá las dos fichas en una">
+              Unificar con otra ficha
+            </Button>
             <Button variant="secondary" onClick={() => setShowEditar(true)}>
               Editar datos
             </Button>
@@ -395,6 +399,19 @@ export default function EmpleadoDetallePage({
           onCreated={() => {
             setShowPagar(false);
             void fetchData();
+          }}
+        />
+      )}
+
+      {showUnificar && (
+        <ModalUnificar
+          empleadoId={id}
+          nombre={`${e.nombre} ${e.apellido ?? ''}`.trim()}
+          onClose={() => setShowUnificar(false)}
+          onUnificado={(quedaId) => {
+            setShowUnificar(false);
+            if (quedaId !== id) window.location.href = `/admin/empleados/${quedaId}`;
+            else void fetchData();
           }}
         />
       )}
@@ -1009,6 +1026,134 @@ function ModalEditarEmpleado({
           <Button disabled={!cambia || guardando} onClick={() => void submit()}>
             {guardando ? 'Guardando...' : 'Guardar cambios'}
           </Button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//   Modal unificar dos fichas de la misma persona
+// ────────────────────────────────────────────────────────────────────────
+
+interface PlanUnificacion {
+  queda: { id: string; nombre: string; activo: boolean; creadoAt: string; movimientos: number; bancoHoras: number; liquidaciones: number };
+  absorbida: { id: string; nombre: string; activo: boolean; creadoAt: string; movimientos: number; bancoHoras: number; liquidaciones: number };
+  datosDe: 'queda' | 'absorbida';
+  cambios: Array<{ campo: string; antes: string; despues: string }>;
+}
+
+function ModalUnificar({
+  empleadoId,
+  nombre,
+  onClose,
+  onUnificado,
+}: {
+  empleadoId: string;
+  nombre: string;
+  onClose: () => void;
+  onUnificado: (quedaId: string) => void;
+}) {
+  const [otros, setOtros] = useState<Array<{ id: string; nombre: string; apellido: string | null; activo: boolean }>>([]);
+  const [otroId, setOtroId] = useState('');
+  const [plan, setPlan] = useState<PlanUnificacion | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+
+  useEffect(() => {
+    api
+      .get<{ empleados: Array<{ id: string; nombre: string; apellido: string | null; activo: boolean }> }>('/admin/empleados?incluirInactivos=true&pageSize=100')
+      .then((r) => {
+        const primero = nombre.split(/\s+/)[0]?.toLowerCase() ?? '';
+        const lista = r.empleados
+          .filter((x) => x.id !== empleadoId)
+          // Los que se llaman igual, arriba: es casi siempre el caso.
+          .sort((a, b) => Number(b.nombre.toLowerCase().startsWith(primero)) - Number(a.nombre.toLowerCase().startsWith(primero)) || a.nombre.localeCompare(b.nombre));
+        setOtros(lista);
+      })
+      .catch(() => setError('No se pudo cargar la lista de empleados'));
+  }, [empleadoId, nombre]);
+
+  async function verPlan(id: string) {
+    setOtroId(id);
+    setPlan(null);
+    setError(null);
+    if (!id) return;
+    try {
+      setPlan(await api.post<PlanUnificacion>(`/admin/empleados/${empleadoId}/unificar/vista-previa`, { otroId: id }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo armar la vista previa');
+    }
+  }
+
+  async function unificar() {
+    if (!plan) return;
+    setEnviando(true);
+    setError(null);
+    try {
+      const r = await api.post<{ quedaId: string }>(`/admin/empleados/${empleadoId}/unificar`, { otroId });
+      onUnificado(r.quedaId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo unificar');
+      setEnviando(false);
+    }
+  }
+
+  const fecha = (iso: string) => new Date(iso).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+
+  return (
+    <div className="fixed inset-0 bg-ink-900/50 flex items-center justify-center z-40 p-4">
+      <div className="card w-full max-w-lg shadow-modal max-h-[90vh] flex flex-col">
+        <header className="px-5 py-4 border-b border-cream-300 flex justify-between items-center">
+          <h2 className="font-display text-lg text-teresita-700">Unificar fichas</h2>
+          <button onClick={onClose} className="text-ink-500 hover:text-ink-900 text-xl leading-none">✕</button>
+        </header>
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 text-sm">
+          <p className="text-ink-700">
+            Para cuando la misma persona quedó cargada dos veces. Todo lo de las dos fichas (pagos, adelantos, horas, liquidaciones) queda en una sola.
+          </p>
+          <div>
+            <label className="block text-xs font-medium text-ink-700 mb-1">¿Con qué otra ficha es la misma persona que {nombre}?</label>
+            <select className="input w-full" value={otroId} onChange={(ev) => void verPlan(ev.target.value)}>
+              <option value="">Elegí la otra ficha…</option>
+              {otros.map((o) => (
+                <option key={o.id} value={o.id}>{o.nombre} {o.apellido ?? ''}{o.activo ? '' : ' (inactiva)'}</option>
+              ))}
+            </select>
+          </div>
+          {plan && (
+            <div className="rounded-lg border border-cream-300 bg-cream-50 p-3 space-y-2">
+              <p>
+                <strong>Queda la ficha creada el {fecha(plan.queda.creadoAt)}</strong> (la más vieja, con el historial)
+                {!plan.queda.activo && ' y vuelve a estar activa'}.
+              </p>
+              <p>
+                Se le suman, de la ficha creada el {fecha(plan.absorbida.creadoAt)}: <strong>{plan.absorbida.movimientos}</strong> pago(s) y movimiento(s),{' '}
+                <strong>{plan.absorbida.bancoHoras}</strong> registro(s) del banco de horas y <strong>{plan.absorbida.liquidaciones}</strong> liquidación(es).
+                Ya tenía {plan.queda.movimientos}, {plan.queda.bancoHoras} y {plan.queda.liquidaciones}.
+              </p>
+              {plan.cambios.length > 0 ? (
+                <div>
+                  <p className="text-xs text-ink-500 mb-1">
+                    Datos de la ficha: se toman los de la {plan.datosDe === 'absorbida' ? 'nueva' : 'vieja'}, que es la que se modificó último. Cambia:
+                  </p>
+                  <ul className="text-xs space-y-0.5">
+                    {plan.cambios.map((c) => (
+                      <li key={c.campo}>{c.campo}: <span className="text-ink-500">{c.antes || '—'}</span> → <strong>{c.despues || '—'}</strong></li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-xs text-ink-500">Los datos de la ficha no cambian.</p>
+              )}
+              <p className="text-xs text-ink-500">La otra ficha queda inactiva y vacía, marcada como unificada. No se borra nada.</p>
+            </div>
+          )}
+          {error && <p className="text-pomodoro-600 text-sm">{error}</p>}
+        </div>
+        <footer className="px-5 py-3 border-t border-cream-300 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+          <Button disabled={!plan || enviando} onClick={() => void unificar()}>{enviando ? 'Unificando…' : 'Unificar'}</Button>
         </footer>
       </div>
     </div>

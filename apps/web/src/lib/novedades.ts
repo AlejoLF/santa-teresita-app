@@ -34,6 +34,17 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.77',
+    fecha: '18 de octubre',
+    titulo: 'Unificar dos fichas de la misma persona',
+    cambios: [
+      'Si una empleada quedó cargada dos veces, en su ficha hay un botón nuevo: "Unificar con otra ficha". Elegís la otra y te muestra qué va a pasar antes de hacer nada.',
+      'Queda la ficha más vieja, la que tiene el historial, con todo lo de las dos: pagos, adelantos, horas y liquidaciones. Los datos (teléfono, categoría, valor hora…) se toman de la que se modificó último.',
+      'La otra ficha queda inactiva y vacía. No se borra nada.',
+      'Recordatorio: "eliminar" un empleado no borra su historial, sólo lo oculta. Para volver a verlo, tildá "Mostrar inactivos" en Empleados y reactivalo desde su ficha.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.76',
     fecha: '1 de octubre',
     titulo: 'Pestaña APPS para RAPPI, notas de crédito y pagos editados',
