@@ -10,12 +10,15 @@ import {
 import { queryBool } from '@sta/shared/schemas';
 import { recordAudit } from '../services/audit.js';
 import { calcSaldoFactura, esNotaCredito, importeConSigno } from '../services/facturas.js';
+import { pagosSinFactura, saldosProveedores, CORTE_PAGOS_A_CUENTA } from '../services/saldo-proveedores.js';
+import { aplicarConciliacion, vistaPreviaConciliacion } from '../services/conciliacion-proveedores.js';
 import { PROVEEDOR_SIN_IDENTIFICAR } from '../services/proveedor-sin-identificar.js';
 import {
   facturasPendientesDe,
   planificarImputacion,
   aplicarImputacion,
   aplicarImputacionRepartida,
+  facturaQueCoincide,
 } from '../services/imputacion-facturas.js';
 import { normalizarNombre, buscarProveedorParecido } from '../services/proveedor-match.js';
 import {
@@ -91,40 +94,47 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         orderBy: { nombre: 'asc' },
       });
 
-      // Como `saldo` no es columna real (es total - totalPagado calculado),
-      // traemos las facturas pendientes y los sumamos en app.
-      const facturas = await prisma.facturaRecibida.findMany({
-        where: { estado: { in: ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'] } },
-        select: {
-          proveedorId: true,
-          total: true,
-          totalPagado: true,
-          tipoComprobante: true,
-          fechaVencimiento: true,
-        },
-      });
-      const saldosMap = new Map<string, { saldo: number; cantidad: number; proxVenc: Date | null }>();
-      for (const f of facturas) {
-        const cur = saldosMap.get(f.proveedorId) ?? { saldo: 0, cantidad: 0, proxVenc: null };
-        cur.saldo += calcSaldoFactura(f);
-        // Las NC restan del saldo pero no son "facturas pendientes" ni vencen.
-        if (!esNotaCredito(f.tipoComprobante)) cur.cantidad += 1;
-        if (!esNotaCredito(f.tipoComprobante) && f.fechaVencimiento && (!cur.proxVenc || f.fechaVencimiento < cur.proxVenc)) {
-          cur.proxVenc = f.fechaVencimiento;
-        }
-        saldosMap.set(f.proveedorId, cur);
-      }
+      // El MISMO cálculo que la ficha (services/saldo-proveedores.ts). Antes la
+      // lista sumaba sólo facturas y la ficha además restaba pagos a cuenta:
+      // el mismo proveedor daba dos saldos distintos.
+      const saldos = await saldosProveedores(proveedores.map((p) => p.id));
 
       return {
         proveedores: proveedores.map((p) => ({
           ...p,
-          // Puede quedar negativo si las notas de crédito superan a las facturas:
-          // es saldo a favor y se muestra como tal.
-          saldoAdeudado: (saldosMap.get(p.id)?.saldo ?? 0).toFixed(2),
-          facturasPendientes: saldosMap.get(p.id)?.cantidad ?? 0,
-          proximoVencimiento: saldosMap.get(p.id)?.proxVenc ?? null,
+          // Puede quedar negativo (a favor) si las notas de crédito o los pagos
+          // a cuenta vigentes superan a las facturas.
+          saldoAdeudado: (saldos.get(p.id)?.saldo ?? 0).toFixed(2),
+          facturasPendientes: saldos.get(p.id)?.facturasPendientes ?? 0,
+          proximoVencimiento: saldos.get(p.id)?.proximoVencimiento ?? null,
         })),
       };
+    },
+  );
+
+  // ── Conciliación de cuentas de proveedores (14/11) ─────────────────────
+  // Cierra facturas con saldo 0 que nadie tildó e imputa pagos sin factura
+  // que coinciden exacto con una factura. Ver services/conciliacion-proveedores.ts.
+  fastify.get(
+    '/admin/proveedores/conciliacion',
+    { preHandler: fastify.requireAuth([RolUsuario.ADMIN]) },
+    async () => vistaPreviaConciliacion(),
+  );
+
+  fastify.post(
+    '/admin/proveedores/conciliacion/aplicar',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        body: z.object({
+          cerrar: z.array(z.string().uuid()).max(5000).default([]),
+          imputar: z.array(z.string().uuid()).max(5000).default([]),
+        }),
+      },
+    },
+    async (req) => {
+      const body = req.body as { cerrar: string[]; imputar: string[] };
+      return aplicarConciliacion({ ...body, usuarioId: req.usuario!.id });
     },
   );
 
@@ -159,38 +169,25 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         .filter((f) => ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'].includes(f.estado))
         .reduce((acc, f) => acc + Number(f.saldo), 0);
 
-      // Pagos "a cuenta corriente": pagos hechos al proveedor que NO están
-      // asociados a una factura específica (pagosFactura join vacío). Ej:
-      // se paga $200k de un saldo de $400k desde Movimientos — queda como
-      // pago a cuenta sin asignar. La encargada después puede ir a "Pagar
-      // facturas" y asignarlo a una específica si quiere. Mientras tanto,
-      // descuenta del saldo total adeudado.
-      const pagosRaw = await prisma.pago.findMany({
-        where: {
-          movimiento: { entidadId: params.id, tipo: 'EGRESO' },
-          pagosFactura: { none: {} },
-        },
-        include: {
-          cuenta: { select: { nombre: true } },
-          movimiento: { select: { observacion: true } },
-        },
-        orderBy: { fecha: 'desc' },
-      });
-      const pagosACuenta = pagosRaw.map((p) => ({
-        id: p.id,
+      // Pagos sin factura: los VIGENTES (desde el corte) son crédito a favor y
+      // restan; los HISTÓRICOS (de cuando no se cargaban facturas) se muestran
+      // pero ya están saldados y no cuentan. Ver services/saldo-proveedores.ts.
+      const sinFactura = await pagosSinFactura([params.id]);
+      const aFila = (p: (typeof sinFactura)[number]) => ({
+        id: p.movimientoId,
+        movimientoId: p.movimientoId,
         fecha: p.fecha.toISOString(),
         metodo: p.metodo,
         monto: p.monto.toFixed(2),
-        cuentaNombre: p.cuenta?.nombre ?? null,
+        cuentaNombre: p.cuentaNombre,
         numeroReferencia: p.numeroReferencia,
-        observacion: p.movimiento?.observacion ?? null,
-      }));
-
-      // Saldo adeudado real = saldo de facturas pendientes - pagos a cuenta
-      // sin asignar (que son créditos a favor del proveedor todavía no
-      // imputados a ninguna factura).
-      const totalPagosACuenta = pagosACuenta.reduce((acc, p) => acc + Number(p.monto), 0);
-      // Sin piso en 0: si las notas de crédito (y los pagos a cuenta) superan a
+        observacion: p.observacion,
+      });
+      const pagosACuenta = sinFactura.filter((p) => !p.historico).map(aFila);
+      const pagosHistoricos = sinFactura.filter((p) => p.historico).map(aFila);
+      const totalPagosACuenta = sinFactura.filter((p) => !p.historico).reduce((acc, p) => acc + p.monto, 0);
+      const totalHistoricos = sinFactura.filter((p) => p.historico).reduce((acc, p) => acc + p.monto, 0);
+      // Sin piso en 0: si las notas de crédito o los pagos a cuenta superan a
       // las facturas, el proveedor nos debe a nosotros y eso se tiene que ver.
       const saldoAdeudado = saldoFacturas - totalPagosACuenta;
 
@@ -198,6 +195,9 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         proveedor: { ...proveedor, facturas: undefined },
         facturas,
         pagosACuenta,
+        pagosHistoricos,
+        totalHistoricos: totalHistoricos.toFixed(2),
+        corteHistoricos: CORTE_PAGOS_A_CUENTA.toISOString(),
         saldoFacturas: saldoFacturas.toFixed(2),
         totalPagosACuenta: totalPagosACuenta.toFixed(2),
         saldoAdeudado: saldoAdeudado.toFixed(2),
@@ -2138,9 +2138,23 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
         // pagó. Ése era el agujero — la encargada cargaba el egreso acá y las
         // facturas quedaban impagas para siempre.
         let imputacion: ReturnType<typeof planificarImputacion> | null = null;
-        if (body.facturas?.length) {
+        let autoImputada: { facturaId: string; numero: string | null } | null = null;
+        let elegidas = body.facturas;
+        if (!elegidas?.length) {
+          // Sin tildar nada, pero el monto es EXACTAMENTE el saldo de una
+          // factura abierta: es esa. Se tilda sola para que no quede "pagada
+          // pero pendiente" (caso Alimentos Roca, 783.259). Si no coincide
+          // con ninguna, sigue siendo un pago a cuenta como antes.
           const pendientes = await facturasPendientesDe(tx, body.proveedorId);
-          imputacion = planificarImputacion(pendientes, totalPagos, body.facturas);
+          const f = facturaQueCoincide(pendientes, totalPagos);
+          if (f) {
+            elegidas = [{ facturaId: f.id }];
+            autoImputada = { facturaId: f.id, numero: f.puntoVenta ? `${f.puntoVenta}-${f.numero}` : f.numero };
+          }
+        }
+        if (elegidas?.length) {
+          const pendientes = await facturasPendientesDe(tx, body.proveedorId);
+          imputacion = planificarImputacion(pendientes, totalPagos, elegidas);
           await aplicarImputacionRepartida(tx, {
             asignaciones: imputacion.asignaciones,
             facturas: pendientes,
@@ -2162,6 +2176,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           movs: lineasMov.map((x) => x.mov),
           pagos: lineasMov.map((x) => x.pago),
           imputacion,
+          autoImputada,
         };
       });
 
@@ -2175,6 +2190,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
             tipo: 'EGRESO',
             subtipo: 'pago_a_cuenta',
             proveedorId: body.proveedorId,
+            ...(result.autoImputada && { facturaAutoImputada: result.autoImputada }),
           },
         });
       }
@@ -2195,6 +2211,7 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
                 montoAplicado: a.montoAplicado.toFixed(2),
               })),
               excedente: result.imputacion.excedente.toFixed(2),
+              autoImputada: result.autoImputada,
             }
           : null,
       });
@@ -2240,7 +2257,8 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           // Una factura con saldo 0 sigue en PAGADA_PARCIAL hasta que alguien
           // la cierre; no tiene sentido ofrecerla para imputar.
           .filter((f) => Number(f.saldo) > 0.01),
-        totalAdeudado: (facturas.reduce((acc, f) => acc + Math.max(0, calcSaldoFactura(f)), 0) - aFavor).toFixed(2),
+        // El mismo saldo que la lista y la ficha (services/saldo-proveedores.ts).
+        totalAdeudado: ((await saldosProveedores([id])).get(id)?.saldo ?? 0).toFixed(2),
         /** Lo que suman las notas de crédito del proveedor (en positivo). */
         notasCreditoAFavor: aFavor.toFixed(2),
       };

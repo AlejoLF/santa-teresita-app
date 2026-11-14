@@ -76,6 +76,31 @@ export async function facturasPendientesDe(
 }
 
 /**
+ * La factura que un pago SIN selección vino a cancelar, si es inequívoca: la
+ * que tiene pendiente EXACTAMENTE ese monto (al centavo). Si hay varias con
+ * el mismo saldo, la más vieja. Si ninguna coincide, null: el pago queda a
+ * cuenta y nadie adivina.
+ *
+ * Por qué sólo coincidencia exacta y no FIFO: el FIFO "a ciegas" ya se probó
+ * y se sacó — con varias facturas abiertas cancelaba la que no era. Pero
+ * pagar el total de una factura por Aportes sin tildarla es lo que la
+ * encargada hace todos los días (incidente 14/11, Alimentos Roca: la factura
+ * de $783.259 quedó "pendiente" estando pagada). Un monto idéntico al saldo
+ * de una factura no es adivinar.
+ */
+export function facturaQueCoincide<T extends FacturaImputable & { tipoComprobante?: string | null }>(
+  pendientes: T[],
+  monto: number,
+): T | null {
+  for (const f of pendientes) {
+    if (f.tipoComprobante === 'NOTA_CREDITO') continue;
+    const saldo = calcSaldoFactura(f);
+    if (saldo > 0.01 && Math.abs(saldo - monto) <= 0.01) return f;
+  }
+  return null;
+}
+
+/**
  * Reparte `montoTotal` entre las facturas. No toca la base: devuelve el plan
  * para que el llamador lo valide o lo muestre antes de aplicarlo.
  */

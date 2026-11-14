@@ -51,6 +51,9 @@ interface DetalleResp {
   proveedor: Proveedor;
   facturas: Factura[];
   pagosACuenta: PagoACuenta[];
+  /** Pagos sin factura de antes de que se cargaran facturas: saldados, no cuentan. */
+  pagosHistoricos?: PagoACuenta[];
+  totalHistoricos?: string;
   saldoAdeudado: string;
 }
 
@@ -84,8 +87,10 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
   if (error) return <div className="text-pomodoro-600">{error}</div>;
   if (!data) return <div className="text-ink-500">Cargando...</div>;
 
+  // Una factura que ya no debe nada no está pendiente aunque su estado no se
+  // haya actualizado (se pagó por otro camino): no se ofrece para pagar.
   const facturasPendientes = data.facturas.filter((f) =>
-    ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'].includes(f.estado),
+    ['PENDIENTE_PAGO', 'PAGADA_PARCIAL'].includes(f.estado) && (esNC(f.tipoComprobante) || Number(f.saldo) > 0.01),
   );
   const facturasPagadas = data.facturas.filter((f) => f.estado === 'PAGADA');
 
@@ -441,6 +446,29 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
           </>
         )}
       </section>
+
+      {/* Pagos viejos sin factura: saldados, no cuentan como saldo a favor */}
+      {(data.pagosHistoricos?.length ?? 0) > 0 && (
+        <details className="card">
+          <summary className="px-4 py-3 cursor-pointer text-sm text-ink-700">
+            Pagos sin factura anteriores a la carga de facturas ({data.pagosHistoricos!.length}) ·{' '}
+            <MoneyAmount value={data.totalHistoricos ?? '0'} /> ·{' '}
+            <span className="text-ink-500">ya saldados, no cuentan como saldo a favor</span>
+          </summary>
+          <ul className="divide-y divide-cream-200 text-xs">
+            {data.pagosHistoricos!.map((p) => (
+              <li key={p.id} className="px-4 py-2 flex justify-between gap-3">
+                <span className="text-ink-700">
+                  {new Date(p.fecha).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })} · {p.metodo.replace('_', ' ').toLowerCase()}
+                  {p.cuentaNombre && ` · ${p.cuentaNombre}`}
+                  {p.observacion && <span className="text-ink-500"> · {p.observacion}</span>}
+                </span>
+                <MoneyAmount value={p.monto} className="text-ink-500" />
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       {/* Facturas pagadas */}
       {facturasPagadas.length > 0 && (

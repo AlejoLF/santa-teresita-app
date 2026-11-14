@@ -34,6 +34,17 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.78',
+    fecha: '14 de noviembre',
+    titulo: 'Saldos de proveedores arreglados',
+    cambios: [
+      'El saldo de cada proveedor ahora da lo mismo en la lista y adentro de la ficha.',
+      'Los pagos viejos que se hicieron sin factura (antes de cargar facturas en el sistema) ya no aparecen como saldo a favor: se muestran aparte, como ya saldados.',
+      'Si pagás a un proveedor por el monto exacto de una de sus facturas, esa factura se marca sola como pagada, aunque no la hayas tildado.',
+      'En Insumos → Proveedores aparece un aviso para dejar al día las facturas que ya estaban pagadas pero seguían como pendientes. Revisás la lista y tocás "Aplicar lo tildado".',
+    ],
+  },
+  {
     version: '2.0.0-alpha.77',
     fecha: '18 de octubre',
     titulo: 'Unificar dos fichas de la misma persona',
