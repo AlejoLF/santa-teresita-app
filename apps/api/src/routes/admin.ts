@@ -10,6 +10,7 @@ import { aplicarDevolucion, asentarDevolucion } from '../services/banco-horas.js
 import { agendaDeCumpleanos } from '../services/cumpleanos.js';
 import {
   facturasPendientesDe,
+  facturaQueCoincide,
   planificarImputacion,
   aplicarImputacion,
 } from '../services/imputacion-facturas.js';
@@ -1534,6 +1535,20 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         // escritura no puede meterse otro pago contra las mismas facturas.
         let imputacion: { asignaciones: Array<{ facturaId: string; montoAplicado: number }>; excedente: number } | null =
           null;
+        // Sin selección pero con un monto IDÉNTICO al saldo de una factura
+        // pendiente: es el pago de esa factura, se imputa sola (se "tilda").
+        // Ver facturaQueCoincide.
+        let autoImputada: { facturaId: string; numero: string } | null = null;
+        if (proveedor && !body.facturas?.length) {
+          const pendientes = await facturasPendientesDe(tx, proveedor.id);
+          const f = facturaQueCoincide(pendientes, monto);
+          if (f) {
+            imputacion = planificarImputacion(pendientes, monto, [{ facturaId: f.id }]);
+            await aplicarImputacion(tx, { asignaciones: imputacion.asignaciones, facturas: pendientes, movimientoId: mov.id, fecha });
+            await tx.proveedor.update({ where: { id: proveedor.id }, data: { ultimoMovimientoAt: fecha } });
+            autoImputada = { facturaId: f.id, numero: f.puntoVenta ? `${f.puntoVenta}-${f.numero}` : f.numero };
+          }
+        }
         if (proveedor && body.facturas?.length) {
           const pendientes = await facturasPendientesDe(tx, proveedor.id);
           imputacion = planificarImputacion(pendientes, monto, body.facturas);
@@ -1580,7 +1595,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           });
         }
 
-        return Object.assign(mov, { imputacion });
+        return Object.assign(mov, { imputacion, autoImputada });
       });
 
       await recordAudit({
@@ -1600,6 +1615,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             facturasImputadas: created.imputacion.asignaciones.length,
             excedente: created.imputacion.excedente.toFixed(2),
           }),
+          ...(created.autoImputada && { facturaAutoImputada: created.autoImputada }),
         },
       });
 
@@ -1615,6 +1631,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
                 montoAplicado: a.montoAplicado.toFixed(2),
               })),
               excedente: created.imputacion.excedente.toFixed(2),
+              // Sin selección: la factura que se tildó sola por coincidir el monto.
+              ...(created.autoImputada && { autoImputada: created.autoImputada }),
             }
           : null,
       });

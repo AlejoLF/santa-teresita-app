@@ -7,6 +7,7 @@ import { api, ApiError } from '@/lib/api';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { AvisosDePrecio } from '@/components/admin/AvisosDePrecio';
 import { ExcelProveedores } from '@/components/admin/ExcelProveedores';
+import { ConciliacionProveedores } from '@/components/admin/ConciliacionProveedores';
 import { cn } from '@/lib/cn';
 
 interface Proveedor {
@@ -197,6 +198,7 @@ function ProveedoresTab() {
 
   return (
     <div className="space-y-3">
+      <ConciliacionProveedores onAplicada={() => void fetchData()} />
       <div className="flex items-baseline justify-between">
         <div>
           <p className="text-sm text-ink-500">

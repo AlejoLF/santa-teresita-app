@@ -1137,7 +1137,9 @@ function FormNuevoMovimiento({
           // a la más nueva.
           ...(m.trim() !== '' && { monto: Number(m).toFixed(2) }),
         }));
-        await api.post('/admin/pagos-a-cuenta', {
+        const resp = await api.post<{
+          imputacion?: { autoImputada?: { numero: string | null } | null } | null;
+        }>('/admin/pagos-a-cuenta', {
           proveedorId,
           pagos: [
             {
@@ -1150,6 +1152,13 @@ function FormNuevoMovimiento({
           ...(facturas.length > 0 && { facturas }),
           observaciones: observacion || undefined,
         });
+        const auto = resp?.imputacion?.autoImputada;
+        if (auto && typeof window !== 'undefined') {
+          // El monto coincidía justo con una factura abierta: se tildó sola.
+          window.alert(
+            `El pago coincide con la factura ${auto.numero ?? ''} y se marcó como pagada.`,
+          );
+        }
         onCreated();
         return;
       }
