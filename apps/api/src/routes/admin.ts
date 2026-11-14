@@ -1053,6 +1053,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           tipo: z.enum(['INGRESO', 'EGRESO', 'TRANSFERENCIA_INTERNA', 'AJUSTE']).optional(),
           categoriaId: z.string().uuid().optional(),
           cuentaId: z.string().uuid().optional(),
+          // A quién (proveedor o empleado): el link "ver en Aportes y egresos"
+          // de la ficha de un proveedor.
+          entidadId: z.string().uuid().optional(),
           // Búsqueda libre: observación, categoría, cuenta origen/destino,
           // usuario y monto exacto.
           q: z.string().trim().min(1).max(80).optional(),
@@ -1079,6 +1082,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         tipo?: 'INGRESO' | 'EGRESO' | 'TRANSFERENCIA_INTERNA' | 'AJUSTE';
         categoriaId?: string;
         cuentaId?: string;
+        entidadId?: string;
         q?: string;
         periodo?: PeriodoBusqueda;
         sesion?: 'actual' | 'anterior';
@@ -1112,13 +1116,44 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       // Búsqueda libre multi-campo (convención del repo: buscar por TODOS los
       // campos visibles de la fila, no solo la descripción).
       const texto = q.q?.trim();
+      // Los pagos a proveedores (y los sueldos) guardan a QUIÉN se le pagó en
+      // `entidadId`, no en la observación — y los que se cargan desde Insumos
+      // y proveedores suelen venir con la observación vacía. Sin esto, buscar
+      // "Roca" acá no encontraba los pagos a Alimentos Roca aunque estuvieran
+      // (incidente 14/11). Se resuelven primero los ids que coinciden por nombre.
+      const ci = (v: string) => ({ contains: v, mode: 'insensitive' as const });
+      const entidadesQueCoinciden = texto
+        ? (
+            await Promise.all([
+              prisma.proveedor.findMany({
+                where: { OR: [{ nombre: ci(texto) }, { razonSocial: ci(texto) }, { cuit: ci(texto) }] },
+                select: { id: true },
+                take: 500,
+              }),
+              prisma.empleado.findMany({
+                where: { OR: [{ nombre: ci(texto) }, { apellido: ci(texto) }] },
+                select: { id: true },
+                take: 500,
+              }),
+            ])
+          )
+            .flat()
+            .map((e) => e.id)
+        : [];
       const orBusqueda = texto
         ? [
-            { observacion: { contains: texto, mode: 'insensitive' as const } },
-            { categoria: { nombre: { contains: texto, mode: 'insensitive' as const } } },
-            { cuentaOrigen: { nombre: { contains: texto, mode: 'insensitive' as const } } },
-            { cuentaDestino: { nombre: { contains: texto, mode: 'insensitive' as const } } },
-            { usuario: { nombre: { contains: texto, mode: 'insensitive' as const } } },
+            { observacion: ci(texto) },
+            { categoria: { nombre: ci(texto) } },
+            { cuentaOrigen: { nombre: ci(texto) } },
+            { cuentaDestino: { nombre: ci(texto) } },
+            { usuario: { nombre: ci(texto) } },
+            ...(entidadesQueCoinciden.length ? [{ entidadId: { in: entidadesQueCoinciden } }] : []),
+            // Nº de factura que pagó, nº de referencia/cuenta de cada pago (un
+            // pago repartido en varias cuentas tiene las cuentas en `pagos`).
+            { facturasAsociadas: { some: { factura: { numero: ci(texto) } } } },
+            { pagosFactura: { some: { factura: { numero: ci(texto) } } } },
+            { pagos: { some: { numeroReferencia: ci(texto) } } },
+            { pagos: { some: { cuenta: { nombre: ci(texto) } } } },
             ...(esBusquedaNumerica(texto) ? [{ monto: texto }] : []),
           ]
         : null;
@@ -1126,6 +1161,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const where = {
         ...(q.tipo && { tipo: q.tipo }),
         ...(q.categoriaId && { categoriaId: q.categoriaId }),
+        ...(q.entidadId && { entidadId: q.entidadId }),
         ...(ft.sesionCajaId && { sesionCajaId: ft.sesionCajaId }),
         // El rango por fecha solo aplica cuando NO se filtró por sesión.
         ...whereRangoFecha('fechaComputo', ft),
@@ -1135,7 +1171,18 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         ...((q.cuentaId || orBusqueda) && {
           AND: [
             ...(q.cuentaId
-              ? [{ OR: [{ cuentaOrigenId: q.cuentaId }, { cuentaDestinoId: q.cuentaId }] }]
+              ? [
+                  {
+                    OR: [
+                      { cuentaOrigenId: q.cuentaId },
+                      { cuentaDestinoId: q.cuentaId },
+                      // Pagos viejos repartidos en varias cuentas: UN movimiento
+                      // sin cuenta de origen, con las cuentas en `pagos`. Sin
+                      // esto no aparecían al filtrar por cuenta.
+                      { pagos: { some: { cuentaId: q.cuentaId } } },
+                    ],
+                  },
+                ]
               : []),
             ...(orBusqueda ? [{ OR: orBusqueda }] : []),
           ],

@@ -197,13 +197,17 @@ export default function AdminMovimientosPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const cuentaIdParam = searchParams.get('cuentaId') ?? '';
+  // Viniendo de la ficha de un proveedor ("ver en Aportes y egresos"): sólo
+  // los movimientos de esa persona/proveedor, en toda la base.
+  const entidadIdParam = searchParams.get('entidadId') ?? '';
+  const entidadNombreParam = searchParams.get('entidadNombre') ?? '';
 
   const [data, setData] = useState<Listado | null>(null);
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
   const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [tipoFiltro, setTipoFiltro] = useState<string>('');
   const [cuentaFiltro, setCuentaFiltro] = useState<string>(cuentaIdParam);
-  const [periodo, setPeriodo] = useState<Periodo>('sesion');
+  const [periodo, setPeriodo] = useState<Periodo>(entidadIdParam ? 'todo' : 'sesion');
   const [customDesde, setCustomDesde] = useState('');
   const [customHasta, setCustomHasta] = useState('');
   const [page, setPage] = useState(1);
@@ -237,6 +241,7 @@ export default function AdminMovimientosPage() {
     const params = new URLSearchParams();
     if (tipoFiltro) params.set('tipo', tipoFiltro);
     if (cuentaFiltro) params.set('cuentaId', cuentaFiltro);
+    if (entidadIdParam) params.set('entidadId', entidadIdParam);
     if (busquedaDebounced) params.set('q', busquedaDebounced);
     if (periodo === 'todo') {
       // Sin ventana temporal: el server barre toda la base y pagina.
@@ -256,7 +261,7 @@ export default function AdminMovimientosPage() {
       if (hasta) params.set('hasta', hasta);
     }
     return params;
-  }, [tipoFiltro, cuentaFiltro, busquedaDebounced, periodo, customDesde, customHasta]);
+  }, [tipoFiltro, cuentaFiltro, entidadIdParam, busquedaDebounced, periodo, customDesde, customHasta]);
 
   const fetchMovimientos = useCallback(async () => {
     setLoading(true);
@@ -274,7 +279,7 @@ export default function AdminMovimientosPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, tipoFiltro, cuentaFiltro, periodo, customDesde, customHasta, busquedaDebounced]);
+  }, [page, paramsDeFiltros]);
 
   // Mantener URL en sync con el filtro (para que se pueda compartir el link)
   function setCuentaFiltroSync(id: string) {
@@ -361,9 +366,23 @@ export default function AdminMovimientosPage() {
             type="search"
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            placeholder="🔎 Buscar: descripción, categoría, cuenta, quién cargó, monto…"
+            placeholder="🔎 Buscar: proveedor, empleado, nº de factura, descripción, categoría, cuenta, monto…"
             className="input flex-1 min-w-[240px]"
           />
+          {entidadIdParam && (
+            <button
+              onClick={() => {
+                const next = new URLSearchParams(searchParams.toString());
+                next.delete('entidadId');
+                next.delete('entidadNombre');
+                router.replace(`/admin/movimientos${next.toString() ? `?${next.toString()}` : ''}`);
+              }}
+              className="px-2.5 py-1 rounded-full text-xs font-medium bg-teresita-100 text-teresita-700 hover:bg-teresita-200"
+              title="Quitar este filtro"
+            >
+              Sólo {entidadNombreParam || 'este proveedor'} ✕
+            </button>
+          )}
           {(busqueda || periodo !== 'sesion') && (
             <button
               onClick={() => {
