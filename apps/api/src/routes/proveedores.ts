@@ -12,6 +12,7 @@ import { recordAudit } from '../services/audit.js';
 import { calcSaldoFactura, esNotaCredito, importeConSigno } from '../services/facturas.js';
 import { pagosSinFactura, saldosProveedores, CORTE_PAGOS_A_CUENTA } from '../services/saldo-proveedores.js';
 import { aplicarConciliacion, vistaPreviaConciliacion } from '../services/conciliacion-proveedores.js';
+import { buscarActividad, type ClaseActividad, type EstadoActividad } from '../services/actividad-proveedores.js';
 import { PROVEEDOR_SIN_IDENTIFICAR } from '../services/proveedor-sin-identificar.js';
 import {
   facturasPendientesDe,
@@ -135,6 +136,113 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
     async (req) => {
       const body = req.body as { cerrar: string[]; imputar: string[] };
       return aplicarConciliacion({ ...body, usuarioId: req.usuario!.id });
+    },
+  );
+
+  // GET /admin/proveedores/actividad — buscador de facturas + pagos (14/11).
+  // Mismos filtros que Aportes y egresos. `proveedorId` lo acota a la ficha.
+  fastify.get(
+    '/admin/proveedores/actividad',
+    {
+      preHandler: fastify.requireAuth([RolUsuario.ADMIN]),
+      schema: {
+        querystring: z.object({
+          proveedorId: z.string().uuid().optional(),
+          q: z.string().trim().min(1).max(80).optional(),
+          clase: z.enum(['FACTURA', 'NOTA_CREDITO', 'PAGO']).optional(),
+          estado: z.enum(['PENDIENTE', 'PAGADA', 'ANULADA']).optional(),
+          periodo: periodoBusquedaSchema.optional(),
+          desde: z.string().datetime().optional(),
+          hasta: z.string().datetime().optional(),
+          ...paginacionSchema,
+          formato: z.enum(['json', 'xlsx']).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const q = req.query as {
+        proveedorId?: string;
+        q?: string;
+        clase?: ClaseActividad;
+        estado?: EstadoActividad;
+        periodo?: PeriodoBusqueda;
+        desde?: string;
+        hasta?: string;
+        page: number;
+        pageSize: number;
+        formato?: 'json' | 'xlsx';
+      };
+      const periodo: PeriodoBusqueda = q.periodo ?? (q.desde || q.hasta ? 'custom' : 'todo');
+      const ft = await resolverFiltroTemporal({ periodo, desde: q.desde, hasta: q.hasta });
+      const texto = q.q?.trim();
+      const TOPE = 5000;
+      const r = await buscarActividad({
+        proveedorId: q.proveedorId,
+        texto,
+        clase: q.clase,
+        estado: q.estado,
+        ft,
+        page: q.page,
+        pageSize: q.pageSize,
+        ...(q.formato === 'xlsx' && { tope: TOPE }),
+      });
+
+      if (q.formato === 'xlsx') {
+        const CLASE: Record<string, string> = { FACTURA: 'Factura', NOTA_CREDITO: 'Nota de crédito', PAGO: 'Pago' };
+        const buf = await construirExcelBusqueda({
+          titulo: 'Proveedores',
+          filtros: descripcionFiltros({
+            periodo,
+            desde: ft.desde,
+            hasta: ft.hasta,
+            texto,
+            extra: [q.clase && `Tipo: ${CLASE[q.clase]}`, q.estado && `Estado: ${q.estado}`]
+              .filter(Boolean)
+              .join(' · ') || undefined,
+          }),
+          columnas: [
+            { header: 'Fecha', key: 'fecha', tipo: 'fecha' },
+            { header: 'Tipo', key: 'clase', width: 16 },
+            { header: 'Proveedor', key: 'proveedor', width: 28 },
+            { header: 'Comprobante / pago', key: 'descripcion', width: 34 },
+            { header: 'Detalle', key: 'detalle', width: 40 },
+            { header: 'Estado', key: 'estado', width: 16 },
+            { header: 'Facturado', key: 'facturado', tipo: 'dinero' },
+            { header: 'Pagado', key: 'pagado', tipo: 'dinero' },
+            { header: 'Saldo factura', key: 'saldo', tipo: 'dinero' },
+          ],
+          filas: r.filas.map((f) => ({
+            fecha: new Date(f.fecha),
+            clase: CLASE[f.clase],
+            proveedor: f.proveedorNombre,
+            descripcion: f.descripcion,
+            detalle: f.detalle ?? '',
+            estado: f.historico ? 'SALDADO (histórico)' : f.estado,
+            facturado: f.clase !== 'PAGO' && f.estado !== 'ANULADA' ? Number(f.monto) : null,
+            pagado: f.clase === 'PAGO' && f.estado === 'CONFIRMADO' ? Number(f.monto) : null,
+            saldo: f.saldo != null ? Number(f.saldo) : null,
+          })),
+          totales: [
+            { etiqueta: 'TOTAL FACTURADO', columna: 'facturado' },
+            { etiqueta: 'TOTAL PAGADO', columna: 'pagado' },
+            { etiqueta: 'Cantidad', valor: r.filas.length },
+          ],
+          hayMas: r.total > r.filas.length ? { exportadas: r.filas.length, totales: r.total } : undefined,
+        });
+        return reply
+          .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+          .header(
+            'Content-Disposition',
+            `attachment; filename="${nombreArchivoExport('proveedores', { periodo, desde: ft.desde, hasta: ft.hasta, texto })}"`,
+          )
+          .send(buf);
+      }
+
+      return {
+        filas: r.filas,
+        sumas: r.sumas,
+        ...armarPaginacion(r.total, q.page, q.pageSize),
+      };
     },
   );
 
@@ -2150,6 +2258,13 @@ export default async function proveedoresRoutes(fastify: FastifyInstance) {
           if (f) {
             elegidas = [{ facturaId: f.id }];
             autoImputada = { facturaId: f.id, numero: f.puntoVenta ? `${f.puntoVenta}-${f.numero}` : f.numero };
+            // La observación por defecto decía "sin factura específica": ya no es así.
+            if (!body.observaciones) {
+              await tx.movimiento.updateMany({
+                where: { id: { in: lineasMov.map((x) => x.mov.id) } },
+                data: { observacion: `Pago factura ${autoImputada.numero} · ${proveedor.nombre}` },
+              });
+            }
           }
         }
         if (elegidas?.length) {

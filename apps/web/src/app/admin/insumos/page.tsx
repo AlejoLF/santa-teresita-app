@@ -7,6 +7,7 @@ import { api, ApiError } from '@/lib/api';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { AvisosDePrecio } from '@/components/admin/AvisosDePrecio';
 import { ExcelProveedores } from '@/components/admin/ExcelProveedores';
+import { ActividadProveedores } from '@/components/admin/ActividadProveedores';
 import { ConciliacionProveedores } from '@/components/admin/ConciliacionProveedores';
 import { cn } from '@/lib/cn';
 
@@ -157,6 +158,7 @@ function ProveedoresTab() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [modalEdit, setModalEdit] = useState<'nuevo' | string | null>(null);
+  const [vista, setVista] = useState<'lista' | 'buscar'>('lista');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -199,6 +201,31 @@ function ProveedoresTab() {
   return (
     <div className="space-y-3">
       <ConciliacionProveedores onAplicada={() => void fetchData()} />
+      {/* Dos vistas: la lista de proveedores (con su saldo) y el buscador de
+          facturas y pagos de todos, igual al de Aportes y egresos. */}
+      <nav className="flex gap-1" role="tablist">
+        {([
+          ['lista', 'Proveedores'],
+          ['buscar', '🔎 Buscar facturas y pagos'],
+        ] as const).map(([clave, label]) => (
+          <button
+            key={clave}
+            role="tab"
+            aria-selected={vista === clave}
+            onClick={() => setVista(clave)}
+            className={cn(
+              'px-3 py-1.5 rounded-md text-sm transition-colors',
+              vista === clave ? 'bg-teresita-700 text-cream-50 font-medium' : 'bg-cream-200 text-ink-700 hover:bg-cream-300',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+      {vista === 'buscar' ? (
+        <ActividadProveedores />
+      ) : (
+      <>
       <div className="flex items-baseline justify-between">
         <div>
           <p className="text-sm text-ink-500">
@@ -421,6 +448,8 @@ function ProveedoresTab() {
           })}
         </div>
       </section>
+      </>
+      )}
 
       {modalEdit && (
         <ProveedorEditModal

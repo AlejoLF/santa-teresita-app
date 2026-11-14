@@ -34,6 +34,17 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.79',
+    fecha: '14 de noviembre',
+    titulo: 'Buscador en proveedores',
+    cambios: [
+      'En Insumos y proveedores hay un botón "Buscar facturas y pagos": buscás por proveedor, número de factura, monto, cuenta o referencia, y filtrás por tipo, estado y fecha, igual que en Aportes y egresos. Se puede exportar a Excel.',
+      'Adentro de cada proveedor está el mismo buscador, sólo con lo de ese proveedor.',
+      'En Aportes y egresos ahora aparecen los pagos a proveedores cuando buscás por el nombre del proveedor o por el número de factura (antes sólo si estaba escrito en la aclaración).',
+      'Los pagos viejos repartidos en varias cuentas ahora aparecen al filtrar por cuenta.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.78',
     fecha: '14 de noviembre',
     titulo: 'Saldos de proveedores arreglados',

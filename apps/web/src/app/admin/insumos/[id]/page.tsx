@@ -10,6 +10,7 @@ import {
   type InsumoSuggestion,
 } from '@/components/admin/InsumoAutocomplete';
 import { cn } from '@/lib/cn';
+import { ActividadProveedores } from '@/components/admin/ActividadProveedores';
 import { InsumosDelProveedor } from '@/components/admin/InsumosDelProveedor';
 
 interface Proveedor {
@@ -67,7 +68,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
   const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
   // Cuenta corriente (lo que se le debe) e Insumos (lo que se le compra) son
   // dos cosas distintas y la ficha se hacía larguísima con las dos juntas.
-  const [pestana, setPestana] = useState<'cuenta' | 'insumos'>('cuenta');
+  const [pestana, setPestana] = useState<'cuenta' | 'insumos' | 'buscar'>('cuenta');
 
   const fetchData = useCallback(async () => {
     try {
@@ -143,6 +144,7 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
       <nav className="flex gap-1 border-b border-cream-300" role="tablist">
         {([
           ['cuenta', 'Cuenta corriente'],
+          ['buscar', '🔎 Buscar facturas y pagos'],
           ['insumos', 'Insumos'],
         ] as const).map(([clave, label]) => (
           <button
@@ -163,6 +165,10 @@ export default function DetalleProveedorPage({ params }: { params: Promise<{ id:
       </nav>
 
       {pestana === 'insumos' && <InsumosDelProveedor proveedorId={id} />}
+
+      {pestana === 'buscar' && (
+        <ActividadProveedores proveedorId={id} proveedorNombre={data.proveedor.nombre} />
+      )}
 
       {pestana === 'cuenta' && (
         <>
