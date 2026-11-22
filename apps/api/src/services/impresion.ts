@@ -268,6 +268,20 @@ function fichaProductoItem(producto: ProductoFicha | null | undefined): {
  * cuando la venta es DELIVERY_*. La cocinera ve TODO en una sola hoja:
  * items de cocina + a quién/dónde se entrega.
  */
+/**
+ * "HH:MM" en hora argentina. Antes era `toISOString().slice(11, 16)`, que da
+ * la hora UTC: la comanda imprimía 3 horas de más (13:54 para un pedido de
+ * las 10:54).
+ */
+export function horaAR(d: Date): string {
+  return d.toLocaleTimeString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
 export async function buildComandaPayload(
   ventaId: string,
   client: DbClient = prisma,
@@ -334,7 +348,7 @@ export async function buildComandaPayload(
     // en el programa cuando le acercan el ticket.
     numeroOrden: venta.numeroOrdenTurno,
     numeroVenta: venta.numero,
-    hora: venta.fechaApertura.toISOString().slice(11, 16),
+    hora: horaAR(venta.fechaApertura),
     canal: venta.canal,
     items: venta.items.map((it) => {
       const mods =
@@ -374,6 +388,144 @@ export async function buildComandaPayload(
     total: venta.total.toFixed(2),
     pcOrigen: venta.pcOrigen,
     delivery,
+    // Pedido de RAPPI: la comanda sale con el formato del ticket de RAPPI
+    // (ver `datosComandaRappi`). Un agente viejo ignora este campo e imprime
+    // la comanda de siempre.
+    ...(venta.canal === 'RAPPI' && {
+      rappi: datosComandaRappi(venta.payloadExterno, {
+        idExternoCanal: venta.idExternoCanal,
+        clienteNombre: (venta.deliveryInfo?.direccionSnapshot as { clienteNombre?: string } | null)?.clienteNombre,
+        modalidad: venta.modalidad,
+        items: venta.items.map((it) => ({
+          cantidad: Number(it.cantidad),
+          nombre: it.nombreSnapshot,
+          subtotal: Number(it.subtotal),
+          observacion: it.observacion,
+        })),
+        total: Number(venta.total),
+      }),
+    }),
+  };
+}
+
+/** Lo que la comanda de un pedido de RAPPI imprime con el formato de RAPPI. */
+export interface ComandaRappi {
+  cliente: string;
+  idOrden: string;
+  restaurante: string | null;
+  plataforma: string | null;
+  fechaOrden: string | null;
+  /** "AGENDADO" de RAPPI: para cuándo hay que tenerlo. */
+  programadoPara: string | null;
+  retiraCliente: boolean;
+  items: Array<{ cantidad: number; nombre: string; importe: number; detalles: string[]; comentario: string | null }>;
+  cantidadProductos: number;
+  subtotal: number;
+  descuentos: number;
+  totalSugerido: number;
+}
+
+/**
+ * Los datos del ticket que imprime la tablet de RAPPI (pedido de la encargada,
+ * 22/11): cliente, ID de RAPPI, restaurante, plataforma, fecha, el detalle con
+ * los nombres y precios DE RAPPI, subtotal y "total sugerido a facturar", y
+ * abajo el "verificá los productos" con casilleros. Antes salían en dos
+ * papeles; ahora es una sola comanda.
+ *
+ * Se arma del pedido crudo de RAPPI (`payloadExterno`) para que los nombres
+ * sean los que ve el repartidor. Si no está (orden cargada a mano por el
+ * puente neutral), cae a los ítems de la venta.
+ */
+export function datosComandaRappi(
+  payloadExterno: unknown,
+  venta: {
+    idExternoCanal: string | null;
+    clienteNombre?: string | null;
+    modalidad: string;
+    items: Array<{ cantidad: number; nombre: string; subtotal: number; observacion: string | null }>;
+    total: number;
+  },
+): ComandaRappi {
+  type Item = {
+    name?: string;
+    sku?: string | number;
+    type?: string;
+    quantity?: number;
+    price?: number;
+    unit_price_with_discount?: number;
+    comments?: string | null;
+    subitems?: Item[];
+  };
+  const p = (payloadExterno && typeof payloadExterno === 'object' ? payloadExterno : {}) as {
+    order_detail?: {
+      order_id?: string | number;
+      created_at?: string;
+      place_at?: string | null;
+      delivery_method?: string;
+      platform?: string;
+      totals?: Record<string, unknown>;
+      items?: Item[];
+    };
+    customer?: { first_name?: string; last_name?: string } | null;
+    store?: { name?: string } | null;
+    platform?: string;
+  };
+  const od = p.order_detail ?? {};
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const unit = (it: Item) => num(it.unit_price_with_discount) ?? num(it.price) ?? 0;
+
+  const itemsRappi = (od.items ?? []).filter((it) => !it.type || /product/i.test(it.type));
+  const items: ComandaRappi['items'] = itemsRappi.length
+    ? itemsRappi.map((it) => {
+        const q = Number(it.quantity ?? 1) || 1;
+        let extras = 0;
+        const detalles: string[] = [];
+        for (const sub of it.subitems ?? []) {
+          const sq = Number(sub.quantity ?? 1) || 1;
+          extras += unit(sub) * sq;
+          const n = sub.name?.trim() || String(sub.sku ?? '');
+          if (n) detalles.push(sq > 1 ? `${sq}x ${n}` : n);
+        }
+        return {
+          cantidad: q,
+          nombre: it.name?.trim() || String(it.sku ?? 'Producto'),
+          importe: Math.round((unit(it) + extras) * q * 100) / 100,
+          detalles,
+          comentario: it.comments?.trim() || null,
+        };
+      })
+    : venta.items.map((it) => ({
+        cantidad: it.cantidad,
+        nombre: it.nombre,
+        importe: it.subtotal,
+        detalles: [],
+        comentario: it.observacion,
+      }));
+
+  const sumaItems = items.reduce((a, it) => a + it.importe, 0);
+  const t = od.totals ?? {};
+  const subtotal = num(t.total_products_without_discount) ?? num(t.total_products) ?? (itemsRappi.length ? sumaItems : venta.total);
+  const totalSugerido = num(t.total_products_with_discount) ?? subtotal;
+  const cliente =
+    p.customer?.first_name?.trim() ||
+    [p.customer?.last_name].filter(Boolean).join(' ').trim() ||
+    venta.clienteNombre?.trim() ||
+    'Cliente RAPPI';
+  const plataforma = [od.platform, p.platform].find((x) => typeof x === 'string' && x.trim());
+
+  return {
+    cliente,
+    idOrden: String(od.order_id ?? venta.idExternoCanal ?? '—'),
+    restaurante: p.store?.name?.trim() || null,
+    plataforma: plataforma ? String(plataforma).trim().toUpperCase() : null,
+    fechaOrden: od.created_at ? String(od.created_at).slice(0, 16) : null,
+    programadoPara: od.place_at ? String(od.place_at).slice(0, 16) : null,
+    retiraCliente: venta.modalidad === 'TAKE_AWAY',
+    items,
+    cantidadProductos: items.reduce((a, it) => a + it.cantidad, 0),
+    subtotal,
+    descuentos: Math.max(0, Math.round((subtotal - totalSugerido) * 100) / 100),
+    totalSugerido,
   };
 }
 
@@ -976,7 +1128,7 @@ export async function encolarComandaEncargo(
   const payload = {
     numeroOrden: venta.numeroOrdenTurno,
     numeroVenta: venta.numero,
-    hora: venta.fechaApertura.toISOString().slice(11, 16),
+    hora: horaAR(venta.fechaApertura),
     estado,
     tipoEntrega: venta.tipoEntregaEncargo ?? (direccion ? 'ENVIO' : 'RETIRO'),
     // YYYY-MM-DD (UTC, tal como se guardó @db.Date).
