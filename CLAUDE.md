@@ -309,6 +309,34 @@ se auto-actualiza. Desde el bootstrap se sumó, entre otras cosas:
 
 Detalle en [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md). Resumen:
 
+> ### ⛔ NUNCA publicar con el local abierto (orden del dueño, 22/11/2026)
+>
+> **No disparar *Release Desktop* ni *Release Server* con `inmediato=true`
+> durante el horario de atención**, salvo que el dueño diga explícitamente
+> "sí, publicalo ahora" para ESA actualización. Por qué: cada caja busca
+> versión nueva cada 4 h y, si la encuentra, **se reinicia sola a los 3
+> segundos** (`apps/desktop/main.js`, `update-downloaded` → `quitAndInstall`),
+> sin esperar a nadie: corta a la cajera en medio de un pedido. Y el
+> `inmediato` de S1 reinicia el server con las cajas conectadas. Incidente:
+> 22/11, alpha.80 y alpha.81 publicadas un domingo a las 20:34 y 20:45 AR.
+>
+> **Horario (hora ARGENTINA, UTC−3 todo el año, sin horario de verano)** —
+> default de `services/horarios.ts`; la encargada puede editarlo en
+> Configuración → Horarios, así que si hay dudas, preguntar:
+>
+> | Días | Abierto (AR) | Abierto (UTC) |
+> |-|-|-|
+> | Lunes a sábado | 07:00 – 22:00 (+30 min de cierre) | 10:00 – 01:30 del día siguiente |
+> | Domingo | 17:00 – 22:00 (+30 min de cierre) | 20:00 – 01:30 del lunes |
+>
+> **Ventana segura para publicar: de 22:30 a 06:30 AR** (01:30–09:30 UTC), y
+> los domingos también antes de las 16:30 AR (19:30 UTC). El reloj de la
+> sesión está en UTC y el dueño puede escribir desde otro huso (Europa):
+> convertir siempre a hora argentina antes de decidir. Mergear a `main` fuera
+> de esa ventana está bien (Vercel/Railway no reinician las cajas), pero el
+> release se dispara en la ventana. *Release Server* SIN `inmediato` se puede
+> disparar a cualquier hora: S1 lo aplica solo a las 4 AM.
+
 - **ANTES de publicar: escribí las novedades.** Agregá una entrada nueva arriba de
   todo en `apps/web/src/lib/novedades.ts` con la versión que va a salir. Es lo que
   ve la encargada y las empleadas al abrir la app actualizada (cartel una vez por
