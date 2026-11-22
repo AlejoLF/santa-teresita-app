@@ -303,8 +303,8 @@ function plataRappi(n: number): string {
  * Parte 1: "Rappi", cliente, ID en recuadro, restaurante / plataforma / fecha,
  * recuadro DETALLE ORDEN · PRODUCTOS:N, ítems con importe, Subtotal y
  * "Total sugerido a facturar".
- * Parte 2 (mismo papel): cliente, ID, restaurante, recuadro VERIFICA LOS
- * PRODUCTOS · Total:N y los ítems con casillero.
+ * Al pie: cliente, ID y restaurante otra vez, y nuestro nº de pedido. La
+ * parte "VERIFICA LOS PRODUCTOS" de la tablet NO va (pedido del 22/11).
  *
  * Lo que agrega el sistema, al pie y chico: nº de pedido del turno y nº de
  * venta del programa. Cancelada y reimpresión, como en la comanda común.
@@ -345,14 +345,6 @@ async function imprimirComandaRappi(
     }
     if (resto) out.push(resto);
     return out;
-  };
-  /** Un texto que, si no entra, sigue en los renglones de abajo con sangría. */
-  const parrafo = (t: string, sangria: string): void => {
-    const limpio = txt(t);
-    const lead = limpio.match(/^ */)?.[0] ?? '';
-    const [primera = '', ...resto] = partir(limpio, width - lead.length);
-    printer.println(`${lead}${primera}`);
-    for (const r2 of partir(resto.join(' '), width - sangria.length)) printer.println(`${sangria}${r2}`);
   };
   /** Texto a la izquierda y monto pegado al margen; si no entra, el texto sigue abajo. */
   const linea = (izq: string, der: string): void => {
@@ -439,25 +431,14 @@ async function imprimirComandaRappi(
   printer.newLine();
   printer.newLine();
 
-  // ── Parte 2: verificá los productos (mismo papel) ──────────────────────
+  // ── Pie: cliente, ID y restaurante de nuevo, y nuestro nº de pedido ────
+  // El "VERIFICA LOS PRODUCTOS" con casilleros se sacó a pedido de la
+  // encargada (22/11): no lo usan.
   printer.alignCenter();
   printer.println(txt(r.cliente));
   printer.println(txt(`ID ${r.idOrden}`));
   if (r.restaurante) printer.println(txt(r.restaurante));
-  printer.alignLeft();
-  printer.println(borde);
-  printer.bold(true);
-  printer.println(enCaja('VERIFICA LOS PRODUCTOS', `Total:${r.cantidadProductos}`));
-  printer.bold(false);
-  printer.println(borde);
-  for (const it of r.items) {
-    parrafo(`[ ] ${it.cantidad}x ${it.nombre}`, '    ');
-    for (const d of it.detalles) parrafo(`      + ${d}`, '        ');
-  }
-  printer.println('-'.repeat(width));
-
-  // Lo nuestro, al pie y chico: para buscarlo en el programa.
-  printer.alignCenter();
+  // Lo nuestro: para buscarlo en el programa.
   printer.println(
     txt(
       `Pedido #${String(payload.numeroOrden).padStart(3, '0')} · ${payload.hora}` +
