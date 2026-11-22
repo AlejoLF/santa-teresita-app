@@ -34,6 +34,14 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.81',
+    fecha: '23 de noviembre',
+    titulo: 'Comanda de RAPPI más corta',
+    cambios: [
+      'La comanda de RAPPI ya no trae la parte de "Verifica los productos": después del total sugerido a facturar va el nombre del cliente, el ID, el restaurante y el número de pedido.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.80',
     fecha: '22 de noviembre',
     titulo: 'Comanda de RAPPI igual al ticket de RAPPI',
