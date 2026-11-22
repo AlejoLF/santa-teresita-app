@@ -266,6 +266,209 @@ export interface ComandaPayload {
    * cobrado (`PAGADO: <método>`) o va a cobrar (`A COBRAR`).
    */
   pago?: { estado: 'PAGADO' | 'A_COBRAR'; metodo?: string };
+  /** Pedido de RAPPI: si viene, la comanda sale con el formato de RAPPI. */
+  rappi?: ComandaRappi;
+}
+
+/** Ver `datosComandaRappi` en apps/api/src/services/impresion.ts. */
+export interface ComandaRappi {
+  cliente: string;
+  idOrden: string;
+  restaurante: string | null;
+  plataforma: string | null;
+  fechaOrden: string | null;
+  programadoPara: string | null;
+  retiraCliente: boolean;
+  items: Array<{ cantidad: number; nombre: string; importe: number; detalles: string[]; comentario: string | null }>;
+  cantidadProductos: number;
+  subtotal: number;
+  descuentos: number;
+  totalSugerido: number;
+}
+
+/** "$28.000" (sin centavos si es entero, como el ticket de RAPPI). */
+function plataRappi(n: number): string {
+  const entero = Math.abs(n - Math.round(n)) < 0.005;
+  return `$${n.toLocaleString('es-AR', {
+    minimumFractionDigits: entero ? 0 : 2,
+    maximumFractionDigits: entero ? 0 : 2,
+  })}`;
+}
+
+/**
+ * Comanda de un pedido de RAPPI con el MISMO formato que el ticket de la
+ * tablet de RAPPI (foto de la encargada, 22/11), pero en UN solo papel: antes
+ * salían dos (el detalle con precios y el "verificá los productos").
+ *
+ * Parte 1: "Rappi", cliente, ID en recuadro, restaurante / plataforma / fecha,
+ * recuadro DETALLE ORDEN · PRODUCTOS:N, ítems con importe, Subtotal y
+ * "Total sugerido a facturar".
+ * Parte 2 (mismo papel): cliente, ID, restaurante, recuadro VERIFICA LOS
+ * PRODUCTOS · Total:N y los ítems con casillero.
+ *
+ * Lo que agrega el sistema, al pie y chico: nº de pedido del turno y nº de
+ * venta del programa. Cancelada y reimpresión, como en la comanda común.
+ * Los bordes son ASCII a propósito: los caracteres de caja dependen de la
+ * página de códigos de cada comandera.
+ */
+async function imprimirComandaRappi(
+  payload: ComandaPayload & { rappi: ComandaRappi },
+  destino: DestinoImpresora,
+): Promise<void> {
+  const r = payload.rappi;
+  const printer = makePrinter(destino);
+  const width = getPrinterConfig(destino).width;
+  // La comandera de DELIVERY tiene una página de códigos que no soporta acentos.
+  const txt = destino === 'DELIVERY' ? ascii : limpiar;
+  const borde = `+${'-'.repeat(width - 2)}+`;
+  /** "| DETALLE ORDEN          PRODUCTOS:12 |" */
+  const enCaja = (izq: string, der: string): string => {
+    const dentro = width - 4;
+    const i = txt(izq).slice(0, Math.max(0, dentro - der.length - 1));
+    return `| ${i}${' '.repeat(Math.max(1, dentro - i.length - der.length))}${der} |`;
+  };
+  const centradoEnCaja = (t: string): string => {
+    const dentro = width - 2;
+    const c = txt(t).slice(0, dentro);
+    const izq = Math.floor((dentro - c.length) / 2);
+    return `|${' '.repeat(izq)}${c}${' '.repeat(dentro - c.length - izq)}|`;
+  };
+  /** Parte `t` en renglones de `ancho`, cortando en espacios. */
+  const partir = (t: string, ancho: number): string[] => {
+    const out: string[] = [];
+    let resto = t.trim();
+    while (resto.length > ancho) {
+      let corte = resto.lastIndexOf(' ', ancho);
+      if (corte < ancho / 2) corte = ancho;
+      out.push(resto.slice(0, corte).trimEnd());
+      resto = resto.slice(corte).trim();
+    }
+    if (resto) out.push(resto);
+    return out;
+  };
+  /** Un texto que, si no entra, sigue en los renglones de abajo con sangría. */
+  const parrafo = (t: string, sangria: string): void => {
+    const limpio = txt(t);
+    const lead = limpio.match(/^ */)?.[0] ?? '';
+    const [primera = '', ...resto] = partir(limpio, width - lead.length);
+    printer.println(`${lead}${primera}`);
+    for (const r2 of partir(resto.join(' '), width - sangria.length)) printer.println(`${sangria}${r2}`);
+  };
+  /** Texto a la izquierda y monto pegado al margen; si no entra, el texto sigue abajo. */
+  const linea = (izq: string, der: string): void => {
+    const [primera = '', ...resto] = partir(txt(izq), width - der.length - 1);
+    printer.println(`${primera}${' '.repeat(Math.max(1, width - primera.length - der.length))}${der}`);
+    for (const r2 of partir(resto.join(' '), width - 3)) printer.println(`   ${r2}`);
+  };
+
+  printer.alignCenter();
+  if (payload.esCancelada) {
+    printer.bold(true);
+    printer.invert(true);
+    printer.setTextSize(2, 2);
+    printer.println(' CANCELADA ');
+    printer.setTextNormal();
+    printer.invert(false);
+    printer.bold(false);
+    printer.newLine();
+  }
+  if (payload.esReimpresion) {
+    printer.bold(true);
+    printer.println(txt('*** REIMPRESIÓN ***'));
+    printer.bold(false);
+  }
+
+  // ── Parte 1: detalle de la orden ───────────────────────────────────────
+  printer.bold(true);
+  printer.setTextSize(2, 2);
+  printer.println('Rappi');
+  printer.setTextNormal();
+  printer.newLine();
+  printer.setTextQuadArea();
+  // setTextQuadArea apaga la negrita (es ESC ! con el bit de negrita en 0).
+  printer.bold(true);
+  printer.println(txt(r.cliente).slice(0, Math.floor(width / 2)));
+  printer.setTextNormal();
+  printer.bold(false);
+  printer.newLine();
+
+  printer.alignLeft();
+  printer.println(borde);
+  printer.setTextDoubleHeight();
+  printer.println(centradoEnCaja(`ID ${r.idOrden}`));
+  printer.setTextNormal();
+  printer.println(borde);
+  if (r.restaurante) printer.println(txt(`Restaurante: ${r.restaurante}`));
+  if (r.plataforma) printer.println(txt(`Plataforma: ${r.plataforma}`));
+  if (r.fechaOrden) printer.println(txt(`Fecha orden: ${r.fechaOrden}`));
+  if (r.programadoPara) {
+    printer.bold(true);
+    printer.println(txt(`Programado para: ${r.programadoPara}`));
+    printer.bold(false);
+  }
+  if (r.retiraCliente) {
+    printer.bold(true);
+    printer.invert(true);
+    printer.println(' RETIRA EL CLIENTE ');
+    printer.invert(false);
+    printer.bold(false);
+  }
+  printer.newLine();
+
+  printer.println(borde);
+  printer.bold(true);
+  printer.println(enCaja('DETALLE ORDEN', `PRODUCTOS:${r.cantidadProductos}`));
+  printer.bold(false);
+  printer.println(borde);
+  for (const it of r.items) {
+    linea(`${it.cantidad}x ${it.nombre}`, plataRappi(it.importe));
+    for (const d of it.detalles) printer.println(txt(`   + ${d}`));
+    if (it.comentario) {
+      printer.bold(true);
+      printer.println(txt(`   Nota: ${it.comentario}`));
+      printer.bold(false);
+    }
+  }
+  printer.println('-'.repeat(width));
+  linea('Subtotal', plataRappi(r.subtotal));
+  if (r.descuentos > 0) linea('Descuentos', `-${plataRappi(r.descuentos)}`);
+  printer.bold(true);
+  linea('Total sugerido a facturar', plataRappi(r.totalSugerido));
+  printer.bold(false);
+  printer.println('='.repeat(width));
+  printer.newLine();
+  printer.newLine();
+
+  // ── Parte 2: verificá los productos (mismo papel) ──────────────────────
+  printer.alignCenter();
+  printer.println(txt(r.cliente));
+  printer.println(txt(`ID ${r.idOrden}`));
+  if (r.restaurante) printer.println(txt(r.restaurante));
+  printer.alignLeft();
+  printer.println(borde);
+  printer.bold(true);
+  printer.println(enCaja('VERIFICA LOS PRODUCTOS', `Total:${r.cantidadProductos}`));
+  printer.bold(false);
+  printer.println(borde);
+  for (const it of r.items) {
+    parrafo(`[ ] ${it.cantidad}x ${it.nombre}`, '    ');
+    for (const d of it.detalles) parrafo(`      + ${d}`, '        ');
+  }
+  printer.println('-'.repeat(width));
+
+  // Lo nuestro, al pie y chico: para buscarlo en el programa.
+  printer.alignCenter();
+  printer.println(
+    txt(
+      `Pedido #${String(payload.numeroOrden).padStart(3, '0')} · ${payload.hora}` +
+        (payload.numeroVenta != null ? ` · Venta #${payload.numeroVenta}` : ''),
+    ),
+  );
+  printer.alignLeft();
+  printer.newLine();
+  printer.cut();
+
+  await ejecutar(printer, destino);
 }
 
 /**
@@ -280,6 +483,10 @@ export async function imprimirComanda(
   payload: ComandaPayload,
   destino: DestinoImpresora = 'COCINA',
 ): Promise<void> {
+  if (payload.rappi) {
+    await imprimirComandaRappi(payload as ComandaPayload & { rappi: ComandaRappi }, destino);
+    return;
+  }
   const printer = makePrinter(destino);
   const width = getPrinterConfig(destino).width;
   /** "  2 x $1.500,00          $3.000,00" — importe pegado al margen derecho. */

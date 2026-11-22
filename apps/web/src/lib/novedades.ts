@@ -34,6 +34,16 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.80',
+    fecha: '22 de noviembre',
+    titulo: 'Comanda de RAPPI igual al ticket de RAPPI',
+    cambios: [
+      'Los pedidos de RAPPI salen con el mismo formato del ticket de RAPPI (cliente, ID, detalle con precios, total sugerido a facturar y la lista para verificar los productos), pero todo en un solo papel.',
+      'Si el pedido es para retirar o está programado, la comanda lo dice arriba.',
+      'Las comandas ahora muestran la hora argentina (antes salían con 3 horas de más).',
+    ],
+  },
+  {
     version: '2.0.0-alpha.79',
     fecha: '14 de noviembre',
     titulo: 'Buscador en proveedores',
