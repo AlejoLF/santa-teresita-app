@@ -9,7 +9,7 @@
  */
 
 import ExcelJS from 'exceljs';
-import { prisma } from '@sta/db/client';
+import { prisma, type PrismaClient } from '@sta/db/client';
 import { esVentaDeliverate } from './clasificar-pago.js';
 import {
   esCajaSesion,
@@ -246,8 +246,13 @@ export interface CierreData {
 //   Cargar la data del cierre desde DB
 // ────────────────────────────────────────────────────────────────────────
 
-export async function cargarCierre(sesionId: string): Promise<CierreData> {
-  const sesion = await prisma.sesionCaja.findUnique({
+/**
+ * @param db  base de la que leer. Default: la de este proceso. La cola del
+ *            email del cierre (S1) la usa con Supabase cuando la sesión no está
+ *            en S1: las cajas en modo nube escriben directo a Supabase.
+ */
+export async function cargarCierre(sesionId: string, db: PrismaClient = prisma): Promise<CierreData> {
+  const sesion = await db.sesionCaja.findUnique({
     where: { id: sesionId },
     include: {
       usuarioApertura: { select: { nombre: true } },
@@ -256,7 +261,7 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
   });
   if (!sesion) throw new Error('Sesión no encontrada');
 
-  const ventasRaw = await prisma.venta.findMany({
+  const ventasRaw = await db.venta.findMany({
     where: { sesionCajaId: sesionId },
     orderBy: { numeroOrdenTurno: 'asc' },
     include: {
@@ -276,7 +281,7 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
     },
   });
 
-  const movimientosRaw = await prisma.movimiento.findMany({
+  const movimientosRaw = await db.movimiento.findMany({
     // Solo CONFIRMADO: mismo criterio que el cálculo de cierre en admin.ts, y
     // no listamos movimientos anulados/pendientes en el email.
     where: { sesionCajaId: sesionId, estado: 'CONFIRMADO' as never },
@@ -353,11 +358,11 @@ export async function cargarCierre(sesionId: string): Promise<CierreData> {
   const entidadPorId = new Map<string, string>();
   if (entidadIds.length > 0) {
     const [empleados, proveedores] = await Promise.all([
-      prisma.empleado.findMany({
+      db.empleado.findMany({
         where: { id: { in: entidadIds } },
         select: { id: true, nombre: true, apellido: true },
       }),
-      prisma.proveedor.findMany({
+      db.proveedor.findMany({
         where: { id: { in: entidadIds } },
         select: { id: true, nombre: true },
       }),

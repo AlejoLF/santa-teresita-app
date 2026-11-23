@@ -34,6 +34,15 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.83',
+    fecha: '23 de noviembre',
+    titulo: 'Email del cierre: arreglo',
+    cambios: [
+      'El email del cierre vuelve a salir en el momento desde la caja, como antes. Si cerrás el programa enseguida, igual sale: queda guardado y lo termina de mandar el servidor del local.',
+      'Los emails que se pidieron desde el celular y no llegaban ahora salen solos.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.82',
     fecha: '23 de noviembre',
     titulo: 'El email del cierre de caja ya no se pierde',
