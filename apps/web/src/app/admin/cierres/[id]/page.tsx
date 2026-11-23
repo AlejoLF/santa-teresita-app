@@ -7,6 +7,7 @@ import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { cn } from '@/lib/cn';
+import { EstadoEnvioEmail, mensajeTrasPedir, type EnvioEmail } from '@/components/admin/EstadoEnvioEmail';
 
 interface DetalleCierre {
   sesion: {
@@ -28,6 +29,8 @@ interface DetalleCierre {
     aprobadaAdmin: string | null;
     emailEnviadoA: string | null;
     emailEnviadoAt: string | null;
+    /** Último envío pedido (cola del servidor del local). */
+    envioEmail?: EnvioEmail | null;
   };
   desgloseEsperado: {
     existenciaInicial: string;
@@ -127,16 +130,12 @@ export default function CierreDetallePage() {
     setReenviando(true);
     setResultadoEmail(null);
     try {
-      const r = await api.post<{
-        recipients: string[];
-        isEthereal: boolean;
-        previewUrl: string | null;
-      }>(`/admin/caja/sesion/${data.sesion.id}/enviar-email`, {});
-      setResultadoEmail(
-        r.isEthereal
-          ? `✉ Preview (SMTP no configurado): ${r.previewUrl}`
-          : `✓ Email enviado a ${r.recipients.join(', ')}`,
+      // Queda en cola y lo manda el servidor del local (ver EstadoEnvioEmail).
+      const r = await api.post<{ ok: boolean; envio: EnvioEmail }>(
+        `/admin/caja/sesion/${data.sesion.id}/enviar-email`,
+        {},
       );
+      setResultadoEmail(mensajeTrasPedir(r.envio).mensaje);
     } catch (e) {
       setResultadoEmail(e instanceof Error ? '✗ ' + e.message : '✗ Error');
     } finally {
@@ -300,8 +299,10 @@ export default function CierreDetallePage() {
             })}
           </span>
         )}
-        {resultadoEmail && (
+        {resultadoEmail ? (
           <span className="text-2xs text-ink-700">{resultadoEmail}</span>
+        ) : (
+          <EstadoEnvioEmail envio={sesion.envioEmail} />
         )}
       </section>
 

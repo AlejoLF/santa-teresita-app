@@ -32,7 +32,6 @@ import {
   rechazarAprobacion,
   posponerAprobacion,
 } from '../services/excel-sync.js';
-import { cargarCierre, generarExcelCierre, generarHtmlCierre } from '../services/cierre-export.js';
 import {
   esCajaSesion,
   efectoEnCaja,
@@ -45,7 +44,16 @@ import {
   descripcionFiltros,
   nombreArchivoExport,
 } from '../services/export-busqueda.js';
-import { sendMail, sendTestEmail } from '../services/mailer.js';
+import { config } from '../config.js';
+import { sendTestEmail } from '../services/mailer.js';
+import {
+  encolarEmailCierre,
+  faltaTablaCola,
+  mandarCierre,
+  procesarEnvio,
+  procesaLaCola,
+  ultimoEnvioPorSesion,
+} from '../services/cola-email-cierre.js';
 import { actualizarCashflow } from '../services/excel-writeback.js';
 import {
   getSesionActualReadOnly,
@@ -89,16 +97,12 @@ function buscarProductoWhere(termino: string | undefined) {
 }
 
 /**
- * Auto-envío del email del cierre al cerrar la sesión. Helper standalone
- * (fuera de fastify) para que el handler del cierre dispare fire-and-forget
- * sin bloquear el response.
- *
- *   - Si la sesión no existe o no está cerrada → no hace nada.
- *   - Si la flag `email_auto_envio_cierre` está en false → no hace nada.
- *   - Si SMTP cae a Ethereal (no configurado) → log warning, no manda.
- *   - Si hay error → log, no rethrow (el caller debe hacer .catch()).
+ * Auto-envío del email del cierre al cerrar la sesión: lo deja EN COLA (ver
+ * services/cola-email-cierre.ts). Antes mandaba acá mismo, fire-and-forget, y
+ * si la cajera cerraba el programa enseguida el envío moría con el proceso.
+ * Respeta la flag `email_auto_envio_cierre`.
  */
-async function enviarEmailDeCierreSiCorresponde(sesionId: string): Promise<void> {
+async function encolarEmailDeCierreSiCorresponde(sesionId: string, usuarioId: string): Promise<void> {
   const flag = await prisma.configuracionSistema
     .findUnique({ where: { clave: 'email_auto_envio_cierre' } })
     .catch(() => null);
@@ -106,38 +110,25 @@ async function enviarEmailDeCierreSiCorresponde(sesionId: string): Promise<void>
     console.log(`[email-cierre] auto-envío deshabilitado (sesion=${sesionId})`);
     return;
   }
-  const data = await cargarCierre(sesionId);
-  const xlsx = await generarExcelCierre(data);
-  const { subject, html, text } = generarHtmlCierre(data);
-  const fechaSlug = data.sesion.fecha.toISOString().slice(0, 10);
-  const turnoSlug = data.sesion.turno.toLowerCase();
-  const result = await sendMail({
-    subject,
-    html,
-    text,
-    attachments: [
-      {
-        filename: `cierre-${fechaSlug}-${turnoSlug}.xlsx`,
-        content: xlsx,
-        contentType:
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      },
-    ],
-  });
-  if (result.isEthereal) {
-    console.warn(
-      `[email-cierre] sesion=${sesionId} usó Ethereal (SMTP no configurado). Preview: ${result.previewUrl}`,
-    );
+  let envio;
+  try {
+    envio = await encolarEmailCierre({ sesionId, usuarioId, automatico: true });
+  } catch (e) {
+    // La base todavía no tiene la cola (la caja se actualizó antes que S1):
+    // se manda como antes, directo, para no perder el cierre.
+    if (!faltaTablaCola(e)) throw e;
+    void mandarCierre(sesionId)
+      .then((r) =>
+        prisma.sesionCaja.update({
+          where: { id: sesionId },
+          data: { emailEnviadoA: r.recipients.join(', '), emailEnviadoAt: new Date() },
+        }),
+      )
+      .catch((err) => console.warn(`[email-cierre] envío directo falló: ${String(err)}`));
     return;
   }
-  await prisma.sesionCaja.update({
-    where: { id: sesionId },
-    data: {
-      emailEnviadoA: result.recipients.join(', '),
-      emailEnviadoAt: new Date(),
-    },
-  });
-  console.log(`[email-cierre] sesion=${sesionId} → ${result.recipients.join(', ')}`);
+  // En S1 lo intentamos ya (sin bloquear el cierre); si falla, la cola reintenta.
+  if (procesaLaCola()) void procesarEnvio(envio.id).catch(() => {});
 }
 
 /**
@@ -2935,8 +2926,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       // configurado o falla, NO bloquea el cierre — sólo loguea. La
       // encargada puede re-enviar manualmente desde /admin/cierres si hace
       // falta. Controlado por flag email_auto_envio_cierre.
-      void enviarEmailDeCierreSiCorresponde(sesion.id).catch((e) => {
-        req.log.error({ err: e, sesionId: sesion.id }, 'Auto-envío de email del cierre falló');
+      // En cola ANTES de responder: aunque cierren el programa, queda pedido.
+      await encolarEmailDeCierreSiCorresponde(sesion.id, req.usuario!.id).catch((e) => {
+        req.log.error({ err: e, sesionId: sesion.id }, 'No se pudo encolar el email del cierre');
       });
 
       return updated;
@@ -3071,8 +3063,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // POST /admin/caja/sesion/:id/enviar-email — manda el cierre por email con
-  // adjunto Excel. Si no se pasa `to`, usa ADMIN_EMAIL_RECIPIENTS del .env.
+  // POST /admin/caja/sesion/:id/enviar-email — pide el envío del cierre por
+  // email (Excel adjunto). Queda EN COLA y lo manda S1, con reintentos: así no
+  // se pierde si cierran el programa, y funciona desde el celular (la nube no
+  // puede mandar SMTP). En S1 se intenta en el acto y se responde el resultado.
+  // Sin `to`, van a los destinatarios por defecto de la configuración.
   fastify.post(
     '/admin/caja/sesion/:id/enviar-email',
     {
@@ -3087,52 +3082,59 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     async (req, reply) => {
       const params = req.params as { id: string };
       const body = req.body as { to?: string[] };
-      try {
-        const data = await cargarCierre(params.id);
-        if (data.sesion.estado === 'ABIERTA') {
-          return reply
-            .code(400)
-            .send({ error: 'No se puede enviar el cierre de una sesión abierta' });
-        }
-        const xlsx = await generarExcelCierre(data);
-        const { subject, html, text } = generarHtmlCierre(data);
-        const fechaSlug = data.sesion.fecha.toISOString().slice(0, 10);
-        const turnoSlug = data.sesion.turno.toLowerCase();
-        const result = await sendMail({
-          to: body.to,
-          subject,
-          html,
-          text,
-          attachments: [
-            {
-              filename: `cierre-${fechaSlug}-${turnoSlug}.xlsx`,
-              content: xlsx,
-              contentType:
-                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            },
-          ],
-        });
-
-        await prisma.sesionCaja.update({
-          where: { id: params.id },
-          data: {
-            emailEnviadoA: result.recipients.join(', '),
-            emailEnviadoAt: new Date(),
-          },
-        });
-
-        return {
-          ok: true,
-          recipients: result.recipients,
-          previewUrl: result.previewUrl, // null si SMTP real, URL si Ethereal
-          isEthereal: result.isEthereal,
-          messageId: result.messageId,
-        };
-      } catch (e) {
-        return reply
-          .code(500)
-          .send({ error: e instanceof Error ? e.message : 'Error al enviar' });
+      const sesion = await prisma.sesionCaja.findUnique({ where: { id: params.id }, select: { estado: true } });
+      if (!sesion) return reply.code(404).send({ error: 'Sesión no encontrada' });
+      if (sesion.estado === 'ABIERTA') {
+        return reply.code(400).send({ error: 'No se puede enviar el cierre de una sesión abierta' });
       }
+      let envio;
+      try {
+        envio = await encolarEmailCierre({
+          sesionId: params.id,
+          destinatarios: body.to,
+          usuarioId: req.usuario!.id,
+        });
+      } catch (e) {
+        // Base sin la tabla de la cola (migración pendiente): envío directo,
+        // como antes, para no dejar a la encargada sin poder mandar.
+        if (!faltaTablaCola(e)) throw e;
+        try {
+          const r = await mandarCierre(params.id, body.to);
+          const ahora = new Date();
+          const enviadoA = r.recipients.join(', ');
+          await prisma.sesionCaja.update({ where: { id: params.id }, data: { emailEnviadoA: enviadoA, emailEnviadoAt: ahora } });
+          return {
+            ok: true,
+            encolado: false,
+            recipients: r.recipients,
+            isEthereal: r.isEthereal,
+            previewUrl: r.previewUrl,
+            envio: { id: '', estado: 'ENVIADO', intentos: 1, ultimoError: null, proximoIntentoAt: ahora, creadoAt: ahora, enviadoAt: ahora, enviadoA },
+          };
+        } catch (err) {
+          return reply.code(500).send({ error: err instanceof Error ? err.message : 'Error al enviar' });
+        }
+      }
+      // En S1 lo mandamos ya (con su timeout de ~8 s): la respuesta dice si salió.
+      const estado = procesaLaCola() ? ((await procesarEnvio(envio.id)) ?? null) : null;
+      return {
+        ok: true,
+        encolado: true,
+        // Compat con pantallas viejas (leían recipients/isEthereal).
+        recipients: estado?.enviadoA ? estado.enviadoA.split(', ') : (body.to ?? []),
+        isEthereal: false,
+        previewUrl: null,
+        envio: estado ?? {
+          id: envio.id,
+          estado: envio.estado,
+          intentos: envio.intentos,
+          ultimoError: envio.ultimoError,
+          proximoIntentoAt: envio.proximoIntentoAt,
+          creadoAt: envio.creadoAt,
+          enviadoAt: envio.enviadoAt,
+          enviadoA: envio.enviadoA,
+        },
+      };
     },
   );
 
@@ -3190,6 +3192,15 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     },
     async (req, reply) => {
       const body = req.body as { to?: string };
+      // La nube (Railway, plan Hobby) bloquea el SMTP saliente: la prueba desde
+      // el celular siempre daría "timeout" y haría pensar que la config está mal.
+      if (config.STA_ROLE === 'cloud') {
+        return reply.code(400).send({
+          error:
+            'Desde el celular no se puede probar el correo: el servidor en la nube no puede mandar emails. ' +
+            'Los cierres igual llegan: los manda el servidor del local. Para probar la configuración, usá "Probar SMTP" desde una caja.',
+        });
+      }
       try {
         const r = await sendTestEmail(body.to);
         return r;
@@ -3234,7 +3245,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         }),
         prisma.sesionCaja.count({ where: { estado: { in: ['CERRADA', 'APROBADA'] } } }),
       ]);
-      return { sesiones, total, page: q.page, pageSize: q.pageSize };
+      // Estado del último envío por email pedido (en cola / enviado / error).
+      const envios = await ultimoEnvioPorSesion(sesiones.map((x) => x.id)).catch(() => new Map());
+      return {
+        sesiones: sesiones.map((x) => ({ ...x, envioEmail: envios.get(x.id) ?? null })),
+        total,
+        page: q.page,
+        pageSize: q.pageSize,
+      };
     },
   );
 
@@ -3398,6 +3416,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           aprobadaAdmin: sesion.aprobadaAdmin?.nombre ?? null,
           emailEnviadoA: sesion.emailEnviadoA,
           emailEnviadoAt: sesion.emailEnviadoAt,
+          envioEmail: (await ultimoEnvioPorSesion([sesion.id]).catch(() => new Map())).get(sesion.id) ?? null,
         },
         // Desglose paso a paso del esperado (las 4 líneas que dan el número).
         desgloseEsperado: {
