@@ -1,0 +1,35 @@
+name: Cloud Diag
+
+# Diagnóstico SÓLO LECTURA contra Supabase (cola del email del cierre, si S1
+# replica, últimas sesiones). Manual. No escribe nada. Los emails salen
+# enmascarados en el log. Ver scripts/cloud/diag-email-cierre.mjs.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Diagnóstico del email del cierre
+        env:
+          SUPABASE_DB_URL_POOLED: ${{ secrets.SUPABASE_DB_URL }}
+        run: node scripts/cloud/diag-email-cierre.mjs
