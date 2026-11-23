@@ -283,6 +283,14 @@ Ver SPEC §1.5. Punteo:
   manual. Prioridad: empleado interno asignado > empresa explícita > inferido
   del canal. Los 3 tickets (comanda cocina, ticket cliente, ticket delivery)
   deben mostrarlo — si tocás uno, revisá los otros dos.
+- **Las cajas del local escriben DIRECTO a Supabase (modo nube), no a S1.**
+  Verificado el 23/11 con *Cloud Diag*: la sesión del domingo existía en
+  Supabase y no en la base de S1. No asumas que S1 tiene los datos del día:
+  todo lo que S1 procese a partir de un pedido hecho en la nube tiene que
+  leer de la base donde se hizo el pedido (`cargarCierre(id, db)`). Incidente:
+  la cola del email del cierre (alpha.82) armaba el cierre con la base de S1 y
+  reintentaba para siempre "la sesión todavía no está en el servidor del local".
+  Para mirar producción sin credenciales: Actions → *Cloud Diag* (sólo lectura).
 
 ## Estado (2026-08-05 · v2.0.0-alpha.58)
 

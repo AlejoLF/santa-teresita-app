@@ -24,12 +24,13 @@ import { sendMail, describirErrorSmtp } from './mailer.js';
  *     el replicator. El cierre lo arma con los datos de SU base, que es la
  *     fuente de verdad; al mandar, marca la sesión en las dos bases para que
  *     el celular vea "enviado".
- * Reintenta con espera creciente; después de MAX_INTENTOS queda en ERROR con
- * el motivo a la vista en /admin/cierres.
+ * Reintenta con espera creciente (hasta 1 h entre intentos) durante 3 días;
+ * después queda en ERROR con el motivo a la vista en /admin/cierres.
  */
 
 const TICK_MS = 15_000;
-const MAX_INTENTOS = 20;
+/** Se reintenta durante 3 días; después queda en ERROR con el motivo a la vista. */
+const VIGENCIA_MS = 3 * 24 * 60 * 60_000;
 /** Minutos de espera antes del intento n (1-based). */
 const ESPERA_MIN = [1, 2, 5, 10, 15, 30, 60];
 
@@ -39,9 +40,19 @@ export function origenActual(): Origen {
   return config.STA_ROLE === 'server' ? 'server' : config.STA_ROLE === 'cloud' ? 'cloud' : 'caja';
 }
 
-/** ¿Este proceso es el que manda los emails? */
+/** ¿Este proceso es el que procesa la cola (el worker)? Sólo S1. */
 export function procesaLaCola(): boolean {
   return config.STA_ROLE === 'server';
+}
+
+/**
+ * ¿Este proceso puede intentar mandar en el acto? Todos menos la nube
+ * (Railway bloquea SMTP). Las cajas lo intentan al toque, como antes del 23/11;
+ * si no llega a salir (cerraron el programa, falló el correo), queda en la cola
+ * y lo termina S1.
+ */
+export function puedeMandarAhora(): boolean {
+  return config.STA_ROLE !== 'cloud';
 }
 
 /**
@@ -118,9 +129,9 @@ function vistaEnvio(f: {
   };
 }
 
-/** Arma el cierre (Excel + HTML) con la base de este proceso y lo manda. */
-export async function mandarCierre(sesionId: string, destinatarios: string[] = []) {
-  const data = await cargarCierre(sesionId);
+/** Arma el cierre (Excel + HTML) con los datos de `fuente` y lo manda. */
+export async function mandarCierre(sesionId: string, destinatarios: string[] = [], fuente: PrismaClient = prisma) {
+  const data = await cargarCierre(sesionId, fuente);
   const xlsx = await generarExcelCierre(data);
   const { subject, html, text } = generarHtmlCierre(data);
   const fechaSlug = data.sesion.fecha.toISOString().slice(0, 10);
@@ -166,11 +177,22 @@ export async function procesarEnvio(
   if (reclamado.count === 0) return null;
 
   try {
-    const sesion = await prisma.sesionCaja.findUnique({ where: { id: envio.sesionCajaId }, select: { estado: true } });
-    if (!sesion) throw new Error('La sesión todavía no está en el servidor del local (se reintenta cuando llegue).');
+    // De dónde sacar los datos del cierre: la base de este proceso si tiene la
+    // sesión; si no, la base donde se pidió el envío. Incidente 23/11: las cajas
+    // del local trabajan en modo nube (escriben directo a Supabase), así que S1
+    // no tenía la sesión del domingo y el pedido del celular reintentaba para
+    // siempre con "la sesión todavía no está en el servidor del local".
+    const enLocal = await prisma.sesionCaja.findUnique({ where: { id: envio.sesionCajaId }, select: { estado: true } });
+    const enPedido =
+      enLocal || db === prisma
+        ? null
+        : await db.sesionCaja.findUnique({ where: { id: envio.sesionCajaId }, select: { estado: true } });
+    const sesion = enLocal ?? enPedido;
+    const fuente = enLocal ? prisma : db;
+    if (!sesion) throw new Error('No se encontró la sesión de caja (se reintenta).');
     if (sesion.estado === 'ABIERTA') throw new Error('La sesión sigue abierta: se manda cuando se cierre.');
 
-    const result = await mandarCierre(envio.sesionCajaId, envio.destinatarios);
+    const result = await mandarCierre(envio.sesionCajaId, envio.destinatarios, fuente);
     if (result.isEthereal) {
       throw Object.assign(new Error('El correo no está configurado (Configuración → Usuarios → Email).'), {
         sinReintento: true,
@@ -193,7 +215,8 @@ export async function procesarEnvio(
   } catch (e) {
     // sendMail ya tira el mensaje traducido (describirErrorSmtp): no repetirlo.
     const mensaje = e instanceof Error ? e.message : describirErrorSmtp(e);
-    const agotado = intento >= MAX_INTENTOS || !!(e as { sinReintento?: boolean })?.sinReintento;
+    const agotado =
+      Date.now() - envio.creadoAt.getTime() > VIGENCIA_MS || !!(e as { sinReintento?: boolean })?.sinReintento;
     const fin = await db.envioEmailCierre.update({
       where: { id: envio.id },
       data: { ultimoError: mensaje.slice(0, 1000), ...(agotado && { estado: 'ERROR' }) },

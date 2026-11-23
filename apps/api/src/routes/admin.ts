@@ -51,7 +51,7 @@ import {
   faltaTablaCola,
   mandarCierre,
   procesarEnvio,
-  procesaLaCola,
+  puedeMandarAhora,
   ultimoEnvioPorSesion,
 } from '../services/cola-email-cierre.js';
 import { actualizarCashflow } from '../services/excel-writeback.js';
@@ -127,8 +127,9 @@ async function encolarEmailDeCierreSiCorresponde(sesionId: string, usuarioId: st
       .catch((err) => console.warn(`[email-cierre] envío directo falló: ${String(err)}`));
     return;
   }
-  // En S1 lo intentamos ya (sin bloquear el cierre); si falla, la cola reintenta.
-  if (procesaLaCola()) void procesarEnvio(envio.id).catch(() => {});
+  // Lo intentamos ya (sin bloquear el cierre) salvo en la nube; si no sale, la
+  // cola de S1 lo reintenta.
+  if (puedeMandarAhora()) void procesarEnvio(envio.id).catch(() => {});
 }
 
 /**
@@ -3115,8 +3116,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           return reply.code(500).send({ error: err instanceof Error ? err.message : 'Error al enviar' });
         }
       }
-      // En S1 lo mandamos ya (con su timeout de ~8 s): la respuesta dice si salió.
-      const estado = procesaLaCola() ? ((await procesarEnvio(envio.id)) ?? null) : null;
+      // Fuera de la nube lo mandamos ya (timeout ~8 s): la respuesta dice si
+      // salió. Si no, queda en la cola y lo termina S1.
+      const estado = puedeMandarAhora() ? ((await procesarEnvio(envio.id)) ?? null) : null;
       return {
         ok: true,
         encolado: true,
