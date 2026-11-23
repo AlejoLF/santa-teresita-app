@@ -33,6 +33,7 @@ import syncRoutes from './routes/sync.js';
 import { startOutboxFlusher } from './services/outbox-flusher.js';
 import { startReplicator } from './services/replicator.js';
 import { startGeocoder } from './services/geocoder.js';
+import { startColaEmailCierre } from './services/cola-email-cierre.js';
 import { runCatchUp } from './services/catch-up.js';
 import { runMirrorSyncOnce } from './services/mirror-sync.js';
 import { startDbRouter, dbRouterEnabled, dbState } from './services/db-router.js';
@@ -420,6 +421,10 @@ try {
   // pendientes. Solo en el server (única instancia, 1 req/seg) — los updates
   // van con audit→outbox y el replicator los empuja a Supabase. No-op en cajas.
   startGeocoder();
+
+  // Cola del email del cierre de caja: S1 manda lo que pidieron las cajas y el
+  // celular (ver services/cola-email-cierre.ts). No-op fuera de STA_ROLE=server.
+  startColaEmailCierre();
 
   // DB router de la caja (failover LAN→Supabase). Solo activo si
   // STA_FALLBACK_DB_URL está configurado. En el server / .exe legacy: no-op.

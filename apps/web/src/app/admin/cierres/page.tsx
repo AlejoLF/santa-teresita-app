@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { MoneyAmount } from '@/components/ui/MoneyAmount';
 import { usePrompt } from '@/components/ui/usePrompt';
 import { cn } from '@/lib/cn';
+import { EstadoEnvioEmail, mensajeTrasPedir, type EnvioEmail } from '@/components/admin/EstadoEnvioEmail';
 
 interface SesionCierre {
   id: string;
@@ -26,6 +27,8 @@ interface SesionCierre {
   observaciones: string | null;
   emailEnviadoA: string | null;
   emailEnviadoAt: string | null;
+  /** Último envío pedido (cola del servidor del local). */
+  envioEmail?: EnvioEmail | null;
 }
 
 export default function AdminCierresPage() {
@@ -38,7 +41,7 @@ export default function AdminCierresPage() {
     sesionId: string;
     mensaje: string;
     previewUrl?: string | null;
-    tone: 'success' | 'danger';
+    tone: 'success' | 'danger' | 'info';
   } | null>(null);
   const [resultadoExcel, setResultadoExcel] = useState<{
     sesionId: string;
@@ -77,7 +80,7 @@ export default function AdminCierresPage() {
   async function enviarPorEmail(id: string) {
     const customTo = await prompt({
       title: 'Enviar cierre por email',
-      message: 'Email destinatario (vacío = usa ADMIN_EMAIL_RECIPIENTS del .env):',
+      message: 'Email destinatario (vacío = los destinatarios de siempre de la configuración):',
       placeholder: 'nombre@dominio.com (o varios separados por coma)',
     });
     if (customTo === null) return; // canceló
@@ -87,20 +90,12 @@ export default function AdminCierresPage() {
       const body: { to?: string[] } = customTo.trim()
         ? { to: customTo.split(',').map((s) => s.trim()).filter(Boolean) }
         : {};
-      const res = await api.post<{
-        ok: boolean;
-        recipients: string[];
-        previewUrl: string | null;
-        isEthereal: boolean;
-      }>(`/admin/caja/sesion/${id}/enviar-email`, body);
-      setResultadoEmail({
-        sesionId: id,
-        mensaje: res.isEthereal
-          ? `Email simulado (Ethereal) a ${res.recipients.join(', ')}. Mirá el preview ↗`
-          : `Email enviado a ${res.recipients.join(', ')} ✓`,
-        previewUrl: res.previewUrl,
-        tone: 'success',
-      });
+      // Queda en cola y lo manda el servidor del local (ver EstadoEnvioEmail).
+      const res = await api.post<{ ok: boolean; envio: EnvioEmail }>(
+        `/admin/caja/sesion/${id}/enviar-email`,
+        body,
+      );
+      setResultadoEmail({ sesionId: id, ...mensajeTrasPedir(res.envio) });
       await fetchData();
     } catch (e) {
       setResultadoEmail({
@@ -298,6 +293,7 @@ export default function AdminCierresPage() {
                   })}
                 </div>
               )}
+              {resultadoEmail?.sesionId !== s.id && <EstadoEnvioEmail envio={s.envioEmail} className="mt-1" />}
 
               {resultadoEmail?.sesionId === s.id && (
                 <div
@@ -305,6 +301,7 @@ export default function AdminCierresPage() {
                     'mt-2 px-3 py-2 rounded text-xs',
                     resultadoEmail.tone === 'success' && 'bg-basil-100 text-basil-600',
                     resultadoEmail.tone === 'danger' && 'bg-pomodoro-100 text-pomodoro-600',
+                    resultadoEmail.tone === 'info' && 'bg-saffron-100 text-saffron-600',
                   )}
                 >
                   {resultadoEmail.mensaje}

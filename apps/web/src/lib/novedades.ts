@@ -34,6 +34,16 @@ export interface Novedad {
 
 export const NOVEDADES: Novedad[] = [
   {
+    version: '2.0.0-alpha.82',
+    fecha: '23 de noviembre',
+    titulo: 'El email del cierre de caja ya no se pierde',
+    cambios: [
+      'Cuando cerrás la caja o tocás "Enviar por email", el envío queda guardado y lo manda el servidor del local. Podés cerrar el programa enseguida: el email sale igual.',
+      'Desde el celular también se puede enviar el cierre por email (antes daba error de conexión).',
+      'Si el correo falla, se reintenta solo. En Cierres de caja ves si el email está en cola, si ya salió o qué error tuvo.',
+    ],
+  },
+  {
     version: '2.0.0-alpha.81',
     fecha: '23 de noviembre',
     titulo: 'Comanda de RAPPI más corta',

@@ -1736,6 +1736,38 @@ enum EstadoTrabajoImpresion {
   CANCELADO
 }
 
+/// Cola del email del cierre de caja (23/11). "Enviar por email" y el envío
+/// automático al cerrar dejan una fila acá y responden al toque; el que manda
+/// es S1 (siempre prendido y con SMTP por la red del local), con reintentos.
+/// Antes el envío corría dentro del request: si la cajera cerraba el programa
+/// enseguida se perdía, y desde el celular (API en Railway, que bloquea SMTP)
+/// no salía nunca. S1 procesa la cola de su base Y la de Supabase (los pedidos
+/// del celular). Sin relación ni audit a propósito: es una cola por base, no
+/// se replica. Ver services/cola-email-cierre.ts.
+model EnvioEmailCierre {
+  id               String    @id @default(uuid()) @db.Uuid
+  sesionCajaId     String    @map("sesion_caja_id") @db.Uuid
+  /// Vacío = los destinatarios por defecto de la configuración.
+  destinatarios    String[]  @default([])
+  /// PENDIENTE | ENVIADO | ERROR (ERROR = agotó los reintentos).
+  estado           String    @default("PENDIENTE") @db.VarChar(20)
+  intentos         Int       @default(0)
+  ultimoError      String?   @map("ultimo_error")
+  proximoIntentoAt DateTime  @default(now()) @map("proximo_intento_at")
+  /// caja | server | cloud — dónde se pidió.
+  origen           String    @db.VarChar(20)
+  /// true = lo disparó el cierre solo (no un botón).
+  automatico       Boolean   @default(false)
+  solicitadoPorId  String?   @map("solicitado_por_id") @db.Uuid
+  creadoAt         DateTime  @default(now()) @map("creado_at")
+  enviadoAt        DateTime? @map("enviado_at")
+  enviadoA         String?   @map("enviado_a")
+
+  @@index([estado, proximoIntentoAt])
+  @@index([sesionCajaId])
+  @@map("envios_email_cierre")
+}
+
 model TrabajoImpresion {
   id          String                 @id @default(uuid()) @db.Uuid
   tipo        TipoTrabajoImpresion
