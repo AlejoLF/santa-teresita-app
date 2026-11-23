@@ -320,17 +320,19 @@ Detalle en [docs/TRABAJO-REMOTO.md](docs/TRABAJO-REMOTO.md). Resumen:
 > `inmediato` de S1 reinicia el server con las cajas conectadas. Incidente:
 > 22/11, alpha.80 y alpha.81 publicadas un domingo a las 20:34 y 20:45 AR.
 >
-> **Horario (hora ARGENTINA, UTC−3 todo el año, sin horario de verano)** —
-> default de `services/horarios.ts`; la encargada puede editarlo en
-> Configuración → Horarios, así que si hay dudas, preguntar:
+> **Horario en que se usan las cajas (lo fijó el dueño el 23/11, hora
+> ARGENTINA, UTC−3 todo el año, sin horario de verano):**
 >
-> | Días | Abierto (AR) | Abierto (UTC) |
+> | Días | En uso (AR) | En uso (UTC) |
 > |-|-|-|
-> | Lunes a sábado | 07:00 – 22:00 (+30 min de cierre) | 10:00 – 01:30 del día siguiente |
-> | Domingo | 17:00 – 22:00 (+30 min de cierre) | 20:00 – 01:30 del lunes |
+> | **Todos los días, lunes a domingo** | **08:30 – 22:30** | 11:30 – 01:30 del día siguiente |
 >
-> **Ventana segura para publicar: de 22:30 a 06:30 AR** (01:30–09:30 UTC), y
-> los domingos también antes de las 16:30 AR (19:30 UTC). El reloj de la
+> Ojo: NO es el default de turnos de `services/horarios.ts` (07:00–22:00 y
+> domingo 17:00–22:00), que es para abrir sesiones de caja; para publicar
+> manda esta tabla.
+>
+> **Ventana segura para publicar: de 23:00 a 08:00 AR** (02:00–11:00 UTC),
+> media hora de margen a cada lado. El reloj de la
 > sesión está en UTC y el dueño puede escribir desde otro huso (Europa):
 > convertir siempre a hora argentina antes de decidir. Mergear a `main` fuera
 > de esa ventana está bien (Vercel/Railway no reinician las cajas), pero el
